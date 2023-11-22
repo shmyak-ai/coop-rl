@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coop_rl"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pyarrow",
+    "numpy",
+    "numba",
+    "pandas",
+    "dm-reverb[tensorflow]",
+    "ray[default]",
+    "gymnasium",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "ipykernel",
+    "ipywidgets",
+]
+
+[tool.setuptools.packages.find]
+include = ["coop_rl"]
+
+[tool.ruff]
+line-length = 120
