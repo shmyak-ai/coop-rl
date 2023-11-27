@@ -97,7 +97,7 @@ def stem(input_shape, initializer=None):
     return inputs, x
 
 
-def get_dqn(input_shape, n_outputs, is_duel=False):
+def get_value_dense(input_shape, n_outputs, is_duel=False):
     import tensorflow as tf
     from tensorflow import keras
     import tensorflow.keras.layers as layers

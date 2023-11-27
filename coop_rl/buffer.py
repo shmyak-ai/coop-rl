@@ -91,11 +91,12 @@ def initialize_dataset_with_logits(server_port, table_name, observations_shape, 
 class UniformBuffer:
     def __init__(self,
                  num_tables: int = 1,
+                 table_names: List[str] = ["uniform_table_0"],
                  min_size: int = 64,
                  max_size: int = 100000,
                  checkpointer=None):
         self._min_size = min_size
-        self._table_names = [f"uniform_table_{i}" for i in range(num_tables)]
+        self._table_names = table_names
         self._server = reverb.Server(
             tables=[
                 reverb.Table(

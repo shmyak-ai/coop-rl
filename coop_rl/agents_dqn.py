@@ -1,52 +1,29 @@
 import random
-from abc import ABC
 
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-from tf_reinforcement_agents import models, misc
-from tf_reinforcement_agents.abstract_agent import Agent
-
-from tf_reinforcement_agents import storage
-
-physical_devices = tf.config.list_physical_devices('GPU')
-if len(physical_devices) > 0:
-    tf.config.experimental.set_memory_growth(physical_devices[0], True)
+from coop_rl.members import Agent
+from coop_rl.buffer import initialize_dataset
 
 
-class DQNAgent(Agent, ABC):
+class DQNAgent(Agent):
 
-    def __init__(self, env_name, config,
-                 buffer_table_names, buffer_server_port,
-                 *args, **kwargs):
-        super().__init__(env_name, config,
-                         buffer_table_names, buffer_server_port,
-                         *args, **kwargs)
+    def __init__(self, run_config, data, make_checkpoint, ray_queue, workers_info):
+        super().__init__(run_config)
 
-        # fraction of random exp sampling
-        self._start_epsilon = config["start_epsilon"]
-        self._final_epsilon = config["final_epsilon"]
+        self._optimizer = Agent.agent_config['optimizer'][run_config.optimizer]
+        self._loss_fn = Agent.agent_config['loss'][run_config.loss]
 
         # initialize a dataset to be used to sample data from a server
-        if config["buffer"] == "n_points":
-            datasets = [storage.initialize_dataset(buffer_server_port,
-                                                   buffer_table_names[i],
-                                                   self._input_shape,
-                                                   self._sample_batch_size,
-                                                   i + 2) for i in range(self._n_points - 1)]
-            self._iterators = [iter(datasets[i]) for i in range(self._n_points - 1)]
-        elif config["buffer"] == "full_episode":
-            dataset = storage.initialize_dataset(buffer_server_port,
-                                                 buffer_table_names[0],
-                                                 self._input_shape,
-                                                 self._sample_batch_size,
-                                                 self._n_points,
-                                                 is_episode=True)
-            self._iterators = [iter(dataset), ]
-        else:
-            print("Check a buffer argument in config")
-            raise LookupError
+        datasets = [initialize_dataset(
+            run_config.buffer_server_port,
+            run_config.table_names[i],
+            self._input_shape,
+            self._sample_batch_size,
+            i + 2) for i in range(self._n_points - 1)]
+        self._iterators = [iter(datasets[i]) for i in range(self._n_points - 1)]
 
         # train a model from scratch
         if self._data is None:
@@ -129,7 +106,7 @@ class PercDQNAgent(DQNAgent):
         self._optimizer.apply_gradients(zip(grads, self._model.trainable_variables))
 
 
-class CategoricalDQNAgent(Agent, ABC):
+class CategoricalDQNAgent(Agent):
 
     def __init__(self, env_name, init_n_samples, *args, **kwargs):
         super().__init__(env_name, *args, **kwargs)
