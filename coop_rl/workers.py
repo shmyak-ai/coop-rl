@@ -2,29 +2,19 @@ import random
 import pickle
 import time
 import itertools as it
-from abc import ABC
 
 import tensorflow as tf
 import numpy as np
 import ray
 from ray.util.queue import Empty
 
-from tf_reinforcement_agents.abstract_agent import Agent
-from tf_reinforcement_agents import models
-
-physical_devices = tf.config.list_physical_devices('GPU')
-if len(physical_devices) > 0:
-    tf.config.experimental.set_memory_growth(physical_devices[0], True)
+from coop_rl.members import Worker
 
 
-class Collector(Agent, ABC):
+class Collector(Worker):
 
-    def __init__(self, env_name, config,
-                 buffer_table_names, buffer_server_port,
-                 *args, **kwargs):
-        super().__init__(env_name, config,
-                         buffer_table_names, buffer_server_port,
-                         *args, **kwargs)
+    def __init__(self, run_config, data, ray_queue, workers_info, worker_id):
+        super().__init__(run_config)
 
         if self._is_policy_gradient:
             # self._model = models.get_actor_critic(self._input_shape, self._n_outputs)
@@ -150,7 +140,7 @@ class Collector(Agent, ABC):
             # print(f"Collecting. Time: {t2 - t1}")
 
 
-class Evaluator(Agent, ABC):
+class Evaluator(Worker):
 
     def __init__(self, env_name, config,
                  buffer_table_names, buffer_server_port,

@@ -12,6 +12,7 @@ dependencies = [
     "numba",
     "pandas",
     "dm-reverb[tensorflow]",
+    "tensorflow-probability",
     "ray[default]",
     "gymnasium",
     "matplotlib",

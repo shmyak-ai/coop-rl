@@ -4,6 +4,27 @@ import reverb
 from typing import List
 
 
+def get_1d_dataset(server_ip, server_port, table_name, observations_shape, batch_size, n_points):
+
+    actions_tf_shape = tf.TensorShape([])
+    observations_tf_shape = tf.TensorShape(observations_shape)
+    rewards_tf_shape = tf.TensorShape([])
+    dones_tf_shape = tf.TensorShape([])
+
+    obs_dtypes = tf.nest.map_structure(lambda x: tf.uint8, observations_tf_shape)
+
+    dataset = reverb.ReplayDataset(
+        server_address=f'{server_ip}:{server_port}',
+        table=table_name,
+        max_in_flight_samples_per_worker=2 * batch_size,
+        dtypes=(tf.int32, obs_dtypes, tf.float32, tf.float32),
+        shapes=(actions_tf_shape, observations_tf_shape, rewards_tf_shape, dones_tf_shape))
+    dataset = dataset.batch(n_points)
+    dataset = dataset.batch(batch_size)
+
+    return dataset
+
+
 def initialize_dataset(server_port, table_name, observations_shape, batch_size, n_points, is_episode=False):
     maps_shape = tf.TensorShape(observations_shape[0])
     scalars_shape = tf.TensorShape(observations_shape[1])
@@ -89,12 +110,16 @@ def initialize_dataset_with_logits(server_port, table_name, observations_shape, 
 
 
 class UniformBuffer:
-    def __init__(self,
-                 num_tables: int = 1,
-                 table_names: List[str] = ["uniform_table_0"],
-                 min_size: int = 64,
-                 max_size: int = 100000,
-                 checkpointer=None):
+    def __init__(
+        self,
+        port: int = 8000,
+        num_tables: int = 1,
+        table_names: List[str] = ["uniform_table_0"],
+        min_size: int = 64,
+        max_size: int = 100000,
+        checkpointer=None
+        ):
+
         self._min_size = min_size
         self._table_names = table_names
         self._server = reverb.Server(
@@ -108,7 +133,7 @@ class UniformBuffer:
                 ) for i in range(num_tables)
             ],
             # Sets the port to None to make the server pick one automatically.
-            port=None,
+            port=port,
             checkpointer=checkpointer
         )
 

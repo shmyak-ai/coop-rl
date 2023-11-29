@@ -2,47 +2,22 @@ import random
 
 import numpy as np
 import tensorflow as tf
-import tensorflow_probability as tfp
+# import tensorflow_probability as tfp
 
-from coop_rl.members import Agent
-from coop_rl.buffer import initialize_dataset
+from coop_rl.members import (
+    Member,
+    Agent
+)
 
 
 class DQNAgent(Agent):
 
     def __init__(self, run_config, data, make_checkpoint, ray_queue, workers_info):
-        super().__init__(run_config)
+        super().__init__(run_config, data)
 
-        self._optimizer = Agent.agent_config['optimizer'][run_config.optimizer]
-        self._loss_fn = Agent.agent_config['loss'][run_config.loss]
-
-        # initialize a dataset to be used to sample data from a server
-        datasets = [initialize_dataset(
-            run_config.buffer_server_port,
-            run_config.table_names[i],
-            self._input_shape,
-            self._sample_batch_size,
-            i + 2) for i in range(self._n_points - 1)]
-        self._iterators = [iter(datasets[i]) for i in range(self._n_points - 1)]
-
-        # train a model from scratch
-        if self._data is None:
-            self._model = models.get_dqn(self._input_shape, self._n_outputs, is_duel=False)
-        # continue a model training
-        elif self._data:
-            self._model = models.get_dqn(self._input_shape, self._n_outputs, is_duel=False)
-            self._model.set_weights(self._data['weights'])
-
-        self._target_model = models.get_dqn(self._input_shape, self._n_outputs, is_duel=False)
+        self._target_model = Member.member_config['model'][run_config.model](
+            self._input_shape, self._n_outputs, is_duel=False)
         self._target_model.set_weights(self._model.get_weights())
-
-        if not config["debug"]:
-            self._training_step = tf.function(self._training_step)
-
-        self._collect_several_episodes(config["init_episodes"], epsilon=self._start_epsilon)
-
-        reward, steps = self._evaluate_episodes(num_episodes=10, epsilon=0)
-        print(f"Initial reward with a model policy is {reward:.2f}, steps: {steps:.2f}")
 
     def _policy(self, obsns, epsilon, info):
         if np.random.rand() < epsilon:
