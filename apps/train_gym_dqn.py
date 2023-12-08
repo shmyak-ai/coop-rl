@@ -28,7 +28,7 @@ class RunConfig:
 
     # dm reverb buffer
     buffer_server_ip: str = 'localhost'
-    buffer_server_port: str = '8000'
+    buffer_server_port: int = 8000
     batch_size: int = 64
     buffer_size: int = 500000
     tables_number: int = 5
