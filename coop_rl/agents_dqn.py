@@ -12,11 +12,14 @@ from coop_rl.members import (
 
 class DQNAgent(Agent):
 
-    def __init__(self, run_config, data, make_checkpoint, ray_queue, workers_info):
+    def __init__(self, run_config, data, make_checkpoint, workers_info):
         super().__init__(run_config, data)
 
         self._target_model = Member.member_config['model'][run_config.model](
-            self._input_shape, self._n_outputs, is_duel=False)
+            run_config.n_features,
+            run_config.n_layers,
+            run_config.seed,
+        )
         self._target_model.set_weights(self._model.get_weights())
 
     def _policy(self, obsns, epsilon, info):

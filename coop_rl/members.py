@@ -6,14 +6,14 @@ import tensorflow as tf
 import reverb
 import gymnasium as gym
 
-from coop_rl.networks import get_value_dense
+from coop_rl.networks import DenseCritic
 from coop_rl.buffer import get_1d_dataset
 
 
 class Member:
     member_config = {
         'model':  {
-            'dense_value': get_value_dense,
+            'dense_critic': DenseCritic,
         }
     }
 
@@ -22,7 +22,10 @@ class Member:
             f'{run_config.buffer_server_ip}:{run_config.buffer_server_port}'
         )
         self._model = Member.member_config['model'][run_config.model](
-            self._input_shape, self._n_outputs, is_duel=False)
+            run_config.n_features,
+            run_config.n_layers,
+            run_config.seed,
+        )
         if data is not None:
             self._model.set_weights(data['weights'])
         self._table_names = run_config.table_names
