@@ -9,13 +9,13 @@ import reverb
 import gymnasium as gym
 from ray.util.queue import Queue
 
-from coop_rl.buffer import UniformBuffer
+from coop_rl.buffer import DQNUniformBuffer
+from coop_rl.members import GlobalVarActor
 from coop_rl.agents_dqn import DQNAgent
 from coop_rl.workers import (
     Collector,
     Evaluator
 )
-from coop_rl.misc import GlobalVarActor
 
 
 @dataclass
@@ -92,12 +92,8 @@ def complex_call():
     # creates a reverb replay server at the current node
     # specify a node in the cluster explicitely?
     # a port can be specified
-    buffer = UniformBuffer(
-        port=conf.buffer_server_port,
-        num_tables=conf.tables_number,
-        table_names=conf.table_names,
-        min_size=conf.batch_size,
-        max_size=conf.buffer_size,
+    buffer = DQNUniformBuffer(
+        run_config=conf,
         checkpointer=checkpointer
         )
 

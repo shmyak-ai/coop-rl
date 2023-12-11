@@ -1,13 +1,39 @@
 """
-The abstract classes for the agents and workers
+The basic classes for the actors
 """
 
 import tensorflow as tf
 import reverb
 import gymnasium as gym
+import ray
 
 from coop_rl.networks import DenseCritic
-from coop_rl.buffer import get_1d_dataset
+
+
+@ray.remote(num_cpus=0)
+class GlobalVarActor:
+    def __init__(self):
+        self.global_v = 1
+        self.current_weights = None, None
+        self.done = False
+
+    def set_global_v(self, v):
+        self.global_v = v
+
+    def get_global_v(self):
+        return self.global_v
+
+    def set_current_weights(self, w):
+        self.current_weights = w
+
+    def get_current_weights(self):
+        return self.current_weights
+
+    def set_done(self, done):
+        self.done = done
+
+    def get_done(self):
+        return self.done
 
 
 class Member:
@@ -42,9 +68,6 @@ class Agent(Member):
         'loss':  {
             'huber': tf.keras.losses.Huber,
         },
-        'dataset': {
-            '1d': get_1d_dataset,
-        },
     }
 
     def __init__(self, run_config, data):
@@ -54,13 +77,11 @@ class Agent(Member):
         self._loss_fn = Agent.agent_config['loss'][run_config.loss]
 
         # initialize datasets to sample data from a server
-        datasets = [Agent.agent_config['dataset'][run_config.dataset](
-            run_config.buffer_server_ip,
-            run_config.buffer_server_port,
-            run_config.table_names[i],
-            run_config.input_shape,
-            run_config.batch_size,
-            i + 2) for i in range(run_config.tables_number)]
+        datasets = [reverb.TrajectoryDataset.from_table_signature(
+            server_address=f'{run_config.buffer_server_ip}:{run_config.buffer_server_port}',
+            table=run_config.table_names[i],
+            max_in_flight_samples_per_worker=10,
+        ) for i in range(run_config.tables_number)]
         self._iterators = [iter(datasets[i]) for i in range(run_config.tables_number)]
 
         if not run_config.debug:

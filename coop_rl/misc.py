@@ -275,29 +275,3 @@ def plot_2d_array(array, name):
     # plt.show()
     fig.savefig("data/pictures/" + name + ".png")
     plt.close(fig)
-
-
-@ray.remote
-class GlobalVarActor:
-    def __init__(self):
-        self.global_v = 1
-        self.current_weights = None, None
-        self.done = False
-
-    def set_global_v(self, v):
-        self.global_v = v
-
-    def get_global_v(self):
-        return self.global_v
-
-    def set_current_weights(self, w):
-        self.current_weights = w
-
-    def get_current_weights(self):
-        return self.current_weights
-
-    def set_done(self, done):
-        self.done = done
-
-    def get_done(self):
-        return self.done

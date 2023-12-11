@@ -14,7 +14,7 @@ from coop_rl.members import Worker
 class Collector(Worker):
 
     def __init__(self, run_config, data, ray_queue, workers_info, worker_id):
-        super().__init__(run_config)
+        super().__init__(run_config, data)
 
         if self._is_policy_gradient:
             # self._model = models.get_actor_critic(self._input_shape, self._n_outputs)
