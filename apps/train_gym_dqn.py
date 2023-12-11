@@ -101,7 +101,6 @@ def complex_call():
         checkpointer=checkpointer
         )
 
-    # ray: a trainer object should be launched at the gpu node
     agent_object = DQNAgent
     if is_gpu:
         trainer_objects = [

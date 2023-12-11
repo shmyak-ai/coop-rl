@@ -18,6 +18,9 @@ class Member:
     }
 
     def __init__(self, run_config, data):
+        # clients are used by workers to add data to the replay buffer
+        # agents use it only to check if there are enough data, is it necessary?
+        # replace with try: next(iterator) probably
         self._buffer_client = reverb.Client(
             f'{run_config.buffer_server_ip}:{run_config.buffer_server_port}'
         )

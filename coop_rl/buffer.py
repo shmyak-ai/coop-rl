@@ -46,9 +46,15 @@ class UniformBuffer:
                     remover=reverb.selectors.Fifo(),
                     max_size=int(max_size),
                     rate_limiter=reverb.rate_limiters.MinSize(min_size),
+                    signature={
+                        'actions':
+                            tf.TensorSpec([i + 2, *ACTION_SPEC.shape], ACTION_SPEC.dtype),
+                        'observations':
+                            tf.TensorSpec([i + 2, *OBSERVATION_SPEC.shape],
+                                          OBSERVATION_SPEC.dtype),
+            }
                 ) for i in range(num_tables)
             ],
-            # Sets the port to None to make the server pick one automatically.
             port=port,
             checkpointer=checkpointer
         )
