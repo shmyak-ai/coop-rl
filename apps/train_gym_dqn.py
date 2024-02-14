@@ -13,7 +13,7 @@ from coop_rl.buffer import DQNUniformBuffer
 from coop_rl.members import GlobalVarActor
 from coop_rl.agents_dqn import DQNAgent
 from coop_rl.workers import (
-    Collector,
+    DQNCollector,
     Evaluator
 )
 
@@ -92,10 +92,14 @@ def complex_call():
     # creates a reverb replay server at the current node
     # specify a node in the cluster explicitely?
     # a port can be specified
-    buffer = DQNUniformBuffer(
+    buffer = DQNUniformBuffer(  # noqa: F841
         run_config=conf,
         checkpointer=checkpointer
         )
+
+    # global variable to control getting items order from the interprocess queue, a done condition
+    # store weight for an evaluator
+    workers_info = GlobalVarActor.remote()
 
     agent_object = DQNAgent
     if is_gpu:
@@ -104,12 +108,8 @@ def complex_call():
             ]
     else:
         trainer_objects = [ray.remote(agent_object) for _ in range(conf.num_trainers)]
-    collector_objects = [ray.remote(Collector) for _ in range(conf.num_collectors)]
+    collector_objects = [ray.remote(DQNCollector) for _ in range(conf.num_collectors)]
     evaluator_objects = [ray.remote(Evaluator) for _ in range(conf.num_evaluators)]
-
-    # global variable to control getting items order from the interprocess queue, a done condition
-    # store weight for an evaluator
-    workers_info = GlobalVarActor.remote()
 
     # initialization
     trainer_agents = []
@@ -118,8 +118,8 @@ def complex_call():
         trainer_agents.append(trainer_object.remote(
             conf,
             data=data_net,
+            workers_info=workers_info,
             make_checkpoint=make_checkpoint,
-            workers_info=workers_info
             ))
     collector_agents = []
     for i, collector_object in enumerate(collector_objects):
@@ -127,22 +127,20 @@ def complex_call():
             conf,
             data=data_net,
             workers_info=workers_info,
-            worker_id=i + 1,
+            collector_id=i + 1,
             ))
-
     evaluator_agents = []
     for evaluator_object in evaluator_objects:
-        evaluator_agents.append(evaluator_object.remote(env_name, config,
-                                                        buffer.table_names, buffer.server_port,
-                                                        workers_info=workers_info))
+        evaluator_agents.append(evaluator_object.remote(
+            conf,
+            data=data_net,
+            workers_info=workers_info,
+            ))
 
-    # remote call
-    trainer_futures = [agent.do_train.remote(iterations_number=config["iterations_number"],
-                                             save_interval=config["save_interval"])
-                       for agent in trainer_agents]
-
-    collect_info_futures = [agent.do_collect.remote() for agent in collector_agents]
-    eval_info_futures = [agent.do_evaluate.remote() for agent in evaluator_agents]
+    # remote calls
+    trainer_futures = [agent.train.remote() for agent in trainer_agents]
+    collect_info_futures = [agent.collect.remote() for agent in collector_agents]
+    eval_info_futures = [agent.evaluate.remote() for agent in evaluator_agents]
 
     # get results
     outputs = ray.get(trainer_futures)

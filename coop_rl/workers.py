@@ -1,5 +1,4 @@
 import random
-import pickle
 import time
 import itertools as it
 
@@ -11,35 +10,14 @@ from ray.util.queue import Empty
 from coop_rl.members import Worker
 
 
-class Collector(Worker):
+class DQNCollector(Worker):
 
-    def __init__(self, run_config, data, ray_queue, workers_info, worker_id):
-        super().__init__(run_config, data)
+    def __init__(self, run_config, data, workers_info, collector_id):
+        super().__init__(run_config, data, workers_info)
 
-        if self._is_policy_gradient:
-            # self._model = models.get_actor_critic(self._input_shape, self._n_outputs)
-            self._model = models.get_actor_critic2(model_type='exp')
-            self._policy = self._pg_policy
-        else:
-            self._model = models.get_dqn(self._input_shape, self._n_outputs, is_duel=False)
-            self._policy = self._dqn_policy
+        self._collector_id = collector_id
 
-        dummy_input = (tf.ones(self._input_shape[0], dtype=tf.uint8),
-                       tf.ones(self._input_shape[1], dtype=tf.uint8))
-        dummy_input = tf.nest.map_structure(lambda x: tf.expand_dims(x, axis=0), dummy_input)
-        self._predict(dummy_input)
-
-        # with open('data/data_brick.pickle', 'rb') as file:
-        #     data = pickle.load(file)
-        # self._model.layers[0].set_weights(data['weights'][:66])
-        # self._model.layers[1].set_weights(data['weights'][:66])
-        # self._model.layers[0].trainable = False
-        if self._data is not None:
-            self._model.set_weights(self._data['weights'])
-            print("Collector: using data from a data/data.pickle file.")
-        # self._model.layers[0].trainable = True
-
-    def _dqn_policy(self, obsns, epsilon, info):
+    def _policy(self, obsns, epsilon, info):
         if np.random.rand() < epsilon:
             # the first step after reset is arbitrary
             if info is None:
@@ -58,23 +36,6 @@ class Collector(Worker):
                 Q_values = self._predict(obs)
                 best_actions.append(np.argmax(Q_values[0]))
             return best_actions
-
-    def _pg_policy(self, obsns, is_random=False):
-        actions = []
-        logits = []
-        obsns = tf.nest.map_structure(lambda x: tf.expand_dims(x, axis=0), obsns)
-        for i in range(self._n_players):
-            obs = obsns[i]
-            if is_random:
-                policy_logits = tf.zeros([tf.shape(obs[0])[0], self._n_outputs])
-            else:
-                policy_logits, _ = self._predict(obs)
-            action = tf.random.categorical(policy_logits, num_samples=1, dtype=tf.int32)
-            actions.append(action.numpy()[0][0])
-            logits.append(policy_logits.numpy()[0])
-            # probabilities = tf.nn.softmax(policy_logits)
-            # return np.argmax(probabilities[0])
-        return actions, logits
 
     def do_collect(self):
         num_collects = 0
@@ -141,42 +102,6 @@ class Collector(Worker):
 
 
 class Evaluator(Worker):
-
-    def __init__(self, env_name, config,
-                 buffer_table_names, buffer_server_port,
-                 *args, **kwargs):
-        super().__init__(env_name, config,
-                         buffer_table_names, buffer_server_port,
-                         *args, **kwargs)
-
-        if self._is_policy_gradient:
-            # self._model = models.get_actor_critic(self._input_shape, self._n_outputs)
-            self._model = models.get_actor_critic2(model_type='exp')
-            self._eval_model = models.get_actor_critic2(model_type='res')
-            # self._policy = self._pg_policy
-        else:
-            self._model = models.get_dqn(self._input_shape, self._n_outputs, is_duel=False)
-            # self._policy = self._dqn_policy
-
-        dummy_input = (tf.ones(self._input_shape[0], dtype=tf.uint8),
-                       tf.ones(self._input_shape[1], dtype=tf.uint8))
-        dummy_input = tf.nest.map_structure(lambda x: tf.expand_dims(x, axis=0), dummy_input)
-        self._predict(dummy_input)
-        self._eval_predict(dummy_input)
-
-        # with open('data/data_brick.pickle', 'rb') as file:
-        #     data = pickle.load(file)
-        # self._model.layers[0].set_weights(data['weights'][:66])
-        # self._model.layers[0].trainable = False
-
-        try:
-            with open('data/eval/data.pickle', 'rb') as file:
-                data = pickle.load(file)
-                print("Evaluator: using data form a data/eval/data.pickle file.")
-            self._eval_model.set_weights(data['weights'])
-            # self._model.set_weights(data['weights'])
-        except FileNotFoundError:
-            pass
 
     @tf.function
     def _eval_predict(self, observation):

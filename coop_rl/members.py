@@ -12,6 +12,7 @@ from coop_rl.networks import DenseCritic
 
 @ray.remote(num_cpus=0)
 class GlobalVarActor:
+
     def __init__(self):
         self.global_v = 1
         self.current_weights = None, None
@@ -116,9 +117,11 @@ class Agent(Member):
 
 class Worker(Member):
 
-    def __init__(self, run_config):
-        super().__init__(run_config)
-        self._train_env = gym.make(run_config.env_name)
+    def __init__(self, run_config, data, workers_info):
+        super().__init__(run_config, data)
+
+        self._workers_info = workers_info
+        self._env = gym.make(run_config.env_name)
 
     def policy(self):
         raise NotImplementedError

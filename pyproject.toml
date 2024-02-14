@@ -9,7 +9,6 @@ requires-python = ">=3.10"
 dependencies = [
     "pyarrow",
     "numpy",
-    "numba",
     "pandas",
     "dm-reverb[tensorflow]",
     "tensorflow[and-cuda]",
@@ -18,7 +17,6 @@ dependencies = [
     "gymnasium",
     "matplotlib",
     "seaborn",
-    "plotly",
     "ipykernel",
     "ipywidgets",
 ]
