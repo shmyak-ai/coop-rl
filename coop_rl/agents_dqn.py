@@ -12,8 +12,8 @@ from coop_rl.members import (
 
 class DQNAgent(Agent):
 
-    def __init__(self, run_config, data, workers_info, make_checkpoint=False):
-        super().__init__(run_config, data)
+    def __init__(self, run_config, exchange_actor, weights, make_checkpoint):
+        super().__init__(run_config, exchange_actor, weights, make_checkpoint)
 
         self._target_model = Member.member_config['model'][run_config.model](
             run_config.n_features,
@@ -21,8 +21,6 @@ class DQNAgent(Agent):
             run_config.seed,
         )
         self._target_model.set_weights(self._model.get_weights())
-        self._workers_info = workers_info
-        self._make_checkpoint = make_checkpoint
 
     def _policy(self, obsns, epsilon, info):
         if np.random.rand() < epsilon:

@@ -6,7 +6,7 @@
     "configurations": [
         {
             "name": "current file",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
@@ -14,7 +14,7 @@
         },
         {
             "name": "train gym dqn",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/apps/train_gym_dqn.py",
             "console": "integratedTerminal",
