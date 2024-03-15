@@ -1,8 +1,10 @@
 import random
+import pickle
 
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
+import ray
 
 from coop_rl.members import (
     Member,
@@ -12,8 +14,8 @@ from coop_rl.members import (
 
 class DQNAgent(Agent):
 
-    def __init__(self, run_config, exchange_actor, weights, make_checkpoint):
-        super().__init__(run_config, exchange_actor, weights, make_checkpoint)
+    def __init__(self, run_config, *args, **kwargs):
+        super().__init__(run_config, *args, **kwargs)
 
         self._target_model = Member.member_config['model'][run_config.model](
             run_config.n_features,
@@ -21,6 +23,10 @@ class DQNAgent(Agent):
             run_config.seed,
         )
         self._target_model.set_weights(self._model.get_weights())
+
+    @tf.function
+    def _predict(self, observation):
+        return self._model(observation)
 
     def _policy(self, obsns, epsilon, info):
         if np.random.rand() < epsilon:
@@ -42,6 +48,39 @@ class DQNAgent(Agent):
                 best_actions.append(np.argmax(Q_values[0]))
             return best_actions
 
+    def _sample_experience(self, fraction=None):
+        samples = []
+        if self._is_full_episode:
+            iterator = self._iterators[0]
+            samples.append(next(iterator))
+            self._items_sampled[0] += self._sample_batch_size
+        elif self._is_all_trajectories:
+            for i, iterator in enumerate(self._iterators):
+                trigger = tf.random.uniform(shape=[])
+                # sample 2 steps all the time, further steps with decreasing probability no less than 0.25
+                if i > 0 and trigger > max(1. / (i + 1.), 0.25):
+                    samples.append(None)
+                else:
+                    samples.append(next(iterator))
+                    self._items_sampled[i] += self._sample_batch_size
+        else:
+            # sampling for _collect_some_trajectories_
+            for i, iterator in enumerate(self._iterators):
+                quota = fraction[i] / fraction[-1]
+                # train 5 times more often in all tables except the last one
+                if quota < 5:
+                    # if i == 1:
+                    #     print(self._sampling_meter)
+                    #     self._sampling_meter = 0
+                    samples.append(next(iterator))
+                    self._items_sampled[i] += self._sample_batch_size
+                else:
+                    # if i == 1:
+                    #     self._sampling_meter += 1
+                    samples.append(None)
+
+        return samples
+
     def _training_step(self, actions, observations, rewards, dones, steps, info):
         print("Tracing")
         total_rewards, first_observations, last_observations, last_dones, last_discounted_gamma, second_actions = \
@@ -61,6 +100,36 @@ class DQNAgent(Agent):
             loss = tf.reduce_mean(self._loss_fn(target_Q_values, Q_values))  # todo: reduce_mean is redundant
         grads = tape.gradient(loss, self._model.trainable_variables)
         self._optimizer.apply_gradients(zip(grads, self._model.trainable_variables))
+
+    def train(self):
+        """
+        Runs a step of training.
+        """
+        step = next(self.do_train)
+        if step % self._run_config.print_interval == 0:
+            print(f"Iteration number {step}.")
+        if step % self._run_config.save_interval == 0:
+            data = {
+                'weights': self._model.get_weights(),
+            }
+            with open(f'data/data{step:05d}.pickle', 'wb') as f:
+                pickle.dump(data, f, protocol=4)
+        if step % self._run_config.weights_update_interval == 0:
+            ray.get(self._exchange_actor.set_current_weights.remote((self._model.get_weights(), 0)))
+        if step % self._run_config.target_model_update_interval == 0:
+                self._target_model.set_weights(self._model.get_weights)
+
+    def training(self):
+        """
+        Trains a sequence of steps.
+        """
+        while True:
+            try:
+                self._sample_experience()
+            except ValueError:
+                continue
+            break
+        self.train()
 
 
 class PercDQNAgent(DQNAgent):
@@ -82,138 +151,3 @@ class PercDQNAgent(DQNAgent):
             loss = tf.reduce_mean(self._loss_fn(target_Q_values, Q_values))
         grads = tape.gradient(loss, self._model.trainable_variables)
         self._optimizer.apply_gradients(zip(grads, self._model.trainable_variables))
-
-
-class CategoricalDQNAgent(Agent):
-
-    def __init__(self, env_name, init_n_samples, *args, **kwargs):
-        super().__init__(env_name, *args, **kwargs)
-
-        min_q_value = -5
-        max_q_value = 20
-        self._n_atoms = 71
-        self._support = tf.linspace(min_q_value, max_q_value, self._n_atoms)
-        self._support = tf.cast(self._support, tf.float32)
-        cat_n_outputs = self._n_outputs * self._n_atoms
-
-        # train a model from scratch
-        if self._data is None:
-            self._model = models.get_dqn(self._input_shape, cat_n_outputs)
-        # continue a model training
-        elif self._data:
-            self._model = models.get_dqn(self._input_shape, cat_n_outputs)
-            self._model.set_weights(self._data['weights'])
-
-        self._collect_until_items_created(epsilon=self._epsilon, n_items=init_n_samples)
-
-        reward, steps = self._evaluate_episodes(num_episodes=10)
-        print(f"Initial reward with a model policy is {reward:.2f}, steps: {steps:.2f}")
-
-    def _epsilon_greedy_policy(self, obsns, epsilon, info):
-        if np.random.rand() < epsilon:
-            # the first step after reset is arbitrary
-            if info is None:
-                available_actions = [0, 1, 2, 3]
-                actions = [random.choice(available_actions) for _ in range(self._n_players)]
-            # other random actions are within actions != opposite to the previous ones
-            else:
-                actions = [random.choice(info[i]['allowed_actions']) for i in range(self._n_players)]
-            return actions
-        else:
-            # it receives observations for all geese and predicts best actions one by one
-            best_actions = []
-            obsns = tf.nest.map_structure(lambda x: tf.expand_dims(x, axis=0), obsns)
-            for i in range(self._n_players):
-                obs = obsns[i]
-                logits = self._predict(obs)
-                logits = tf.reshape(logits, [-1, self._n_outputs, self._n_atoms])
-                probabilities = tf.nn.softmax(logits)
-                Q_values = tf.reduce_sum(self._support * probabilities, axis=-1)  # Q values expected return
-                best_actions.append(np.argmax(Q_values[0]))
-            return best_actions
-
-    def _training_step(self, actions, observations, rewards, dones, steps, info):
-
-        total_rewards, first_observations, last_observations, last_dones, last_discounted_gamma, second_actions = \
-            self._prepare_td_arguments(actions, observations, rewards, dones, steps)
-
-        # Part 1: calculate new target (best) Q value distributions (next_best_probs)
-        next_logits = self._model(last_observations)
-        # reshape to (batch, n_actions, distribution support number of elements (atoms)
-        next_logits = tf.reshape(next_logits, [-1, self._n_outputs, self._n_atoms])
-        next_probabilities = tf.nn.softmax(next_logits)
-        next_Q_values = tf.reduce_sum(self._support * next_probabilities, axis=-1)  # Q values expected return
-        # get indices of max next Q values and get corresponding distributions
-        max_args = tf.cast(tf.argmax(next_Q_values, 1), tf.int32)[:, None]
-        #
-        # construct non-max indices, attempts:
-        #
-        # 1. list comprehensions: are not allowed in tf graphs
-        # foo = tf.constant([i for j in range(self._sample_batch_size) for i in range(self._n_outputs)
-        #                    if i != max_args[j]])
-        #
-        # 2. dynamic tensor: works way too slow
-        # r = tf.TensorArray(tf.int32, 0, dynamic_size=True)
-        # for i in range(self._sample_batch_size):
-        #     for j in range(self._n_outputs):
-        #         if j != max_args[i]:
-        #             r = r.write(r.size(), j)
-        # foo = r.stack()
-        # non_max_args = tf.reshape(foo, [-1, self._n_outputs - 1])
-        #
-        # 3. get a mapping from max to non max: it is probably also slow
-        # non_max_args = tf.map_fn(misc.get_non_max, max_args)
-        # first_args = non_max_args[:, 0][:, None]
-        # secnd_args = non_max_args[:, 1][:, None]
-        # third_args = non_max_args[:, 2][:, None]
-        #
-        # 4. with a mask and tf.where
-        negatives = tf.zeros(next_Q_values.shape, dtype=next_Q_values.dtype) - 100
-        max_args_mask = tf.one_hot(max_args[:, 0], self._n_outputs, on_value=True, off_value=False, dtype=tf.bool)
-        Q_values_no_max = tf.where(max_args_mask, negatives, next_Q_values)
-        first_args = tf.argmax(Q_values_no_max, axis=1, output_type=tf.int32)[:, None]
-
-        max_args_mask = tf.one_hot(first_args[:, 0], self._n_outputs, on_value=True, off_value=False, dtype=tf.bool)
-        Q_values_no_max = tf.where(max_args_mask, negatives, Q_values_no_max)
-        secnd_args = tf.argmax(Q_values_no_max, axis=1, output_type=tf.int32)[:, None]
-
-        max_args_mask = tf.one_hot(secnd_args[:, 0], self._n_outputs, on_value=True, off_value=False, dtype=tf.bool)
-        Q_values_no_max = tf.where(max_args_mask, negatives, Q_values_no_max)
-        third_args = tf.argmax(Q_values_no_max, axis=1, output_type=tf.int32)[:, None]
-
-        batch_indices = tf.range(tf.cast(self._sample_batch_size, tf.int32))[:, None]
-        next_qt_argmax = tf.concat([batch_indices, max_args], axis=-1)  # indices of the target Q value distributions
-        next_qt_first_args = tf.concat([batch_indices, first_args], axis=-1)
-        next_qt_secnd_args = tf.concat([batch_indices, secnd_args], axis=-1)
-        next_qt_third_args = tf.concat([batch_indices, third_args], axis=-1)
-        next_best_probs = (0.7 * tf.gather_nd(next_probabilities, next_qt_argmax) +
-                           0.1 * tf.gather_nd(next_probabilities, next_qt_first_args) +
-                           0.1 * tf.gather_nd(next_probabilities, next_qt_secnd_args) +
-                           0.1 * tf.gather_nd(next_probabilities, next_qt_third_args)
-                           )
-        # next_best_probs = tf.gather_nd(next_probabilities, next_qt_argmax)
-
-        # Part 2: calculate a new but non-aligned support of the target Q value distributions
-        batch_support = tf.repeat(self._support[None, :], [self._sample_batch_size], axis=0)
-        last_dones = tf.expand_dims(last_dones, -1)
-        total_rewards = tf.expand_dims(total_rewards, -1)
-        non_aligned_support = total_rewards + (tf.constant(1.0) - last_dones) * last_discounted_gamma * batch_support
-
-        # Part 3: project the target Q value distributions to the basic (target_support) support
-        target_distribution = misc.project_distribution(supports=non_aligned_support,
-                                                        weights=next_best_probs,
-                                                        target_support=self._support)
-
-        # Part 4: Loss and update
-        indices = tf.cast(batch_indices[:, 0], second_actions.dtype)
-        reshaped_actions = tf.stack([indices, second_actions], axis=-1)
-        with tf.GradientTape() as tape:
-            logits = self._model(first_observations)
-            logits = tf.reshape(logits, [-1, self._n_outputs, self._n_atoms])
-            chosen_action_logits = tf.gather_nd(logits, reshaped_actions)
-            loss = tf.nn.softmax_cross_entropy_with_logits(labels=target_distribution,
-                                                           logits=chosen_action_logits)
-            loss = tf.reduce_mean(loss)
-        grads = tape.gradient(loss, self._model.trainable_variables)
-        self._optimizer.apply_gradients(zip(grads, self._model.trainable_variables))
-        return target_distribution, chosen_action_logits

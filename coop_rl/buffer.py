@@ -1,7 +1,6 @@
 import tensorflow as tf
 
 import reverb
-from typing import List
 
 
 class DQNUniformBuffer:
@@ -46,7 +45,7 @@ class DQNUniformBuffer:
         )
 
     @property
-    def table_names(self) -> List[str]:
+    def table_names(self) -> list[str]:
         return self._table_names
 
     @property

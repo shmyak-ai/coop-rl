@@ -1,6 +1,7 @@
 """
 The basic classes for ray actors
 """
+import itertools
 
 import tensorflow as tf
 import reverb
@@ -21,6 +22,7 @@ class Member:
     }
 
     def __init__(self, run_config, exchange_actor, weights):
+        self._run_config = run_config
         self._exchange_actor = exchange_actor
         self._model = Member.member_config['model'][run_config.model](
             run_config.n_features,
@@ -49,6 +51,7 @@ class Agent(Member):
         super().__init__(run_config, exchange_actor, weights)
 
         self._optimizer = Agent.agent_config['optimizer'][run_config.optimizer]
+        self._optimizer.learning_rate.assign(run_config.learning_rate)
         self._loss_fn = Agent.agent_config['loss'][run_config.loss]
 
         # to make checkpoints during training
@@ -68,19 +71,28 @@ class Agent(Member):
 
         if not run_config.debug:
             self._training_step = tf.function(self._training_step)
+        self.do_train = self.do_train_generator()
+
+    def do_train_generator(self):
+        for i in itertools.count():
+            samples = self._sample_experience()
+            self._traininig_step(samples)
+            yield i
 
     def _sample_experience(self):
         raise NotImplementedError
 
     def _training_step(self):
+        """A RL algorithmic step"""
         raise NotImplementedError
 
     def train(self):
-        """
-        Runs a step of training.
-        """
-        samples = self._sample_experience()
-        self._traininig_step(samples)
+        """Saving, printing, adjusting etc., calls _training_step through next(self.do_train)"""
+        raise NotImplementedError
+
+    def training(self):
+        """Train stepping, calls train"""
+        raise NotImplementedError
 
 
 class Worker(Member):

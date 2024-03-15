@@ -20,6 +20,10 @@ class RunConfig:
     # general
     debug: bool = True
     seed: int | None = None
+    print_interval: int = 100
+    save_interval: int = 100
+    weights_update_interval: int = 100
+    target_model_update_interval: int = 100
 
     # cluster
     num_trainers: int = 1
@@ -37,6 +41,7 @@ class RunConfig:
     # coop_rl: env, model and dataset obs(input) shapes should be compatible
     env_name: str = 'CartPole-v1'
     dataset: str = '1d'
+    learning_rate: float = 1e-5
     optimizer: str = 'adam'
     loss: str = 'huber'
     # model
@@ -108,7 +113,7 @@ def complex_call():
         trainer_agents.append(trainer_object.remote(
             conf,
             exchange_actor=exchange_actor,
-            data=data_net,
+            weights=data_net,
             make_checkpoint=make_checkpoint,
             ))
     collector_agents = []
@@ -116,7 +121,7 @@ def complex_call():
         collector_agents.append(collector_object.remote(
             conf,
             exchange_actor=exchange_actor,
-            data=data_net,
+            weights=data_net,
             collector_id=i + 1,
             ))
     evaluator_agents = []
@@ -124,13 +129,13 @@ def complex_call():
         evaluator_agents.append(evaluator_object.remote(
             conf,
             exchange_actor=exchange_actor,
-            data=data_net,
+            weights=data_net,
             ))
 
     # remote calls
-    trainer_futures = [agent.train.remote() for agent in trainer_agents]
-    collect_info_futures = [agent.collect.remote() for agent in collector_agents]
-    eval_info_futures = [agent.evaluate.remote() for agent in evaluator_agents]
+    trainer_futures = [agent.training.remote() for agent in trainer_agents]
+    collect_info_futures = [agent.collecting.remote() for agent in collector_agents]
+    eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
     # get results
     outputs = ray.get(trainer_futures)
