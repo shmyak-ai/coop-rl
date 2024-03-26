@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import ray
 import tensorflow as tf
 import reverb
-# from ray.util.queue import Queue
 
 from coop_rl.agents_dqn import DQNAgent
 from coop_rl.collectors import DQNCollector
@@ -22,8 +21,6 @@ class RunConfig:
     seed: int | None = None
     print_interval: int = 100
     save_interval: int = 100
-    weights_update_interval: int = 100
-    target_model_update_interval: int = 100
 
     # cluster
     num_trainers: int = 1
@@ -38,17 +35,26 @@ class RunConfig:
     tables_number: int = 5
     table_names: tuple[str] = tuple(f"uniform_table_{i}" for i in range(tables_number))
 
+    # rl agent
+    weights_update_interval: int = 100  # to exchange actor for collectors
+    target_model_update_interval: int = 100
+
+    # collectors
+    epsilon: float = 1e-1
+
     # coop_rl: env, model and dataset obs(input) shapes should be compatible
     env_name: str = 'CartPole-v1'
     dataset: str = '1d'
     learning_rate: float = 1e-5
     optimizer: str = 'adam'
     loss: str = 'huber'
+
     # model
     model: str = 'dense_critic'
     n_features: int = 1024
     n_layers: int = 3
-    # coop_rl to be updated from env
+
+    # model parameters to be updated from the environment
     input_shape: tuple[int] | None = None
     n_outputs: int | None = None
 
@@ -94,7 +100,7 @@ def complex_call():
 
     # global variable to control getting items order from the interprocess queue, a done condition
     # store weight for an evaluator
-    exchange_actor = ExchangeActor.remote()
+    exchange_actor = ExchangeActor.remote(conf.num_collectors)
 
     agent_object = DQNAgent
     if is_gpu:

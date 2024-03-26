@@ -13,7 +13,7 @@ from coop_rl.networks import DenseCritic
 class Member:
     """
     Members are agents and workers.
-    They all possess an exchange actor for communications and a network.
+    They all possess an exchange actor for communications and a model (nn network).
     """
     member_config = {
         'model':  {

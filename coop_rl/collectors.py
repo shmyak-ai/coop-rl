@@ -4,14 +4,13 @@ import tensorflow as tf
 import numpy as np
 import reverb
 import ray
-from ray.util.queue import Empty
 
 from coop_rl.members import Worker
 
 
 class DQNCollector(Worker):
 
-    def __init__(self, run_config, exchange_actor, weights, collector_id):
+    def __init__(self, run_config, exchange_actor, weights, *args, **kwargs):
         super().__init__(run_config, exchange_actor, weights)
 
         # to add data to the replay buffer
@@ -19,8 +18,7 @@ class DQNCollector(Worker):
             f'{run_config.buffer_server_ip}:{run_config.buffer_server_port}'
         )
         self._table_names = run_config.table_names
-
-        self._collector_id = collector_id
+        self._epsilon = run_config.epsilon
 
     def _policy(self, obsns, epsilon, info):
         if np.random.rand() < epsilon:
@@ -42,65 +40,95 @@ class DQNCollector(Worker):
                 best_actions.append(np.argmax(Q_values[0]))
             return best_actions
 
-    def do_collect(self):
+    def _collect_trajectories_from_episode(self, epsilon):
+        """
+        Collects trajectories (items) to a buffer. For example, we have 4 points to collect: 1, 2, 3, 4
+        the function will store trajectories:
+        1, 2; 2, 3; 3, 4;
+        1, 2, 3; 2, 3, 4;
+        1, 2, 3, 4;
+        The first table will be the largest, the second one 1 point smaller, etc.
+
+        A buffer contains items, each item consists of several n_points;
+        for a regular TD update an item should have 2 n_points (a minimum number to form one time step).
+        One n_point contains (action, obs, reward, done);
+        action, reward, done are for the current observation (or obs);
+        e.g. action led to the obs, reward prior to the obs, if is it done at the current obs.
+
+        this implementation creates writers for each player (goose) and stores
+        n_points trajectories for all of them
+
+        if epsilon is None assume an off policy gradient method where policy_logits required
+        """
+
+        # initialize writers for all players
+        writers = [self._replay_memory_client.writer(max_sequence_length=self._n_points)
+                   for _ in range(self._n_players)]
+        obs_records = []
+        info = None
+
+        obsns = self._train_env.reset()
+        action, reward, done = tf.constant(-1), tf.constant(0.), tf.constant(0.)
+        obsns = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.uint8), obsns)
+        for i, writer in enumerate(writers):
+            obs = obsns[i][0], obsns[i][1]
+            obs_records.append(obs)
+            if epsilon is None:
+                policy_logits = tf.constant([0., 0., 0., 0.])
+                writer.append((action, policy_logits, obs, reward, done))
+            else:
+                writer.append((action, obs, reward, done))
+
+        # for step in it.count(0):
+        while True:
+            if epsilon is None:
+                actions, policy_logits = self._policy(obs_records)
+                policy_logits = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.float32),
+                                                      policy_logits)
+            else:
+                actions = self._policy(obs_records, epsilon, info)
+            obs_records = []
+            # environment step receives actions and outputs observations for the dead players also
+            # but it takes no effect
+            obsns, rewards, dones, info = self._train_env.step(actions)
+            actions = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.int32), actions)
+            rewards = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.float32), rewards)
+            dones = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.float32), dones)
+            obsns = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.uint8), obsns)
+            for i, writer in enumerate(writers):
+                action, reward, done = actions[i], rewards[i], dones[i]
+                obs = obsns[i][0], obsns[i][1]
+                obs_records.append(obs)
+                try:
+                    if epsilon is None:
+                        writer.append((action, policy_logits[i], obs, reward, done))
+                    else:
+                        writer.append((action, obs, reward, done))  # returns Runtime Error if a writer is closed
+                    # if step >= start_itemizing:
+                    for steps in range(2, self._n_points + 1):
+                        try:
+                            writer.create_item(table=self._table_names[steps - 2], num_timesteps=steps, priority=1.)
+                        except ValueError:
+                            # stop new items creation if there are not enough buffered timesteps
+                            break
+                    if done:
+                        writer.close()
+                except RuntimeError:
+                    # continue writing with a next writer if a current one is closed
+                    continue
+            if all(dones):
+                break
+
+    def collecting(self):
         num_collects = 0
-        num_updates = 0
+        epsilon = self._epsilon
 
         while True:
-            # trainer will switch to done on the last iteration
-            is_done = ray.get(self._workers_info.get_done.remote())
+            # a trainer will switch to done at the last iteration
+            is_done = ray.get(self._exchange_actor.is_done.remote())
             if is_done:
-                # print("Collecting is done.")
-                return num_collects, num_updates
-            # get the current turn, so collectors (workers) update weights one by one
-            curr_worker = ray.get(self._workers_info.get_global_v.remote())
-            # check the current turn
-            if curr_worker == self._worker_id:
-                if not self._ray_queue.empty():  # see below
-                    try:
-                        # block = False will cause an exception if there is no data in the queue,
-                        # which is not handled by a ray queue (incompatibility with python 3.8 ?)
-                        weights = self._ray_queue.get(block=False)
-                        if curr_worker == self._num_collectors:
-                            # print(f"Worker {curr_worker} updates weights")
-                            ray.get(self._workers_info.set_global_v.remote(1))
-                            num_updates += 1
-                        elif curr_worker < self._num_collectors:
-                            ray.get(self._workers_info.set_global_v.remote(curr_worker + 1))
-                            # print(f"Worker {curr_worker} update weights")
-                            num_updates += 1
-                        else:
-                            print("Wrong worker")
-                            raise NotImplementedError
-                    except Empty:
-                        weights = None
-                else:
-                    weights = None
-            else:
-                weights = None
+                return num_collects
 
-            if weights is not None:
-                self._model.set_weights(weights)
-                # print("Weights are updated")
-
-            epsilon = None
-            # t1 = time.time()
-            if self._data is not None:
-                if num_collects % 25 == 0:
-                    self._collect(epsilon, is_random=True)
-                    # print("Episode with a random trajectory was collected; "
-                    #       f"Num of collects: {num_collects}")
-                else:
-                    self._collect(epsilon)
-                    # print(f"Num of collects: {num_collects}")
-            else:
-                if num_collects < 10000 or num_collects % 25 == 0:
-                    if num_collects == 9999:
-                        print("Collector: The last initial random collect.")
-                    self._collect(epsilon, is_random=True)
-                else:
-                    self._collect(epsilon)
+            self._model.set_weights(ray.get(self._exchange_actor.get_weights()))
+            self._collect(epsilon)
             num_collects += 1
-            # print(f"Num of collects: {num_collects}")
-            # t2 = time.time()
-            # print(f"Collecting. Time: {t2 - t1}")

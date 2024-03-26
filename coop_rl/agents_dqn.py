@@ -23,6 +23,7 @@ class DQNAgent(Agent):
             run_config.seed,
         )
         self._target_model.set_weights(self._model.get_weights())
+        ray.get(self._exchange_actor.set_weights.remote(self._model.get_weights()))
 
     @tf.function
     def _predict(self, observation):

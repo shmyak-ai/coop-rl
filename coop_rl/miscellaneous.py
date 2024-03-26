@@ -12,25 +12,28 @@ def check_environment(run_config):
 @ray.remote(num_cpus=0)
 class ExchangeActor:
 
-    def __init__(self):
-        self.global_v = 1
-        self.current_weights = None, None
+    def __init__(self, num_collectors):
+        self.num_collectors = num_collectors
+        self.collector_id = 0
         self.done = False
-
-    def set_global_v(self, v):
-        self.global_v = v
-
-    def get_global_v(self):
-        return self.global_v
-
-    def set_current_weights(self, w):
-        self.current_weights = w
-
-    def get_current_weights(self):
-        return self.current_weights
+        self.weights = None
 
     def set_done(self, done):
         self.done = done
 
-    def get_done(self):
+    def is_done(self):
         return self.done
+
+    def increment_collector_id(self):
+        self.collector_id += 1
+        if self.collector_id >= self.num_collectors:
+            self.collector_id = 0
+
+    def get_collector_id(self):
+        return self.collector_id
+
+    def set_weights(self, w):
+        self.weights = w
+
+    def get_weights(self):
+        return self.weights
