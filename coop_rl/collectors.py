@@ -1,4 +1,5 @@
 import random
+import itertools as it
 
 import tensorflow as tf
 import numpy as np
@@ -40,7 +41,7 @@ class DQNCollector(Worker):
                 best_actions.append(np.argmax(Q_values[0]))
             return best_actions
 
-    def _collect_trajectories_from_episode(self, epsilon):
+    def _collect(self, epsilon):
         """
         Collects trajectories (items) to a buffer. For example, we have 4 points to collect: 1, 2, 3, 4
         the function will store trajectories:
@@ -55,19 +56,44 @@ class DQNCollector(Worker):
         action, reward, done are for the current observation (or obs);
         e.g. action led to the obs, reward prior to the obs, if is it done at the current obs.
 
-        this implementation creates writers for each player (goose) and stores
-        n_points trajectories for all of them
-
-        if epsilon is None assume an off policy gradient method where policy_logits required
+        env.step(action) -> obs, reward, term(inated), trunc(ated)
+        so
+        reset: act_-1, obs_0, reward_0, term_0, trunc_0
         """
 
+        obs, info = tf.nest.map_structure(
+            lambda x: tf.convert_to_tensor(x, dtype=tf.float32), self._env.reset()
+            )
+        action = tf.constant(-1, dtype=tf.int32)
+        reward, done = tf.constant(0., dtype=tf.float32), tf.constant(0., dtype=tf.float32)
+
+        num_tables = len(self._table_names)
+        with self._buffer_client.trajectory_writer(num_keep_alive_refs=num_tables) as writer:
+            timestep = environment_step(None)
+            for step in it.count():
+                action = agent_step(timestep)
+                writer.append({'action': action, 'observation': timestep})
+                timestep = environment_step(action)
+
+                if step >= 2:
+                  # In this example, the item consists of the 3 most recent timesteps that
+                  # were added to the writer and has a priority of 1.5.
+                  writer.create_item(
+                      table='my_table',
+                      priority=1.5,
+                      trajectory={
+                          'actions': writer.history['action'][-3:],
+                          'observations': writer.history['observation'][-3:],
+                      }
+                  )
+
         # initialize writers for all players
-        writers = [self._replay_memory_client.writer(max_sequence_length=self._n_points)
+        writers = [self._buffer_client.writer(max_sequence_length=self._n_points)
                    for _ in range(self._n_players)]
         obs_records = []
         info = None
 
-        obsns = self._train_env.reset()
+        obsns = self._env.reset()
         action, reward, done = tf.constant(-1), tf.constant(0.), tf.constant(0.)
         obsns = tf.nest.map_structure(lambda x: tf.convert_to_tensor(x, dtype=tf.uint8), obsns)
         for i, writer in enumerate(writers):
