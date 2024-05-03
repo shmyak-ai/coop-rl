@@ -16,7 +16,7 @@
             "name": "train gym dqn",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/apps/train_gym_dqn.py",
+            "program": "${workspaceFolder}/app/train_gym_dqn.py",
             "console": "integratedTerminal",
             "justMyCode": true,
         },

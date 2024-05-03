@@ -1,16 +1,10 @@
-import gymnasium as gym
 import ray
 
-
-def check_environment(run_config):
-    train_env = gym.make(run_config.env_name)
-    input_shape = train_env.observation_space.shape
-    n_outputs = train_env.action_space.n
-    return input_shape, n_outputs
+from coop_rl.replay_memory import circular_replay_buffer
 
 
 @ray.remote(num_cpus=0)
-class ExchangeActor:
+class ControlActor:
 
     def __init__(self, num_collectors):
         self.num_collectors = num_collectors
@@ -37,3 +31,10 @@ class ExchangeActor:
 
     def get_weights(self):
         return self.weights
+
+
+@ray.remote(num_cpus=1)
+class ReplayActor:
+
+    def __init__(self, config):
+        self.buffer = circular_replay_buffer.OutOfGraphReplayBuffer(**config)

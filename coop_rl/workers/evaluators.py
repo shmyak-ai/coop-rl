@@ -5,10 +5,8 @@ import tensorflow as tf
 import numpy as np
 import ray
 
-from coop_rl.members import Worker
 
-
-class Evaluator(Worker):
+class Evaluator:
 
     @tf.function
     def _eval_predict(self, observation):
