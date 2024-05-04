@@ -17,6 +17,19 @@ dependencies = [
     "ipywidgets",
 ]
 
+[project.optional-dependencies]
+ml-cpu = [
+  "jax[cpu]",
+  "tensorflow",
+  "tensorflow-probability",
+  "tensorflow-datasets",
+  "optax",
+  "flax",
+  "clu",
+  "ml-collections",
+  "ray[default]",
+]
+
 [tool.setuptools.packages.find]
 include = ["coop_rl"]
 
@@ -24,6 +37,17 @@ include = ["coop_rl"]
 line-length = 120
 
 [tool.ruff.lint]
-extend-select = [
-    "UP",  # pyupgrade
+select = [
+    # pycodestyle
+    "E",
+    # Pyflakes
+    "F",
+    # pyupgrade
+    "UP",
+    # flake8-bugbear
+    "B",
+    # flake8-simplify
+    "SIM",
+    # isort
+    "I",
 ]

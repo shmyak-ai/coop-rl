@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import time
 
+import gymnasium as gym
 import jax
-import numpy as onp
-from absl import logging
+import numpy as np
 
 from coop_rl import networks
-from coop_rl.utils import select_action
+from coop_rl.utils import (
+    identity_epsilon,
+    select_action,
+)
 
 
 class DQNCollector:
@@ -28,11 +30,17 @@ class DQNCollector:
         self,
         control_actor,
         replay_actor,
+        collector_id,
         num_actions,
         observation_shape,
         observation_dtype,
         stack_size,
+        environment,
         network,
+        min_replay_history=20000,
+        epsilon_fn=identity_epsilon,
+        epsilon=0.01,
+        epsilon_decay_period=250000,
         seed=None,
         preprocess_fn=None,
     ):
@@ -44,6 +52,8 @@ class DQNCollector:
         self.observation_dtype = observation_dtype
         self.stack_size = stack_size
 
+        self._environment = gym.make(environment)
+
         if preprocess_fn is None:
             self.network_def = network(num_actions=num_actions)
             self.preprocess_fn = networks.identity_preprocess_fn
@@ -51,9 +61,15 @@ class DQNCollector:
             self.network_def = network(num_actions=num_actions, inputs_preprocessed=True)
             self.preprocess_fn = preprocess_fn
 
+        self.epsilon_fn = epsilon_fn
+        self.epsilon = epsilon
+        self.epsilon_decay_period = epsilon_decay_period
+        self.training_steps = 0  # get remotely to use linear eps decay
+        self.min_replay_history = min_replay_history
+
         self._rng = jax.random.PRNGKey(seed)
         state_shape = self.observation_shape + (stack_size,)
-        self.state = onp.zeros(state_shape)
+        self.state = np.zeros(state_shape)
         self._build_network()
 
         # Variables to be initialized by the agent once it interacts with the
@@ -81,12 +97,48 @@ class DQNCollector:
         """
         # Set current observation. We do the reshaping to handle environments
         # without frame stacking.
-        self._observation = onp.reshape(observation, self.observation_shape)
+        self._observation = np.reshape(observation, self.observation_shape)
         # Swap out the oldest frame with the current frame.
-        self.state = onp.roll(self.state, -1, axis=-1)
+        self.state = np.roll(self.state, -1, axis=-1)
         self.state[..., -1] = self._observation
 
-    def begin_episode(self, observation):
+    def _store_transition(self, last_observation, action, reward, is_terminal, *args, priority=None, episode_end=False):
+        """Stores a transition when in training mode.
+
+        Stores the following tuple in the replay buffer (last_observation, action,
+        reward, is_terminal, priority).
+
+        Args:
+          last_observation: Last observation, type determined via observation_type
+            parameter in the replay_memory constructor.
+          action: An integer, the action taken.
+          reward: A float, the reward.
+          is_terminal: Boolean indicating if the current state is a terminal state.
+          *args: Any, other items to be added to the replay buffer.
+          priority: Float. Priority of sampling the transition. If None, the default
+            priority will be used. If replay scheme is uniform, the default priority
+            is 1. If the replay scheme is prioritized, the default priority is the
+            maximum ever seen [Schaul et al., 2015].
+          episode_end: bool, whether this transition is the last for the episode.
+            This can be different than terminal when ending the episode because of a
+            timeout, for example.
+        """
+        is_prioritized = isinstance(
+            self._replay,
+            prioritized_replay_buffer.OutOfGraphPrioritizedReplayBuffer,
+        )
+        if is_prioritized and priority is None:
+            if self._replay_scheme == "uniform":
+                priority = 1.0
+            else:
+                priority = self._replay.sum_tree.max_recorded_priority
+
+        if not self.eval_mode:
+            self._replay.add(
+                last_observation, action, reward, is_terminal, *args, priority=priority, episode_end=episode_end
+            )
+
+    def _initialize_episode(self):
         """Returns the agent's first action for this episode.
 
         Args:
@@ -95,11 +147,11 @@ class DQNCollector:
         Returns:
           int, the selected action.
         """
+
+        observation = self._environment.reset()
+
         self._reset_state()
         self._record_observation(observation)
-
-        if not self.eval_mode:
-            self._train_step()
 
         self._rng, self.action = select_action(
             self.network_def,
@@ -107,18 +159,18 @@ class DQNCollector:
             self.preprocess_fn(self.state),
             self._rng,
             self.num_actions,
-            self.eval_mode,
-            self.epsilon_eval,
-            self.epsilon_train,
+            False,  # eval mode
+            None,  # epsilon_eval,
+            self.epsilon,  # epsilon_train,
             self.epsilon_decay_period,
             self.training_steps,
             self.min_replay_history,
             self.epsilon_fn,
         )
-        self.action = onp.asarray(self.action)
+        self.action = np.asarray(self.action)
         return self.action
 
-    def step(self, reward, observation):
+    def _step(self, reward, observation):
         """Records the most recent transition and returns the agent's next action.
 
         We store the observation of the last time step since we want to store it
@@ -144,18 +196,18 @@ class DQNCollector:
             self.preprocess_fn(self.state),
             self._rng,
             self.num_actions,
-            self.eval_mode,
-            self.epsilon_eval,
-            self.epsilon_train,
+            False,  # eval mode
+            None,  # epsilon_eval,
+            self.epsilon,  # epsilon_train,
             self.epsilon_decay_period,
             self.training_steps,
             self.min_replay_history,
             self.epsilon_fn,
         )
-        self.action = onp.asarray(self.action)
+        self.action = np.asarray(self.action)
         return self.action
 
-    def end_episode(self, reward, terminal=True):
+    def _end_episode(self, reward, terminal=True):
         """Signals the end of the episode to the agent.
 
         We store the observation of the current time step, which is the last
@@ -165,50 +217,9 @@ class DQNCollector:
           reward: float, the last reward from the environment.
           terminal: bool, whether the last state-action led to a terminal state.
         """
-        if not self.eval_mode:
-            argspec = inspect.getfullargspec(self._store_transition)
-            if "episode_end" in argspec.args or "episode_end" in argspec.kwonlyargs:
-                self._store_transition(self._observation, self.action, reward, terminal, episode_end=True)
-            else:
-                logging.warning("_store_transition function doesn't have episode_end arg.")
-                self._store_transition(self._observation, self.action, reward, terminal)
+        self._store_transition(self._observation, self.action, reward, terminal, episode_end=True)
 
-    def _initialize_episode(self):
-        """Initialization for a new episode.
-
-        Returns:
-          action: int, the initial action chosen by the agent.
-        """
-        initial_observation = self._environment.reset()
-        return self._agent.begin_episode(initial_observation)
-
-    def _run_one_step(self, action):
-        """Executes a single step in the environment.
-
-        Args:
-          action: int, the action to perform in the environment.
-
-        Returns:
-          The observation, reward, and is_terminal values returned from the
-            environment.
-        """
-        observation, reward, is_terminal, _ = self._environment.step(action)
-        return observation, reward, is_terminal
-
-    def _end_episode(self, reward, terminal=True):
-        """Finalizes an episode run.
-
-        Args:
-          reward: float, the last reward from the environment.
-          terminal: bool, whether the last state-action led to a terminal state.
-        """
-        if isinstance(self._agent, jax_dqn_agent.JaxDQNAgent):
-            self._agent.end_episode(reward, terminal)
-        else:
-            # TODO(joshgreaves): Add terminal signal to TF dopamine agents
-            self._agent.end_episode(reward)
-
-    def _run_one_episode(self):
+    def run_one_episode(self):
         """Executes a full trajectory of the agent interacting with the environment.
 
         Returns:
@@ -218,30 +229,19 @@ class DQNCollector:
         total_reward = 0.0
 
         action = self._initialize_episode()
-        is_terminal = False
 
-        # Keep interacting until we reach a terminal state.
+        # Keep interacting until terminated / truncated state.
         while True:
-            observation, reward, is_terminal = self._run_one_step(action)
+            observation, reward, terminated, truncated, info = self._environment.step(action)
 
             total_reward += reward
             step_number += 1
 
-            if self._clip_rewards:
-                # Perform reward clipping.
-                reward = np.clip(reward, -1, 1)
-
-            if self._environment.game_over or step_number == self._max_steps_per_episode:
-                # Stop the run loop once we reach the true end of episode.
+            if terminated or truncated:
+                self._end_episode(reward)
                 break
-            elif is_terminal:
-                # If we lose a life but the episode is not over, signal an artificial
-                # end of episode to the agent.
-                self._end_episode(reward, is_terminal)
-                action = self._agent.begin_episode(observation)
             else:
-                action = self._agent.step(reward, observation)
+                action = self._step(reward, observation)
 
-        self._end_episode(reward, is_terminal)
 
         return step_number, total_reward

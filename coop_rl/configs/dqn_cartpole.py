@@ -19,7 +19,7 @@ import numpy as np
 from ml_collections import config_dict
 
 from coop_rl import networks
-from coop_rl.agents.dqn import identity_epsilon
+from coop_rl.utils import identity_epsilon
 
 
 def get_config():
@@ -32,15 +32,17 @@ def get_config():
     observation_shape = config_dict.FieldReference(None, field_type=tuple)
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
+    seed = config_dict.FieldReference(42)
     stack_size = config_dict.FieldReference(1)
     gamma = config_dict.FieldReference(0.99)
+    environment = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
 
     config.debug = True
-    config.seed = 42
+    config.seed = seed
     config.batch_size = 128
     config.num_collectors = 1
-    config.environment = "CartPole-v1"
+    config.environment = environment
     config.num_collectors = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -54,18 +56,25 @@ def get_config():
     config.replay.observation_shape = observation_shape
     config.replay.observation_dtype = observation_dtype
 
+    config.collector.num_actions = num_actions
+    config.collector.observation_shape = observation_shape
+    config.collector.observation_dtype = observation_dtype
+    config.collector.stack_size = stack_size
+    config.collector.environment = environment
     config.collector.network = network
+    config.collector.seed = seed
+    config.collector.epsilon_fn = identity_epsilon
 
-    config.agent.stack_size = stack_size
-    config.agent.network = network
     config.agent.loss_type = "huber"
     config.agent.gamma = gamma
     config.agent.update_period = 4
     config.agent.target_update_period = 100
-    config.agent.epsilon_fn = identity_epsilon
+    config.agent.num_actions = num_actions
     config.agent.observation_shape = observation_shape
     config.agent.observation_dtype = observation_dtype
-    config.agent.num_actions = num_actions
+    config.agent.stack_size = stack_size
+    config.agent.network = network
+    config.agent.seed = seed
 
     config.agent.optimizer.name = "adam"
     config.agent.optimizer.learning_rate = 0.001

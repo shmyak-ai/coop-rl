@@ -458,42 +458,6 @@ class JaxDQNAgent:
 
         self.training_steps += 1
 
-    def _store_transition(self, last_observation, action, reward, is_terminal, *args, priority=None, episode_end=False):
-        """Stores a transition when in training mode.
-
-        Stores the following tuple in the replay buffer (last_observation, action,
-        reward, is_terminal, priority).
-
-        Args:
-          last_observation: Last observation, type determined via observation_type
-            parameter in the replay_memory constructor.
-          action: An integer, the action taken.
-          reward: A float, the reward.
-          is_terminal: Boolean indicating if the current state is a terminal state.
-          *args: Any, other items to be added to the replay buffer.
-          priority: Float. Priority of sampling the transition. If None, the default
-            priority will be used. If replay scheme is uniform, the default priority
-            is 1. If the replay scheme is prioritized, the default priority is the
-            maximum ever seen [Schaul et al., 2015].
-          episode_end: bool, whether this transition is the last for the episode.
-            This can be different than terminal when ending the episode because of a
-            timeout, for example.
-        """
-        is_prioritized = isinstance(
-            self._replay,
-            prioritized_replay_buffer.OutOfGraphPrioritizedReplayBuffer,
-        )
-        if is_prioritized and priority is None:
-            if self._replay_scheme == "uniform":
-                priority = 1.0
-            else:
-                priority = self._replay.sum_tree.max_recorded_priority
-
-        if not self.eval_mode:
-            self._replay.add(
-                last_observation, action, reward, is_terminal, *args, priority=priority, episode_end=episode_end
-            )
-
     def bundle_and_checkpoint(self, checkpoint_dir, iteration_number):
         """Returns a self-contained bundle of the agent's state.
 
