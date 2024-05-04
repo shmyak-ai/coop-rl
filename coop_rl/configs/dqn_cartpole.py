@@ -43,7 +43,6 @@ def get_config():
     config.batch_size = 128
     config.num_collectors = 1
     config.environment = environment
-    config.num_collectors = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions

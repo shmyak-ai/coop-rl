@@ -19,6 +19,7 @@ import jax
 import numpy as np
 
 from coop_rl import networks
+from coop_rl.replay_memory import prioritized_replay_buffer
 from coop_rl.utils import (
     identity_epsilon,
     select_action,
@@ -45,7 +46,7 @@ class DQNCollector:
         preprocess_fn=None,
     ):
         assert isinstance(observation_shape, tuple)
-        seed = int(time.time() * 1e6) if seed is None else seed
+        self.seed = int(time.time() * 1e6) if seed is None else seed
 
         self.num_actions = num_actions
         self.observation_shape = tuple(observation_shape)
@@ -67,7 +68,9 @@ class DQNCollector:
         self.training_steps = 0  # get remotely to use linear eps decay
         self.min_replay_history = min_replay_history
 
-        self._rng = jax.random.PRNGKey(seed)
+        self._replay = []  # to store episode transitions
+
+        self._rng = jax.random.PRNGKey(self.seed)
         state_shape = self.observation_shape + (stack_size,)
         self.state = np.zeros(state_shape)
         self._build_network()
@@ -128,15 +131,15 @@ class DQNCollector:
             prioritized_replay_buffer.OutOfGraphPrioritizedReplayBuffer,
         )
         if is_prioritized and priority is None:
-            if self._replay_scheme == "uniform":
-                priority = 1.0
-            else:
-                priority = self._replay.sum_tree.max_recorded_priority
+            priority = 1.0 if self._replay_scheme == "uniform" else self._replay.sum_tree.max_recorded_priority
 
-        if not self.eval_mode:
-            self._replay.add(
-                last_observation, action, reward, is_terminal, *args, priority=priority, episode_end=episode_end
+        self._replay.append(
+            (last_observation, action, reward, is_terminal, *args, {
+                "priority": priority,
+                "episode_end": episode_end,
+                }
             )
+        )
 
     def _initialize_episode(self):
         """Returns the agent's first action for this episode.
@@ -148,29 +151,28 @@ class DQNCollector:
           int, the selected action.
         """
 
-        observation = self._environment.reset()
+        observation, info = self._environment.reset(seed=self.seed)
 
         self._reset_state()
         self._record_observation(observation)
 
-        self._rng, self.action = select_action(
+        self._rng, action = select_action(
             self.network_def,
             self.online_params,
             self.preprocess_fn(self.state),
             self._rng,
             self.num_actions,
             False,  # eval mode
-            None,  # epsilon_eval,
+            0.001,  # epsilon_eval,
             self.epsilon,  # epsilon_train,
             self.epsilon_decay_period,
             self.training_steps,
             self.min_replay_history,
             self.epsilon_fn,
         )
-        self.action = np.asarray(self.action)
-        return self.action
+        return np.asarray(action)
 
-    def _step(self, reward, observation):
+    def _step(self, action, reward, observation):
         """Records the most recent transition and returns the agent's next action.
 
         We store the observation of the last time step since we want to store it
@@ -186,38 +188,36 @@ class DQNCollector:
         self._last_observation = self._observation
         self._record_observation(observation)
 
-        if not self.eval_mode:
-            self._store_transition(self._last_observation, self.action, reward, False)
-            self._train_step()
+        self._store_transition(self._last_observation, action, reward, False)
 
-        self._rng, self.action = select_action(
+        self._rng, action = select_action(
             self.network_def,
             self.online_params,
             self.preprocess_fn(self.state),
             self._rng,
             self.num_actions,
             False,  # eval mode
-            None,  # epsilon_eval,
+            0.001,  # epsilon_eval,
             self.epsilon,  # epsilon_train,
             self.epsilon_decay_period,
             self.training_steps,
             self.min_replay_history,
             self.epsilon_fn,
         )
-        self.action = np.asarray(self.action)
-        return self.action
+        return np.asarray(action)
 
-    def _end_episode(self, reward, terminal=True):
+    def _end_episode(self, action, reward, episode_end=True):
         """Signals the end of the episode to the agent.
 
         We store the observation of the current time step, which is the last
         observation of the episode.
 
         Args:
+          action: int, the last action.
           reward: float, the last reward from the environment.
           terminal: bool, whether the last state-action led to a terminal state.
         """
-        self._store_transition(self._observation, self.action, reward, terminal, episode_end=True)
+        self._store_transition(self._observation, action, reward, True, episode_end=episode_end)
 
     def run_one_episode(self):
         """Executes a full trajectory of the agent interacting with the environment.
@@ -238,10 +238,14 @@ class DQNCollector:
             step_number += 1
 
             if terminated or truncated:
-                self._end_episode(reward)
                 break
             else:
-                action = self._step(reward, observation)
+                action = self._step(action, reward, observation)
 
+        # truncated=True corresponds to episode_end=False in store_transition
+        self._end_episode(action, reward, episode_end=not truncated)
+
+        # send transitions from episode to the replay actor
+        self._replay = []
 
         return step_number, total_reward
