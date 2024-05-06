@@ -17,6 +17,7 @@ import time
 import gymnasium as gym
 import jax
 import numpy as np
+import ray
 
 from coop_rl import networks
 from coop_rl.replay_memory import prioritized_replay_buffer
@@ -44,6 +45,10 @@ class DQNCollector:
         seed=None,
         preprocess_fn=None,
     ):
+        self.control_actor = control_actor
+        self.replay_actor = replay_actor
+        self.collector_id = collector_id
+
         assert isinstance(observation_shape, tuple)
         self.seed = int(time.time() * 1e6) if seed is None else seed
 
@@ -218,6 +223,7 @@ class DQNCollector:
         self._end_episode(action, reward, episode_end=not truncated)
 
         # send transitions from episode to the replay actor
+        ray.get(self.replay_actor.add_episode.remote(self._replay))
         self._replay = []
 
         return step_number, total_reward
