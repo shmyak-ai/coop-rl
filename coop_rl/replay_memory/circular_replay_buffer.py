@@ -96,9 +96,9 @@ class OutOfGraphReplayBuffer:
     def __init__(
         self,
         observation_shape,
-        stack_size,
         replay_capacity,
         batch_size,
+        stack_size=1,
         update_horizon=1,
         gamma=0.99,
         max_sample_attempts=1000,

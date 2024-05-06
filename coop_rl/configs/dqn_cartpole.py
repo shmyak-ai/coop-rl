@@ -33,7 +33,6 @@ def get_config():
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     seed = config_dict.FieldReference(42)
-    stack_size = config_dict.FieldReference(1)
     gamma = config_dict.FieldReference(0.99)
     environment = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
@@ -51,14 +50,12 @@ def get_config():
     config.replay.gamma = gamma
     config.replay.batch_size = 10
     config.replay.update_horizon = 1
-    config.replay.stack_size = stack_size
     config.replay.observation_shape = observation_shape
     config.replay.observation_dtype = observation_dtype
 
     config.collector.num_actions = num_actions
     config.collector.observation_shape = observation_shape
     config.collector.observation_dtype = observation_dtype
-    config.collector.stack_size = stack_size
     config.collector.environment = environment
     config.collector.network = network
     config.collector.seed = seed
@@ -71,7 +68,6 @@ def get_config():
     config.agent.num_actions = num_actions
     config.agent.observation_shape = observation_shape
     config.agent.observation_dtype = observation_dtype
-    config.agent.stack_size = stack_size
     config.agent.network = network
     config.agent.seed = seed
 

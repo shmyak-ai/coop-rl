@@ -35,7 +35,6 @@ class DQNCollector:
         num_actions,
         observation_shape,
         observation_dtype,
-        stack_size,
         environment,
         network,
         min_replay_history=20000,
@@ -49,9 +48,8 @@ class DQNCollector:
         self.seed = int(time.time() * 1e6) if seed is None else seed
 
         self.num_actions = num_actions
-        self.observation_shape = tuple(observation_shape)
+        self.observation_shape = observation_shape
         self.observation_dtype = observation_dtype
-        self.stack_size = stack_size
 
         self._environment = gym.make(environment)
 
@@ -71,39 +69,15 @@ class DQNCollector:
         self._replay = []  # to store episode transitions
 
         self._rng = jax.random.PRNGKey(self.seed)
-        state_shape = self.observation_shape + (stack_size,)
-        self.state = np.zeros(state_shape)
-        self._build_network()
 
-        # Variables to be initialized by the agent once it interacts with the
-        # environment.
-        self._observation = None
-        self._last_observation = None
+        self._observation = np.zeros(observation_shape)
+        self._build_network()
+        # self.network_def.apply(self.online_params, np.random.rand(*state_shape))
 
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
-        state = self.preprocess_fn(self.state)
+        state = self.preprocess_fn(self._observation)
         self.online_params = self.network_def.init(rng, x=state)
-
-    def _reset_state(self):
-        """Resets the agent state by filling it with zeros."""
-        self.state.fill(0)
-
-    def _record_observation(self, observation):
-        """Records an observation and update state.
-
-        Extracts a frame from the observation vector and overwrites the oldest
-        frame in the state buffer.
-
-        Args:
-          observation: numpy array, an observation from the environment.
-        """
-        # Set current observation. We do the reshaping to handle environments
-        # without frame stacking.
-        self._observation = np.reshape(observation, self.observation_shape)
-        # Swap out the oldest frame with the current frame.
-        self.state = np.roll(self.state, -1, axis=-1)
-        self.state[..., -1] = self._observation
 
     def _store_transition(self, last_observation, action, reward, is_terminal, *args, priority=None, episode_end=False):
         """Stores a transition when in training mode.
@@ -151,15 +125,12 @@ class DQNCollector:
           int, the selected action.
         """
 
-        observation, info = self._environment.reset(seed=self.seed)
-
-        self._reset_state()
-        self._record_observation(observation)
+        self._observation, info = self._environment.reset(seed=self.seed)
 
         self._rng, action = select_action(
             self.network_def,
             self.online_params,
-            self.preprocess_fn(self.state),
+            self.preprocess_fn(self._observation),
             self._rng,
             self.num_actions,
             False,  # eval mode
@@ -179,21 +150,22 @@ class DQNCollector:
         with the reward.
 
         Args:
+          action: int, the most recent action.
           reward: float, the reward received from the agent's most recent action.
           observation: numpy array, the most recent observation.
 
         Returns:
           int, the selected action.
         """
-        self._last_observation = self._observation
-        self._record_observation(observation)
+        last_observation = self._observation
+        self._observation = observation
 
-        self._store_transition(self._last_observation, action, reward, False)
+        self._store_transition(last_observation, action, reward, False)
 
         self._rng, action = select_action(
             self.network_def,
             self.online_params,
-            self.preprocess_fn(self.state),
+            self.preprocess_fn(self._observation),
             self._rng,
             self.num_actions,
             False,  # eval mode
@@ -215,7 +187,7 @@ class DQNCollector:
         Args:
           action: int, the last action.
           reward: float, the last reward from the environment.
-          terminal: bool, whether the last state-action led to a terminal state.
+          episode_end: bool, whether the last state-action led to a terminal state.
         """
         self._store_transition(self._observation, action, reward, True, episode_end=episode_end)
 

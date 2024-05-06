@@ -150,7 +150,7 @@ class ClassicControlDQNNetwork(nn.Module):
     hidden_units: int = 512
     min_vals: None | tuple[float, ...] = None
     max_vals: None | tuple[float, ...] = None
-    inputs_preprocessed: bool = False
+    inputs_preprocessed: bool = True
 
     def setup(self):
         if self.min_vals is not None:
@@ -478,7 +478,7 @@ class FullRainbowNetwork(nn.Module):
         hidden_sizes = [32, 64, 64]
         kernel_sizes = [8, 4, 3]
         stride_sizes = [4, 2, 1]
-        for hidden_size, kernel_size, stride_size in zip(hidden_sizes, kernel_sizes, stride_sizes):
+        for hidden_size, kernel_size, stride_size in zip(hidden_sizes, kernel_sizes, stride_sizes):  # noqa: B905
             x = nn.Conv(
                 features=hidden_size,
                 kernel_size=(kernel_size, kernel_size),
