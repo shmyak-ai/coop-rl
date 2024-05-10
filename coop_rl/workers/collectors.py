@@ -20,23 +20,21 @@ import numpy as np
 import ray
 
 from coop_rl import networks
-from coop_rl.replay_memory import prioritized_replay_buffer
 from coop_rl.utils import (
     identity_epsilon,
     select_action,
 )
 
 
-class DQNCollector:
+class DQNCollectorUniform:
     def __init__(
         self,
         control_actor,
         replay_actor,
-        collector_id,
         num_actions,
         observation_shape,
         observation_dtype,
-        environment,
+        environment_name,
         network,
         min_replay_history=20000,
         epsilon_fn=identity_epsilon,
@@ -47,7 +45,6 @@ class DQNCollector:
     ):
         self.control_actor = control_actor
         self.replay_actor = replay_actor
-        self.collector_id = collector_id
 
         assert isinstance(observation_shape, tuple)
         self.seed = int(time.time() * 1e6) if seed is None else seed
@@ -56,7 +53,7 @@ class DQNCollector:
         self.observation_shape = observation_shape
         self.observation_dtype = observation_dtype
 
-        self._environment = gym.make(environment)
+        self._environment = gym.make(environment_name)
 
         if preprocess_fn is None:
             self.network_def = network(num_actions=num_actions)
@@ -77,7 +74,6 @@ class DQNCollector:
 
         self._observation = np.zeros(observation_shape)
         self._build_network()
-        # self.network_def.apply(self.online_params, np.random.rand(*state_shape))
 
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
@@ -105,12 +101,6 @@ class DQNCollector:
             This can be different than terminal when ending the episode because of a
             timeout, for example.
         """
-        is_prioritized = isinstance(
-            self._replay,
-            prioritized_replay_buffer.OutOfGraphPrioritizedReplayBuffer,
-        )
-        if is_prioritized and priority is None:
-            priority = 1.0 if self._replay_scheme == "uniform" else self._replay.sum_tree.max_recorded_priority
 
         self._replay.append(
             (last_observation, action, reward, is_terminal, *args, {

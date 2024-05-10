@@ -12,46 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import ray
-
-from coop_rl.replay_memory import circular_replay_buffer
 
 
 @ray.remote(num_cpus=0)
 class ControlActor:
 
-    def __init__(self, num_collectors):
-        self.num_collectors = num_collectors
-        self.collector_id = 0
+    def __init__(self, obs_shape):
         self.done = False
-        self.weights = None
+        self.parameters = None
 
-    def set_done(self, done):
+    def set_done(self, done: bool):
         self.done = done
 
-    def is_done(self):
+    def is_done(self) -> bool:
         return self.done
 
-    def increment_collector_id(self):
-        self.collector_id += 1
-        if self.collector_id >= self.num_collectors:
-            self.collector_id = 0
+    def set_parameters(self, w):
+        self.parameters = w
 
-    def get_collector_id(self):
-        return self.collector_id
-
-    def set_weights(self, w):
-        self.weights = w
-
-    def get_weights(self):
-        return self.weights
+    def get_parameters(self):
+        return self.parameters
 
 
 @ray.remote(num_cpus=1)
 class ReplayActor:
 
     def __init__(self, config):
-        self.buffer = circular_replay_buffer.OutOfGraphReplayBuffer(**config)
+        self.buffer = config.replay(**config.args_replay)
 
     def add_episode(self, episode_transitions):
         for observation, action, reward, terminal, *args, kwargs in episode_transitions:

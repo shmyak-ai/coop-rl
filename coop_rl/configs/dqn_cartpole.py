@@ -19,13 +19,13 @@ import numpy as np
 from ml_collections import config_dict
 
 from coop_rl import networks
+from coop_rl.replay_memory import circular_replay_buffer
 from coop_rl.utils import identity_epsilon
+from coop_rl.workers.collectors import DQNCollectorUniform
 
 
 def get_config():
     config = ml_collections.ConfigDict()
-    config.replay = ml_collections.ConfigDict()
-    config.collector = ml_collections.ConfigDict()
     config.agent = ml_collections.ConfigDict()
     config.agent.optimizer = ml_collections.ConfigDict()
 
@@ -34,32 +34,36 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     seed = config_dict.FieldReference(42)
     gamma = config_dict.FieldReference(0.99)
-    environment = config_dict.FieldReference("CartPole-v1")
+    batch_size = config_dict.FieldReference(128)
+    environment_name = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
 
     config.debug = True
     config.seed = seed
-    config.batch_size = 128
     config.num_collectors = 1
-    config.environment = environment
+    config.environment_name = environment_name
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
 
-    config.replay.replay_capacity = 100000
-    config.replay.gamma = gamma
-    config.replay.batch_size = 10
-    config.replay.update_horizon = 1
-    config.replay.observation_shape = observation_shape
-    config.replay.observation_dtype = observation_dtype
+    config.replay = circular_replay_buffer.OutOfGraphReplayBuffer
+    config.args_replay = ml_collections.ConfigDict()
+    config.args_replay.replay_capacity = 100000
+    config.args_replay.gamma = gamma
+    config.args_replay.batch_size = batch_size
+    config.args_replay.update_horizon = 1
+    config.args_replay.observation_shape = observation_shape
+    config.args_replay.observation_dtype = observation_dtype
 
-    config.collector.num_actions = num_actions
-    config.collector.observation_shape = observation_shape
-    config.collector.observation_dtype = observation_dtype
-    config.collector.environment = environment
-    config.collector.network = network
-    config.collector.seed = seed
-    config.collector.epsilon_fn = identity_epsilon
+    config.collector = DQNCollectorUniform
+    config.args_collector = ml_collections.ConfigDict()
+    config.args_collector.num_actions = num_actions
+    config.args_collector.observation_shape = observation_shape
+    config.args_collector.observation_dtype = observation_dtype
+    config.args_collector.environment_name = environment_name
+    config.args_collector.network = network
+    config.args_collector.seed = seed
+    config.args_collector.epsilon_fn = identity_epsilon
 
     config.agent.loss_type = "huber"
     config.agent.gamma = gamma

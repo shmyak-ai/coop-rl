@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 
 
-def check_environment(run_config):
-    train_env = gym.make(run_config.environment)
+def check_environment(environment_name: str):
+    train_env = gym.make(environment_name)
     return (
         train_env.observation_space.shape,
         train_env.observation_space.dtype,

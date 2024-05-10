@@ -20,9 +20,6 @@ import tensorflow as tf
 # from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.configs.dqn_cartpole import get_config
 from coop_rl.utils import check_environment
-from coop_rl.workers.collectors import DQNCollector
-
-# from coop_rl.workers.evaluators import Evaluator
 from coop_rl.workers.exchange_actors import (
     ControlActor,
     ReplayActor,
@@ -32,7 +29,8 @@ from coop_rl.workers.exchange_actors import (
 def complex_call():
 
     conf = get_config()
-    conf.observation_shape, conf.observation_dtype, conf.num_actions = check_environment(conf)
+    conf.observation_shape, conf.observation_dtype, conf.num_actions = \
+        check_environment(conf.environment_name)
 
     # trainer, buffer actor, evaluator + collectors
     parallel_calls = 3 + conf.num_collectors
@@ -45,7 +43,7 @@ def complex_call():
         ray.init(num_cpus=parallel_calls)
 
     # make python classes ray actors
-    collector_remotes = [ray.remote(DQNCollector) for _ in range(conf.num_collectors)]
+    collector_remotes = [ray.remote(conf.collector) for _ in range(conf.num_collectors)]
     # agent_object = JaxDQNAgent
     # if is_gpu:
     #     trainer_remote = ray.remote(num_gpus=1)(agent_object)
@@ -54,15 +52,14 @@ def complex_call():
     # evaluator_remote = ray.remote(Evaluator)
 
     # initialization
-    control_actor = ControlActor.remote(conf.num_collectors)
-    replay_actor = ReplayActor.remote(conf.replay)
+    control_actor = ControlActor.remote(conf.observation_shape)
+    replay_actor = ReplayActor.remote(conf)
     collector_agents = []
-    for i, collector_remote in enumerate(collector_remotes):
+    for collector_remote in collector_remotes:
         collector_agents.append(collector_remote.remote(
-            **conf.collector,
+            **conf.args_collector,
             control_actor=control_actor,
             replay_actor=replay_actor,
-            collector_id=i,
             ))
     # trainer_agent = trainer_remote.remote(
     #     **conf.agent,
