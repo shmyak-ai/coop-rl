@@ -80,33 +80,40 @@ class DQNCollectorUniform:
         state = self.preprocess_fn(self._observation)
         self.online_params = self.network_def.init(rng, x=state)
 
-    def _store_transition(self, last_observation, action, reward, is_terminal, *args, priority=None, episode_end=False):
+    def _store_transition(self, last_observation, action, reward, terminated, *args, priority=None, truncated=False):
         """Stores a transition when in training mode.
 
         Stores the following tuple in the replay buffer (last_observation, action,
-        reward, is_terminal, priority).
+        reward, is_terminal, priority). Follows the dopamine replay buffer naming.
 
         Args:
           last_observation: Last observation, type determined via observation_type
             parameter in the replay_memory constructor.
           action: An integer, the action taken.
           reward: A float, the reward.
-          is_terminal: Boolean indicating if the current state is a terminal state.
+          terminated: Boolean indicating if the current state is a terminal state.
+          Or terminal in dopamine. Similar to gymnasium terminated.
           *args: Any, other items to be added to the replay buffer.
           priority: Float. Priority of sampling the transition. If None, the default
             priority will be used. If replay scheme is uniform, the default priority
             is 1. If the replay scheme is prioritized, the default priority is the
             maximum ever seen [Schaul et al., 2015].
-          episode_end: bool, whether this transition is the last for the episode.
+          truncated: bool, whether this transition is the last for the episode.
             This can be different than terminal when ending the episode because of a
-            timeout, for example.
+            timeout. Episode_end in dopamine. Similar to gymnasium truncated.
         """
 
         self._replay.append(
-            (last_observation, action, reward, is_terminal, *args, {
-                "priority": priority,
-                "episode_end": episode_end,
-                }
+            (
+                last_observation,
+                action,
+                reward,
+                terminated,
+                *args,
+                {
+                    "priority": priority,
+                    "episode_end": truncated,
+                },
             )
         )
 
@@ -173,7 +180,7 @@ class DQNCollectorUniform:
         )
         return np.asarray(action)
 
-    def _end_episode(self, action, reward, episode_end=True):
+    def _end_episode(self, action, reward, terminated, truncated):
         """Signals the end of the episode to the agent.
 
         We store the observation of the current time step, which is the last
@@ -184,7 +191,7 @@ class DQNCollectorUniform:
           reward: float, the last reward from the environment.
           episode_end: bool, whether the last state-action led to a terminal state.
         """
-        self._store_transition(self._observation, action, reward, True, episode_end=episode_end)
+        self._store_transition(self._observation, action, reward, terminated, truncated=truncated)
 
     def run_one_episode(self):
         """Executes a full trajectory of the agent interacting with the environment.
@@ -195,6 +202,7 @@ class DQNCollectorUniform:
         step_number = 0
         total_reward = 0.0
 
+        self._replay = []
         action = self._initialize_episode()
 
         # Keep interacting until terminated / truncated state.
@@ -210,10 +218,9 @@ class DQNCollectorUniform:
                 action = self._step(action, reward, observation)
 
         # truncated=True corresponds to episode_end=False in store_transition
-        self._end_episode(action, reward, episode_end=not truncated)
+        self._end_episode(action, reward, terminated, truncated)
 
         # send transitions from episode to the replay actor
         ray.get(self.replay_actor.add_episode.remote(self._replay))
-        self._replay = []
 
         return step_number, total_reward

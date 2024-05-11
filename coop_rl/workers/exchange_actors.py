@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 import ray
 
 
 @ray.remote(num_cpus=0)
 class ControlActor:
 
-    def __init__(self, obs_shape):
+    def __init__(self):
         self.done = False
         self.parameters = None
 
@@ -43,5 +42,8 @@ class ReplayActor:
         self.buffer = config.replay(**config.args_replay)
 
     def add_episode(self, episode_transitions):
-        for observation, action, reward, terminal, *args, kwargs in episode_transitions:
-            self.buffer.add(observation, action, reward, terminal, *args, **kwargs)
+        for observation, action, reward, terminated, *args, kwargs in episode_transitions:
+            self.buffer.add(observation, action, reward, terminated, *args, **kwargs)
+    
+    def transitions_count(self):
+        return self.buffer.add_count()

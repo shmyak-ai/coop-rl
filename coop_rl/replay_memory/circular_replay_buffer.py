@@ -264,7 +264,7 @@ class OutOfGraphReplayBuffer:
           action: int, the action in the transition.
           reward: float, the reward received in the transition.
           terminal: np.dtype, acts as a boolean indicating whether the transition
-            was terminal (1) or not (0).
+            was terminal (1) or not (0). Similar to gymnasium terminated.
           *args: extra contents with shapes and dtypes according to
             extra_storage_types.
           priority: float, unused in the circular replay buffer, but may be used in
@@ -275,6 +275,7 @@ class OutOfGraphReplayBuffer:
             sufficient in this case, since 'terminal' is passed to the agent for
             training. 'episode_end' allows the replay buffer to determine episode
             boundaries without passing that information to the agent.
+            Similar to gymnasium truncated.
         """
         if priority is not None:
             args = args + (priority,)

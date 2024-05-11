@@ -52,7 +52,7 @@ def complex_call():
     # evaluator_remote = ray.remote(Evaluator)
 
     # initialization
-    control_actor = ControlActor.remote(conf.observation_shape)
+    control_actor = ControlActor.remote()
     replay_actor = ReplayActor.remote(conf)
     collector_agents = []
     for collector_remote in collector_remotes:
@@ -73,7 +73,9 @@ def complex_call():
     # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
     # get results
+    # print(f"Number of transitions in the buffer: {ray.get(replay_actor.transitions_count.remote())}")
     ray.get(collect_info_futures)
+    # print(f"Number of transitions in the buffer: {ray.get(replay_actor.transitions_count.remote())}")
     # outputs = ray.get(trainer_futures)
     # _ = ray.get(eval_info_futures)
 
