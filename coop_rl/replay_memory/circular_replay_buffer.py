@@ -248,7 +248,7 @@ class OutOfGraphReplayBuffer:
         self.episode_end_indices.discard(self.cursor())  # If present
         self._add(*zero_transition)
 
-    def add(self, observation, action, reward, terminal, *args, priority=None, episode_end=False):
+    def add(self, observation, action, reward, terminal, *args, priority=None, truncated=False):
         """Adds a transition to the replay memory.
 
         This function checks the types and handles the padding at the beginning of
@@ -269,7 +269,8 @@ class OutOfGraphReplayBuffer:
             extra_storage_types.
           priority: float, unused in the circular replay buffer, but may be used in
             child classes like PrioritizedReplayBuffer.
-          episode_end: bool, whether this experience is the last experience in the
+          truncated (renamed from episode_end to match gymnasium): 
+            bool, whether this experience is the last experience in the
             episode. This is useful for tasks that terminate due to time-out, but do
             not end on a terminal state. Overloading 'terminal' may not be
             sufficient in this case, since 'terminal' is passed to the agent for
@@ -288,7 +289,7 @@ class OutOfGraphReplayBuffer:
                 self._add_zero_transition()
             self._next_experience_is_episode_start = False
 
-        if episode_end or terminal:
+        if truncated or terminal:
             self.episode_end_indices.add(self.cursor())
             self._next_experience_is_episode_start = True
         else:

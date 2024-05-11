@@ -14,8 +14,11 @@
 
 """DQN with a Gym Cartpole environment Hyperparameter configuration."""
 
+import argparse
+import time
+
+# import jax
 import ray
-import tensorflow as tf
 
 # from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.configs.dqn_cartpole import get_config
@@ -26,21 +29,27 @@ from coop_rl.workers.exchange_actors import (
 )
 
 
-def complex_call():
+def main():
+
+    parser = argparse.ArgumentParser(description="Cooperative training.")
+    parser.add_argument("--num-collectors", type=int)
+    parser.add_argument('--local', action='store_true', help='This enables a ray local mode.')
+
+    args = parser.parse_args()
 
     conf = get_config()
     conf.observation_shape, conf.observation_dtype, conf.num_actions = \
         check_environment(conf.environment_name)
 
-    # trainer, buffer actor, evaluator + collectors
-    parallel_calls = 3 + conf.num_collectors
-    is_gpu = bool(tf.config.list_physical_devices('GPU'))
-    if conf.debug:
+    if args.local:
+        conf.local = True
+    if args.num_collectors is not None:
+        conf.num_collectors = args.num_collectors
+
+    if conf.local:
         ray.init(local_mode=True)
-    elif is_gpu:
-        ray.init(num_cpus=parallel_calls - 1, num_gpus=1)
     else:
-        ray.init(num_cpus=parallel_calls)
+        ray.init(num_cpus=conf.num_collectors + 1, num_gpus=1)
 
     # make python classes ray actors
     collector_remotes = [ray.remote(conf.collector) for _ in range(conf.num_collectors)]
@@ -68,14 +77,17 @@ def complex_call():
     # )
 
     # remote calls
-    collect_info_futures = [agent.run_one_episode.remote() for agent in collector_agents]
+    print(f"1. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
+    collect_info_futures = [agent.collecting.remote() for agent in collector_agents]
     # trainer_futures = trainer_agent.training.remote()
     # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
     # get results
-    # print(f"Number of transitions in the buffer: {ray.get(replay_actor.transitions_count.remote())}")
+    time.sleep(60)
+    print(f"2. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
+    ray.get(control_actor.set_done.remote())
     ray.get(collect_info_futures)
-    # print(f"Number of transitions in the buffer: {ray.get(replay_actor.transitions_count.remote())}")
+    print(f"3. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
     # outputs = ray.get(trainer_futures)
     # _ = ray.get(eval_info_futures)
 
@@ -84,4 +96,4 @@ def complex_call():
 
 
 if __name__ == '__main__':
-    complex_call()
+    main()

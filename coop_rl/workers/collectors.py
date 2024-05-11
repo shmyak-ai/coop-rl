@@ -112,7 +112,7 @@ class DQNCollectorUniform:
                 *args,
                 {
                     "priority": priority,
-                    "episode_end": truncated,
+                    "truncated": truncated,
                 },
             )
         )
@@ -224,3 +224,12 @@ class DQNCollectorUniform:
         ray.get(self.replay_actor.add_episode.remote(self._replay))
 
         return step_number, total_reward
+    
+    def collecting(self):
+        while True:
+            parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
+            if done:
+                break
+            if parameters is not None:
+                self.online_params = parameters
+            self.run_one_episode()

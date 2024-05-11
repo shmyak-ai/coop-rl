@@ -13,12 +13,17 @@
             "justMyCode": true
         },
         {
-            "name": "train gym dqn",
+            "name": "train local gym dqn",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/app/train_gym_dqn.py",
             "console": "integratedTerminal",
             "justMyCode": true,
+            "args": [
+                "--local",
+                "--num-collectors",
+                "1",
+            ],
         },
     ]
 }

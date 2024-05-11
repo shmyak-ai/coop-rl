@@ -38,9 +38,9 @@ def get_config():
     environment_name = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
 
-    config.debug = True
+    config.local = False
     config.seed = seed
-    config.num_collectors = 1
+    config.num_collectors = 3
     config.environment_name = environment_name
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype

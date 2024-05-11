@@ -22,8 +22,8 @@ class ControlActor:
         self.done = False
         self.parameters = None
 
-    def set_done(self, done: bool):
-        self.done = done
+    def set_done(self):
+        self.done = True
 
     def is_done(self) -> bool:
         return self.done
@@ -33,6 +33,9 @@ class ControlActor:
 
     def get_parameters(self):
         return self.parameters
+    
+    def get_parameters_done(self):
+        return self.parameters, self.done
 
 
 @ray.remote(num_cpus=1)
@@ -45,5 +48,5 @@ class ReplayActor:
         for observation, action, reward, terminated, *args, kwargs in episode_transitions:
             self.buffer.add(observation, action, reward, terminated, *args, **kwargs)
     
-    def transitions_count(self):
-        return self.buffer.add_count()
+    def add_count(self):
+        return self.buffer.add_count
