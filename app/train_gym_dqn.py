@@ -52,7 +52,6 @@ def main():
         ray.init(num_cpus=conf.num_collectors + 1, num_gpus=1)
 
     # make python classes ray actors
-    collector_remotes = [ray.remote(conf.collector) for _ in range(conf.num_collectors)]
     # agent_object = JaxDQNAgent
     # if is_gpu:
     #     trainer_remote = ray.remote(num_gpus=1)(agent_object)
@@ -63,13 +62,12 @@ def main():
     # initialization
     control_actor = ControlActor.remote()
     replay_actor = ReplayActor.remote(conf)
-    collector_agents = []
-    for collector_remote in collector_remotes:
-        collector_agents.append(collector_remote.remote(
-            **conf.args_collector,
-            control_actor=control_actor,
-            replay_actor=replay_actor,
-            ))
+    collector_agents = [conf.collector.remote(
+        collector_id=100*i,
+        **conf.args_collector,
+        control_actor=control_actor,
+        replay_actor=replay_actor,
+        ) for i in range(1, conf.num_collectors + 1)]
     # trainer_agent = trainer_remote.remote(
     #     **conf.agent,
     #     control_actor=control_actor,
@@ -83,13 +81,14 @@ def main():
     # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
     # get results
-    time.sleep(60)
+    time.sleep(2)
     print(f"2. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
     ray.get(control_actor.set_done.remote())
     ray.get(collect_info_futures)
     print(f"3. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
     # outputs = ray.get(trainer_futures)
     # _ = ray.get(eval_info_futures)
+    time.sleep(600)
 
     ray.shutdown()
     print("Done")

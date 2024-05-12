@@ -26,9 +26,11 @@ from coop_rl.utils import (
 )
 
 
+@ray.remote(num_cpus=1)
 class DQNCollectorUniform:
     def __init__(
         self,
+        collector_id,
         control_actor,
         replay_actor,
         num_actions,
@@ -47,7 +49,7 @@ class DQNCollectorUniform:
         self.replay_actor = replay_actor
 
         assert isinstance(observation_shape, tuple)
-        self.seed = int(time.time() * 1e6) if seed is None else seed
+        seed = int(time.time() * 1e6) if seed is None else seed
 
         self.num_actions = num_actions
         self.observation_shape = observation_shape
@@ -70,7 +72,7 @@ class DQNCollectorUniform:
 
         self._replay = []  # to store episode transitions
 
-        self._rng = jax.random.PRNGKey(self.seed)
+        self._rng = jax.random.key(seed + collector_id)
 
         self._observation = np.zeros(observation_shape)
         self._build_network()
@@ -127,7 +129,9 @@ class DQNCollectorUniform:
           int, the selected action.
         """
 
-        self._observation, info = self._environment.reset(seed=self.seed)
+        self._rng, rng = jax.random.split(self._rng)
+        seed = jax.random.bits(rng)
+        self._observation, info = self._environment.reset(seed=int(seed))
 
         self._rng, action = select_action(
             self.network_def,
