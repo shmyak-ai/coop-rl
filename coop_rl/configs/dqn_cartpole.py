@@ -16,9 +16,11 @@
 
 import ml_collections
 import numpy as np
+import optax
 from ml_collections import config_dict
 
 from coop_rl import networks
+from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.replay_memory import circular_replay_buffer
 from coop_rl.utils import identity_epsilon
 from coop_rl.workers.collectors import DQNCollectorUniform
@@ -26,25 +28,24 @@ from coop_rl.workers.collectors import DQNCollectorUniform
 
 def get_config():
     config = ml_collections.ConfigDict()
-    config.agent = ml_collections.ConfigDict()
-    config.agent.optimizer = ml_collections.ConfigDict()
 
     observation_shape = config_dict.FieldReference(None, field_type=tuple)
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
+    workdir = config_dict.FieldReference(None, field_type=str)
     seed = config_dict.FieldReference(42)
     gamma = config_dict.FieldReference(0.99)
     batch_size = config_dict.FieldReference(128)
     environment_name = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
 
-    config.local = False
     config.seed = seed
     config.num_collectors = 3
     config.environment_name = environment_name
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
+    config.workdir = workdir
 
     config.replay = circular_replay_buffer.OutOfGraphReplayBuffer
     config.args_replay = ml_collections.ConfigDict()
@@ -59,24 +60,29 @@ def get_config():
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
-    config.args_collector.observation_dtype = observation_dtype
     config.args_collector.environment_name = environment_name
     config.args_collector.network = network
     config.args_collector.seed = seed
     config.args_collector.epsilon_fn = identity_epsilon
 
-    config.agent.loss_type = "huber"
-    config.agent.gamma = gamma
-    config.agent.update_period = 4
-    config.agent.target_update_period = 100
-    config.agent.num_actions = num_actions
-    config.agent.observation_shape = observation_shape
-    config.agent.observation_dtype = observation_dtype
-    config.agent.network = network
-    config.agent.seed = seed
-
-    config.agent.optimizer.name = "adam"
-    config.agent.optimizer.learning_rate = 0.001
-    config.agent.optimizer.eps = 3.125e-4
+    config.agent = JaxDQNAgent
+    config.args_agent = ml_collections.ConfigDict()
+    config.args_agent.workdir = workdir
+    config.args_agent.loss_type = "huber"
+    config.args_agent.gamma = gamma
+    config.args_agent.update_period = 4
+    config.args_agent.target_update_period = 100
+    config.args_agent.num_actions = num_actions
+    config.args_agent.observation_shape = observation_shape
+    config.args_agent.observation_dtype = observation_dtype
+    config.args_agent.network = network
+    config.args_agent.seed = seed
+    # optimizer agent uses
+    config.args_agent.optimizer = optax.adam
+    config.args_agent.args_optimizer = ml_collections.ConfigDict()
+    config.args_agent.args_optimizer.learning_rate = 0.001
+    config.args_agent.args_optimizer.beta1 = 0.9
+    config.args_agent.args_optimizer.beta2 = 0.999
+    config.args_agent.args_optimizer.eps = 3.125e-4
 
     return config

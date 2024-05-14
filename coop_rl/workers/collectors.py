@@ -35,7 +35,6 @@ class DQNCollectorUniform:
         replay_actor,
         num_actions,
         observation_shape,
-        observation_dtype,
         environment_name,
         network,
         min_replay_history=20000,
@@ -52,16 +51,14 @@ class DQNCollectorUniform:
         seed = int(time.time() * 1e6) if seed is None else seed
 
         self.num_actions = num_actions
-        self.observation_shape = observation_shape
-        self.observation_dtype = observation_dtype
 
         self._environment = gym.make(environment_name)
 
         if preprocess_fn is None:
-            self.network_def = network(num_actions=num_actions)
+            self.network = network(num_actions=num_actions)
             self.preprocess_fn = networks.identity_preprocess_fn
         else:
-            self.network_def = network(num_actions=num_actions, inputs_preprocessed=True)
+            self.network = network(num_actions=num_actions, inputs_preprocessed=True)
             self.preprocess_fn = preprocess_fn
 
         self.epsilon_fn = epsilon_fn
@@ -80,7 +77,7 @@ class DQNCollectorUniform:
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
         state = self.preprocess_fn(self._observation)
-        self.online_params = self.network_def.init(rng, x=state)
+        self.online_params = self.network.init(rng, x=state)
 
     def _store_transition(self, last_observation, action, reward, terminated, *args, priority=None, truncated=False):
         """Stores a transition when in training mode.
@@ -134,7 +131,7 @@ class DQNCollectorUniform:
         self._observation, info = self._environment.reset(seed=int(seed))
 
         self._rng, action = select_action(
-            self.network_def,
+            self.network,
             self.online_params,
             self.preprocess_fn(self._observation),
             self._rng,
@@ -169,7 +166,7 @@ class DQNCollectorUniform:
         self._store_transition(last_observation, action, reward, False)
 
         self._rng, action = select_action(
-            self.network_def,
+            self.network,
             self.online_params,
             self.preprocess_fn(self._observation),
             self._rng,
@@ -221,14 +218,13 @@ class DQNCollectorUniform:
             else:
                 action = self._step(action, reward, observation)
 
-        # truncated=True corresponds to episode_end=False in store_transition
         self._end_episode(action, reward, terminated, truncated)
 
         # send transitions from episode to the replay actor
         ray.get(self.replay_actor.add_episode.remote(self._replay))
 
         return step_number, total_reward
-    
+
     def collecting(self):
         while True:
             parameters, done = ray.get(self.control_actor.get_parameters_done.remote())

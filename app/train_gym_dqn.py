@@ -15,12 +15,13 @@
 """DQN with a Gym Cartpole environment Hyperparameter configuration."""
 
 import argparse
+import os
+import tempfile
 import time
+from pathlib import Path
 
-# import jax
 import ray
 
-# from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.configs.dqn_cartpole import get_config
 from coop_rl.utils import check_environment
 from coop_rl.workers.exchange_actors import (
@@ -34,30 +35,33 @@ def main():
     parser = argparse.ArgumentParser(description="Cooperative training.")
     parser.add_argument("--num-collectors", type=int)
     parser.add_argument('--local', action='store_true', help='This enables a ray local mode.')
+    parser.add_argument(
+        "--workdir",
+        type=str,
+        default=os.path.join(Path.home(), "coop-rl_results/"),
+        help="Path to the tensorboard logs, checkpoints, etc."
+    )
 
     args = parser.parse_args()
+    
+    if not os.path.exists(args.workdir):
+        os.mkdir(args.workdir)
+    workdir = tempfile.mkdtemp(prefix=args.workdir)
+    print(f"Workdir is {workdir}.")
 
     conf = get_config()
     conf.observation_shape, conf.observation_dtype, conf.num_actions = \
         check_environment(conf.environment_name)
+    conf.workdir = workdir
 
-    if args.local:
-        conf.local = True
     if args.num_collectors is not None:
         conf.num_collectors = args.num_collectors
 
-    if conf.local:
+    if args.local:
         ray.init(local_mode=True)
     else:
-        ray.init(num_cpus=conf.num_collectors + 1, num_gpus=1)
-
-    # make python classes ray actors
-    # agent_object = JaxDQNAgent
-    # if is_gpu:
-    #     trainer_remote = ray.remote(num_gpus=1)(agent_object)
-    # else:
-    #     trainer_remote = ray.remote(agent_object)
-    # evaluator_remote = ray.remote(Evaluator)
+        # collectors, agent, replay actor use cpus
+        ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
 
     # initialization
     control_actor = ControlActor.remote()
@@ -68,20 +72,19 @@ def main():
         control_actor=control_actor,
         replay_actor=replay_actor,
         ) for i in range(1, conf.num_collectors + 1)]
-    # trainer_agent = trainer_remote.remote(
-    #     **conf.agent,
-    #     control_actor=control_actor,
-    #     replay_actor=replay_actor,
-    # )
+    trainer_agent = conf.agent.remote(
+        **conf.args_agent,
+        control_actor=control_actor,
+        replay_actor=replay_actor,
+    )
 
     # remote calls
-    print(f"1. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
     collect_info_futures = [agent.collecting.remote() for agent in collector_agents]
-    # trainer_futures = trainer_agent.training.remote()
+    trainer_futures = trainer_agent.training.remote()
     # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
     # get results
-    time.sleep(2)
+    time.sleep(600)
     print(f"2. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
     ray.get(control_actor.set_done.remote())
     ray.get(collect_info_futures)

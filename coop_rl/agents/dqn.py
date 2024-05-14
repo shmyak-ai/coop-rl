@@ -11,75 +11,32 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Compact implementation of a DQN agent in JAx."""
+
+"""Compact implementation of a DQN agent in JAx.
+
+The differencies from vanilla dopamine buffer:
+- delete absl logging since moving to ray distributed version
+
+"""
 
 import collections
 import functools
-import inspect
 import math
+import os
 import time
 
 import jax
 import jax.numpy as jnp
 import numpy as onp
 import optax
+import ray
 import tensorflow as tf
-from absl import logging
 
 from coop_rl import losses, networks
 from coop_rl.metrics import statistics_instance
-from coop_rl.replay_memory import prioritized_replay_buffer
 from coop_rl.utils import (
-    select_action,
     linearly_decaying_epsilon,
 )
-
-
-def create_optimizer(
-    name="adam",
-    learning_rate=6.25e-5,
-    beta1=0.9,
-    beta2=0.999,
-    eps=1.5e-4,
-    centered=False,
-):
-    """Create an optimizer for training.
-
-    Currently, only the Adam and RMSProp optimizers are supported.
-
-    Args:
-      name: str, name of the optimizer to create.
-      learning_rate: float, learning rate to use in the optimizer.
-      beta1: float, beta1 parameter for the optimizer.
-      beta2: float, beta2 parameter for the optimizer.
-      eps: float, epsilon parameter for the optimizer.
-      centered: bool, centered parameter for RMSProp.
-
-    Returns:
-      An optax optimizer.
-    """
-    if name == "adam":
-        logging.info(
-            "Creating Adam optimizer with settings lr=%f, beta1=%f, " "beta2=%f, eps=%f",
-            learning_rate,
-            beta1,
-            beta2,
-            eps,
-        )
-        return optax.adam(learning_rate, b1=beta1, b2=beta2, eps=eps)
-    elif name == "rmsprop":
-        logging.info(
-            "Creating RMSProp optimizer with settings lr=%f, beta2=%f, eps=%f",
-            learning_rate,
-            beta2,
-            eps,
-        )
-        return optax.rmsprop(learning_rate, decay=beta2, eps=eps, centered=centered)
-    elif name == "sgd":
-        logging.info("Creating SGD optimizer with settings lr=%f", learning_rate)
-        return optax.sgd(learning_rate)
-    else:
-        raise ValueError(f"Unsupported optimizer {name}")
 
 
 @functools.partial(jax.jit, static_argnums=(0, 3, 10, 11))
@@ -133,9 +90,12 @@ def target_q(target_network, next_states, rewards, terminals, cumulative_gamma):
     #          (or) 0 if S_t is a terminal state,
     # and
     #   N is the update horizon (by default, N=1).
-    return jax.lax.stop_gradient(rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals))
+    return jax.lax.stop_gradient(
+        rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals)
+        )
 
 
+@ray.remote(num_gpus=1, num_cpus=1)
 class JaxDQNAgent:
     """A JAX implementation of the DQN agent."""
 
@@ -144,6 +104,7 @@ class JaxDQNAgent:
         control_actor,
         replay_actor,
         optimizer,
+        args_optimizer,
         num_actions,
         observation_shape,
         observation_dtype,
@@ -159,7 +120,7 @@ class JaxDQNAgent:
         epsilon_eval=0.001,
         epsilon_decay_period=250000,
         eval_mode=False,
-        summary_writer=None,
+        workdir=None,
         summary_writing_frequency=500,
         allow_partial_reload=False,
         seed=None,
@@ -212,36 +173,24 @@ class JaxDQNAgent:
           collector_allowlist: list of str, if using CollectorDispatcher, this can
             be used to specify which Collectors to log to.
         """
+        self.control_actor = control_actor
+        self.replay_actor = replay_actor
+
         assert isinstance(observation_shape, tuple)
         seed = int(time.time() * 1e6) if seed is None else seed
-        logging.info(
-            "Creating %s agent with the following parameters:",
-            self.__class__.__name__,
-        )
-        logging.info("\t gamma: %f", gamma)
-        logging.info("\t update_horizon: %f", update_horizon)
-        logging.info("\t min_replay_history: %d", min_replay_history)
-        logging.info("\t update_period: %d", update_period)
-        logging.info("\t target_update_period: %d", target_update_period)
-        logging.info("\t epsilon_train: %f", epsilon_train)
-        logging.info("\t epsilon_eval: %f", epsilon_eval)
-        logging.info("\t epsilon_decay_period: %d", epsilon_decay_period)
-        logging.info("\t seed: %d", seed)
-        logging.info("\t loss_type: %s", loss_type)
-        logging.info("\t preprocess_fn: %s", preprocess_fn)
-        logging.info("\t summary_writing_frequency: %d", summary_writing_frequency)
-        logging.info("\t allow_partial_reload: %s", allow_partial_reload)
 
         self.num_actions = num_actions
         self.observation_shape = tuple(observation_shape)
         self.observation_dtype = observation_dtype
         self.stack_size = stack_size
+
         if preprocess_fn is None:
             self.network_def = network(num_actions=num_actions)
             self.preprocess_fn = networks.identity_preprocess_fn
         else:
             self.network_def = network(num_actions=num_actions, inputs_preprocessed=True)
             self.preprocess_fn = preprocess_fn
+
         self.gamma = gamma
         self.update_horizon = update_horizon
         self.cumulative_gamma = math.pow(gamma, update_horizon)
@@ -254,36 +203,30 @@ class JaxDQNAgent:
         self.update_period = update_period
         self.eval_mode = eval_mode
         self.training_steps = 0
-        if isinstance(summary_writer, str):
-            try:
-                tf.compat.v1.enable_v2_behavior()
-            except ValueError:
-                pass
-            self.summary_writer = tf.summary.create_file_writer(summary_writer)
-        else:
-            self.summary_writer = summary_writer
+
+        summary_writer_dir = os.path.join(workdir, "tensorboard/")
+        self.summary_writer = tf.summary.create_file_writer(summary_writer_dir)
         self.summary_writing_frequency = summary_writing_frequency
+
         self.allow_partial_reload = allow_partial_reload
         self._loss_type = loss_type
         self._collector_allowlist = collector_allowlist
 
-        self._rng = jax.random.PRNGKey(seed)
+        self._rng = jax.random.key(seed)
         state_shape = self.observation_shape + (stack_size,)
         self.state = onp.zeros(state_shape)
-        self._replay = replay_actor
-        self._config_optimizer = optimizer
-        self._build_networks_and_optimizer()
+        self._build_networks_and_optimizer(optimizer, args_optimizer)
 
         # Variables to be initialized by the agent once it interacts with the
         # environment.
         self._observation = None
         self._last_observation = None
 
-    def _build_networks_and_optimizer(self):
+    def _build_networks_and_optimizer(self, optimizer, args_optimizer):
         self._rng, rng = jax.random.split(self._rng)
         state = self.preprocess_fn(self.state)
         self.online_params = self.network_def.init(rng, x=state)
-        self.optimizer = create_optimizer(**self._config_optimizer)
+        self.optimizer = optimizer(**self._args_optimizer)
         self.optimizer_state = self.optimizer.init(self.online_params)
         self.target_network_params = self.online_params
 
@@ -291,119 +234,12 @@ class JaxDQNAgent:
         samples = self._replay.sample_transition_batch()
         types = self._replay.get_transition_elements()
         self.replay_elements = collections.OrderedDict()
-        for element, element_type in zip(samples, types):
+        for element, element_type in zip(samples, types, strict=False):
             self.replay_elements[element_type.name] = element
 
     def _sync_weights(self):
         """Syncs the target_network_params with online_params."""
         self.target_network_params = self.online_params
-
-    def _reset_state(self):
-        """Resets the agent state by filling it with zeros."""
-        self.state.fill(0)
-
-    def _record_observation(self, observation):
-        """Records an observation and update state.
-
-        Extracts a frame from the observation vector and overwrites the oldest
-        frame in the state buffer.
-
-        Args:
-          observation: numpy array, an observation from the environment.
-        """
-        # Set current observation. We do the reshaping to handle environments
-        # without frame stacking.
-        self._observation = onp.reshape(observation, self.observation_shape)
-        # Swap out the oldest frame with the current frame.
-        self.state = onp.roll(self.state, -1, axis=-1)
-        self.state[..., -1] = self._observation
-
-    def begin_episode(self, observation):
-        """Returns the agent's first action for this episode.
-
-        Args:
-          observation: numpy array, the environment's initial observation.
-
-        Returns:
-          int, the selected action.
-        """
-        self._reset_state()
-        self._record_observation(observation)
-
-        if not self.eval_mode:
-            self._train_step()
-
-        self._rng, self.action = select_action(
-            self.network_def,
-            self.online_params,
-            self.preprocess_fn(self.state),
-            self._rng,
-            self.num_actions,
-            self.eval_mode,
-            self.epsilon_eval,
-            self.epsilon_train,
-            self.epsilon_decay_period,
-            self.training_steps,
-            self.min_replay_history,
-            self.epsilon_fn,
-        )
-        self.action = onp.asarray(self.action)
-        return self.action
-
-    def step(self, reward, observation):
-        """Records the most recent transition and returns the agent's next action.
-
-        We store the observation of the last time step since we want to store it
-        with the reward.
-
-        Args:
-          reward: float, the reward received from the agent's most recent action.
-          observation: numpy array, the most recent observation.
-
-        Returns:
-          int, the selected action.
-        """
-        self._last_observation = self._observation
-        self._record_observation(observation)
-
-        if not self.eval_mode:
-            self._store_transition(self._last_observation, self.action, reward, False)
-            self._train_step()
-
-        self._rng, self.action = select_action(
-            self.network_def,
-            self.online_params,
-            self.preprocess_fn(self.state),
-            self._rng,
-            self.num_actions,
-            self.eval_mode,
-            self.epsilon_eval,
-            self.epsilon_train,
-            self.epsilon_decay_period,
-            self.training_steps,
-            self.min_replay_history,
-            self.epsilon_fn,
-        )
-        self.action = onp.asarray(self.action)
-        return self.action
-
-    def end_episode(self, reward, terminal=True):
-        """Signals the end of the episode to the agent.
-
-        We store the observation of the current time step, which is the last
-        observation of the episode.
-
-        Args:
-          reward: float, the last reward from the environment.
-          terminal: bool, whether the last state-action led to a terminal state.
-        """
-        if not self.eval_mode:
-            argspec = inspect.getfullargspec(self._store_transition)
-            if "episode_end" in argspec.args or "episode_end" in argspec.kwonlyargs:
-                self._store_transition(self._observation, self.action, reward, terminal, episode_end=True)
-            else:
-                logging.warning("_store_transition function doesn't have episode_end arg.")
-                self._store_transition(self._observation, self.action, reward, terminal)
 
     def _train_step(self):
         """Runs a single training step.
@@ -457,81 +293,3 @@ class JaxDQNAgent:
                 self._sync_weights()
 
         self.training_steps += 1
-
-    def bundle_and_checkpoint(self, checkpoint_dir, iteration_number):
-        """Returns a self-contained bundle of the agent's state.
-
-        This is used for checkpointing. It will return a dictionary containing all
-        non-TensorFlow objects (to be saved into a file by the caller), and it saves
-        all TensorFlow objects into a checkpoint file.
-
-        Args:
-          checkpoint_dir: str, directory where TensorFlow objects will be saved.
-          iteration_number: int, iteration number to use for naming the checkpoint
-            file.
-
-        Returns:
-          A dict containing additional Python objects to be checkpointed by the
-            experiment. If the checkpoint directory does not exist, returns None.
-        """
-        if not tf.io.gfile.exists(checkpoint_dir):
-            return None
-        # Checkpoint the out-of-graph replay buffer.
-        self._replay.save(checkpoint_dir, iteration_number)
-        bundle_dictionary = {
-            "state": self.state,
-            "training_steps": self.training_steps,
-            "online_params": self.online_params,
-            "optimizer_state": self.optimizer_state,
-            "target_params": self.target_network_params,
-        }
-        return bundle_dictionary
-
-    def unbundle(self, checkpoint_dir, iteration_number, bundle_dictionary):
-        """Restores the agent from a checkpoint.
-
-        Restores the agent's Python objects to those specified in bundle_dictionary,
-        and restores the TensorFlow objects to those specified in the
-        checkpoint_dir. If the checkpoint_dir does not exist, will not reset the
-          agent's state.
-
-        Args:
-          checkpoint_dir: str, path to the checkpoint saved.
-          iteration_number: int, checkpoint version, used when restoring the replay
-            buffer.
-          bundle_dictionary: dict, containing additional Python objects owned by the
-            agent.
-
-        Returns:
-          bool, True if unbundling was successful.
-        """
-        try:
-            # self._replay.load() will throw a NotFoundError if it does not find all
-            # the necessary files.
-            self._replay.load(checkpoint_dir, iteration_number)
-        except tf.errors.NotFoundError:
-            if not self.allow_partial_reload:
-                # If we don't allow partial reloads, we will return False.
-                return False
-            logging.warning("Unable to reload replay buffer!")
-        if bundle_dictionary is not None:
-            self.state = bundle_dictionary["state"]
-            self.training_steps = bundle_dictionary["training_steps"]
-            self.online_params = bundle_dictionary["online_params"]
-            self.target_network_params = bundle_dictionary["target_params"]
-            # We load the optimizer state or recreate it with the new online weights.
-            if "optimizer_state" in bundle_dictionary:
-                self.optimizer_state = bundle_dictionary["optimizer_state"]
-            else:
-                self.optimizer_state = self.optimizer.init(self.online_params)
-        elif not self.allow_partial_reload:
-            return False
-        else:
-            logging.warning("Unable to reload the agent's parameters!")
-        return True
-
-    def set_collector_dispatcher(self, collector_dispatcher):
-        self.collector_dispatcher = collector_dispatcher
-        # Ensure we have a collector allowlist defined.
-        if not hasattr(self, "_collector_allowlist"):
-            self._collector_allowlist = ("tensorboard",)

@@ -45,8 +45,15 @@ class ReplayActor:
         self.buffer = config.replay(**config.args_replay)
 
     def add_episode(self, episode_transitions):
+        """
+        Collectors use this method to add full episodes.
+        """
         for observation, action, reward, terminated, *args, kwargs in episode_transitions:
             self.buffer.add(observation, action, reward, terminated, *args, **kwargs)
     
     def add_count(self):
+        """
+        Returns:
+            The number of transition additions to a replay buffer.
+        """
         return self.buffer.add_count

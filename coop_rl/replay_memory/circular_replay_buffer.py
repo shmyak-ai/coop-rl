@@ -19,6 +19,11 @@ supports vanilla n-step updates of the form typically found in the literature,
 i.e. where rewards are accumulated for n steps and the intermediate trajectory
 is not exposed to the agent. This does not allow, for example, performing
 off-policy corrections.
+
+The differencies from vanilla dopamine buffer:
+- rename end_episode in add method to truncated to match gymnasium name
+- delete absl logging since moving to ray distributed version
+
 """
 
 import collections
@@ -29,7 +34,6 @@ import pickle
 
 import numpy as np
 import tensorflow as tf
-from absl import logging
 
 # Defines a type describing part of the tuple returned by the replay
 # memory. Each element of the tuple is a tensor of shape [batch, ...] where
@@ -147,21 +151,6 @@ class OutOfGraphReplayBuffer:
         if replay_capacity < update_horizon + stack_size:
             raise ValueError("There is not enough capacity to cover update_horizon and stack_size.")
 
-        logging.info(
-            "Creating a %s replay memory with the following parameters:",
-            self.__class__.__name__,
-        )
-        logging.info("\t observation_shape: %s", str(observation_shape))
-        logging.info("\t observation_dtype: %s", str(observation_dtype))
-        logging.info("\t terminal_dtype: %s", str(terminal_dtype))
-        logging.info("\t stack_size: %d", stack_size)
-        logging.info("\t replay_capacity: %d", replay_capacity)
-        logging.info("\t batch_size: %d", batch_size)
-        logging.info("\t update_horizon: %d", update_horizon)
-        logging.info("\t gamma: %f", gamma)
-        logging.info("\t checkpoint_duration: %d", checkpoint_duration)
-        logging.info("\t keep_every: %s", str(keep_every))
-
         self._action_shape = action_shape
         self._action_dtype = action_dtype
         self._reward_shape = reward_shape
@@ -193,15 +182,6 @@ class OutOfGraphReplayBuffer:
         self.episode_end_indices = set()
         self._checkpoint_duration = checkpoint_duration
         self._keep_every = keep_every
-
-    @property
-    def _episode_end_indices(self):
-        logging.warning(
-            "The name `_episode_end_indices` will be deprecated "
-            "in a future version of Dopamine. Please use "
-            "`episode_end_indices` instead."
-        )
-        return self.episode_end_indices
 
     def _create_storage(self):
         """Creates the numpy arrays used to store transitions."""
@@ -716,7 +696,6 @@ class OutOfGraphReplayBuffer:
 
             if not tf.io.gfile.exists(filename):
                 if attr == "episode_end_indices":
-                    logging.warning("Unable to find episode_end_indices. This is " "expected for old checkpoints.")
                     skip_episode_end_indices = True
                     continue
 
@@ -865,8 +844,6 @@ class WrappedReplayBuffer:
           use_staging: bool, when True it would use a staging area to prefetch the
             next sampling batch.
         """
-        if use_staging:
-            logging.warning("use_staging=True is no longer supported")
         with tf.name_scope("sample_replay"):
             with tf.device("/cpu:*"):
                 transition_type = self.memory.get_transition_elements()
