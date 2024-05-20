@@ -91,9 +91,7 @@ def target_q(target_network, next_states, rewards, terminals, cumulative_gamma):
     #          (or) 0 if S_t is a terminal state,
     # and
     #   N is the update horizon (by default, N=1).
-    return jax.lax.stop_gradient(
-        rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals)
-        )
+    return jax.lax.stop_gradient(rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals))
 
 
 @ray.remote(num_gpus=1, num_cpus=1)
@@ -107,14 +105,18 @@ class JaxDQNAgent:
         workdir,
         optimizer,
         args_optimizer,
+        min_replay_history,
+        training_steps,
         num_actions,
         observation_shape,
         network,
         gamma,
+        batch_size,
         update_horizon,
         loss_type,
-        target_update_period=100,
-        summary_writing_frequency=500,
+        target_update_period,
+        synchronization_period,
+        summary_writing_period,
         seed=None,
         preprocess_fn=None,
     ):
@@ -146,6 +148,9 @@ class JaxDQNAgent:
         self.control_actor = control_actor
         self.replay_actor = replay_actor
 
+        self.min_replay_history = min_replay_history
+        self.training_steps = training_steps
+
         assert isinstance(observation_shape, tuple)
         seed = int(time.time() * 1e6) if seed is None else seed
 
@@ -157,13 +162,15 @@ class JaxDQNAgent:
             self.preprocess_fn = preprocess_fn
 
         self.cumulative_gamma = math.pow(gamma, update_horizon)
-        self.target_update_period = target_update_period
+        self.batch_size = batch_size
 
         summary_writer_dir = os.path.join(workdir, "tensorboard/")
         self.summary_writer = tf.summary.create_file_writer(summary_writer_dir)
-        self.summary_writing_frequency = summary_writing_frequency
+        self.summary_writing_period = summary_writing_period
 
         self._loss_type = loss_type
+        self.target_update_period = target_update_period
+        self.synchronization_period = synchronization_period
 
         self._rng = jax.random.key(seed)
         self._build_networks_and_optimizer(observation_shape, optimizer, args_optimizer)
@@ -204,14 +211,35 @@ class JaxDQNAgent:
             self.cumulative_gamma,
             self._loss_type,
         )
-        if (step % self.summary_writing_frequency == 0):
+        if step % self.summary_writing_period == 0:
             with self.summary_writer.as_default():
                 tf.summary.scalar("HuberLoss", loss, step=step)
             self.summary_writer.flush()
 
         if step % self.target_update_period == 0:
             self.target_network_params = self.online_params
-    
+
+        if step % self.synchronization_period == 0:
+            ray.get(self.control_actor.set_parameters.remote(self.online_params))
+
     def training(self):
+        #  1. check if there are enough transitions in the replay buffer
+        while True:
+            add_count = ray.get(self.replay_actor.add_count.remote())
+            if add_count >= self.min_replay_history:
+                break
+            else:
+                time.wait(1)
+        #  2. training
+        transitions_processed = 0
         for training_step in itertools.count(start=0, step=1):
             self._train_step(training_step)
+            transitions_processed += self.batch_size
+            if training_step == self.training_steps:
+                ray.get(self.control_actor.set_done.remote())
+                print(f"Final training step {training_step} reached; finishing.")
+                break
+
+            if training_step % self.summary_writing_period == 0:
+                print(f"Transitions processed by the trainer = {transitions_processed}.")
+                print(f"Transitions added to the buffer = {ray.get(self.replay_actor.add_count.remote())}.")

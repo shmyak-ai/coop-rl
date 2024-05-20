@@ -17,6 +17,7 @@
 import argparse
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import ray
@@ -88,9 +89,10 @@ def main():
     # ray.get(eval_futures)
     # ray.get(control_actor.set_done.remote())
     # print(f"3. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
+    time.sleep(1)
 
     ray.shutdown()
-    print("Done")
+    print("Done; ray shutdown.")
 
 
 if __name__ == '__main__':

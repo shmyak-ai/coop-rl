@@ -34,8 +34,8 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
     seed = config_dict.FieldReference(42)
-    gamma = config_dict.FieldReference(0.97)
-    batch_size = config_dict.FieldReference(10)  # > 1: target_q in dqn limitation
+    gamma = config_dict.FieldReference(0.99)
+    batch_size = config_dict.FieldReference(100)  # > 1: target_q in dqn limitation
     update_horizon = config_dict.FieldReference(3)
     environment_name = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
@@ -50,7 +50,7 @@ def get_config():
 
     config.replay = circular_replay_buffer.OutOfGraphReplayBuffer
     config.args_replay = ml_collections.ConfigDict()
-    config.args_replay.replay_capacity = 100000
+    config.args_replay.replay_capacity = 1000000  # in transitions
     config.args_replay.gamma = gamma
     config.args_replay.batch_size = batch_size
     config.args_replay.update_horizon = update_horizon
@@ -68,12 +68,17 @@ def get_config():
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
+    config.args_agent.min_replay_history = 10000  # in transitions
+    config.args_agent.training_steps = 10000
     config.args_agent.num_actions = num_actions
     config.args_agent.workdir = workdir
     config.args_agent.loss_type = "huber"
     config.args_agent.gamma = gamma
+    config.args_agent.batch_size = batch_size
     config.args_agent.update_horizon = update_horizon
-    config.args_agent.target_update_period = 100
+    config.args_agent.target_update_period = 100  # periods are in training_steps
+    config.args_agent.synchronization_period = 100  # send parameters to contol actor
+    config.args_agent.summary_writing_period = 100  # tensorflow logging and reporting
     config.args_agent.observation_shape = observation_shape
     config.args_agent.network = network
     config.args_agent.seed = seed
