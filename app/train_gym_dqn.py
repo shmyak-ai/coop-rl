@@ -17,7 +17,6 @@
 import argparse
 import os
 import tempfile
-import time
 from pathlib import Path
 
 import ray
@@ -84,14 +83,11 @@ def main():
     # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
     # get results
-    time.sleep(600)
-    print(f"2. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
-    ray.get(control_actor.set_done.remote())
     ray.get(collect_info_futures)
-    print(f"3. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
-    # outputs = ray.get(trainer_futures)
-    # _ = ray.get(eval_info_futures)
-    time.sleep(600)
+    ray.get(trainer_futures)
+    # ray.get(eval_futures)
+    # ray.get(control_actor.set_done.remote())
+    # print(f"3. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
 
     ray.shutdown()
     print("Done")

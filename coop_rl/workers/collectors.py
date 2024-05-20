@@ -226,7 +226,8 @@ class DQNCollectorUniform:
         return step_number, total_reward
 
     def collecting(self):
-        while True:
+        # while True:
+        for _ in range(100):
             parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
             if done:
                 break

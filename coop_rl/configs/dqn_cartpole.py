@@ -34,8 +34,9 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
     seed = config_dict.FieldReference(42)
-    gamma = config_dict.FieldReference(0.99)
-    batch_size = config_dict.FieldReference(128)
+    gamma = config_dict.FieldReference(0.97)
+    batch_size = config_dict.FieldReference(10)  # > 1: target_q in dqn limitation
+    update_horizon = config_dict.FieldReference(3)
     environment_name = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)
 
@@ -52,7 +53,7 @@ def get_config():
     config.args_replay.replay_capacity = 100000
     config.args_replay.gamma = gamma
     config.args_replay.batch_size = batch_size
-    config.args_replay.update_horizon = 1
+    config.args_replay.update_horizon = update_horizon
     config.args_replay.observation_shape = observation_shape
     config.args_replay.observation_dtype = observation_dtype
 
@@ -67,22 +68,19 @@ def get_config():
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
+    config.args_agent.num_actions = num_actions
     config.args_agent.workdir = workdir
     config.args_agent.loss_type = "huber"
     config.args_agent.gamma = gamma
-    config.args_agent.update_period = 4
+    config.args_agent.update_horizon = update_horizon
     config.args_agent.target_update_period = 100
-    config.args_agent.num_actions = num_actions
     config.args_agent.observation_shape = observation_shape
-    config.args_agent.observation_dtype = observation_dtype
     config.args_agent.network = network
     config.args_agent.seed = seed
-    # optimizer agent uses
+
     config.args_agent.optimizer = optax.adam
     config.args_agent.args_optimizer = ml_collections.ConfigDict()
     config.args_agent.args_optimizer.learning_rate = 0.001
-    config.args_agent.args_optimizer.beta1 = 0.9
-    config.args_agent.args_optimizer.beta2 = 0.999
     config.args_agent.args_optimizer.eps = 3.125e-4
 
     return config
