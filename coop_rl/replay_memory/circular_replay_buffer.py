@@ -20,7 +20,7 @@ i.e. where rewards are accumulated for n steps and the intermediate trajectory
 is not exposed to the agent. This does not allow, for example, performing
 off-policy corrections.
 
-The differencies from vanilla dopamine buffer:
+The differencies from the vanilla dopamine buffer:
 - rename end_episode in add method to truncated to match gymnasium name
 - delete absl logging since moving to ray distributed version
 

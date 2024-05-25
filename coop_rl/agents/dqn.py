@@ -14,9 +14,6 @@
 
 """Compact implementation of a DQN agent in JAx.
 
-The differencies from vanilla dopamine buffer:
-- delete absl logging since moving to ray distributed version
-
 Modifications to the vanilla:
 - keep only training related functionality
 - make the agent a ray actor
