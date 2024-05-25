@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import time
 
 import gymnasium as gym
 import jax
@@ -28,6 +29,20 @@ def check_environment(environment_name: str):
     )
 
 
+def timeit(func):
+    """Decorator to measure and report the execution time of a function."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = func(*args, **kwargs)
+        execution_time = time.perf_counter() - start_time
+        print(f"Function '{func.__name__}' took {execution_time:.4f} seconds to complete.")
+        return result
+
+    return wrapper
+
+
 def identity_epsilon(unused_decay_period, unused_step, unused_warmup_steps, epsilon):
     return epsilon
 
@@ -38,18 +53,18 @@ def linearly_decaying_epsilon(decay_period, step, warmup_steps, epsilon):
 
     This follows the Nature DQN schedule of a linearly decaying epsilon (Mnih et
     al., 2015). The schedule is as follows:
-      Begin at 1. until warmup_steps steps have been taken; then
-      Linearly decay epsilon from 1. to epsilon in decay_period steps; and then
-      Use epsilon from there on.
+        Begin at 1. until warmup_steps steps have been taken; then
+        Linearly decay epsilon from 1. to epsilon in decay_period steps; and then
+        Use epsilon from there on.
 
     Args:
-      decay_period: float, the period over which epsilon is decayed.
-      step: int, the number of training steps completed so far.
-      warmup_steps: int, the number of steps taken before epsilon is decayed.
-      epsilon: float, the final value to which to decay the epsilon parameter.
+        decay_period: float, the period over which epsilon is decayed.
+        step: int, the number of training steps completed so far.
+        warmup_steps: int, the number of steps taken before epsilon is decayed.
+        epsilon: float, the final value to which to decay the epsilon parameter.
 
     Returns:
-      A float, the current epsilon value computed according to the schedule.
+        A float, the current epsilon value computed according to the schedule.
     """
     steps_left = decay_period + warmup_steps - step
     bonus = (1.0 - epsilon) * steps_left / decay_period
@@ -78,24 +93,24 @@ def select_action(
     otherwise acts greedily according to the current Q-value estimates.
 
     Args:
-      network_def: Linen Module to use for inference.
-      params: Linen params (frozen dict) to use for inference.
-      state: input state to use for inference.
-      rng: Jax random number generator.
-      num_actions: int, number of actions (static_argnum).
-      eval_mode: bool, whether we are in eval mode (static_argnum).
-      epsilon_eval: float, epsilon value to use in eval mode (static_argnum).
-      epsilon_train: float, epsilon value to use in train mode (static_argnum).
-      epsilon_decay_period: float, decay period for epsilon value for certain
-        epsilon functions, such as linearly_decaying_epsilon, (static_argnum).
-      training_steps: int, number of training steps so far.
-      min_replay_history: int, minimum number of steps in replay buffer
-        (static_argnum).
-      epsilon_fn: function used to calculate epsilon value (static_argnum).
+        network_def: Linen Module to use for inference.
+        params: Linen params (frozen dict) to use for inference.
+        state: input state to use for inference.
+        rng: Jax random number generator.
+        num_actions: int, number of actions (static_argnum).
+        eval_mode: bool, whether we are in eval mode (static_argnum).
+        epsilon_eval: float, epsilon value to use in eval mode (static_argnum).
+        epsilon_train: float, epsilon value to use in train mode (static_argnum).
+        epsilon_decay_period: float, decay period for epsilon value for certain
+            epsilon functions, such as linearly_decaying_epsilon, (static_argnum).
+        training_steps: int, number of training steps so far.
+        min_replay_history: int, minimum number of steps in replay buffer
+            (static_argnum).
+        epsilon_fn: function used to calculate epsilon value (static_argnum).
 
     Returns:
-      rng: Jax random number generator.
-      action: int, the selected action.
+        rng: Jax random number generator.
+        action: int, the selected action.
     """
     epsilon = jnp.where(
         eval_mode,

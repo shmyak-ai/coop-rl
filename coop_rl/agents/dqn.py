@@ -24,7 +24,6 @@ Modifications to the vanilla:
 import functools
 import itertools
 import math
-import os
 import time
 
 import jax
@@ -32,8 +31,9 @@ import jax.numpy as jnp
 import numpy as onp
 import optax
 import ray
-import tensorflow as tf
 
+# import os
+# import tensorflow as tf
 from coop_rl import losses, networks
 
 
@@ -161,14 +161,15 @@ class JaxDQNAgent:
         self.cumulative_gamma = math.pow(gamma, update_horizon)
         self.batch_size = batch_size
 
-        summary_writer_dir = os.path.join(workdir, "tensorboard/")
-        self.summary_writer = tf.summary.create_file_writer(summary_writer_dir)
+        # summary_writer_dir = os.path.join(workdir, "tensorboard/")
+        # self.summary_writer = tf.summary.create_file_writer(summary_writer_dir)
         self.summary_writing_period = summary_writing_period
 
         self._loss_type = loss_type
         self.target_update_period = target_update_period
         self.synchronization_period = synchronization_period
 
+        print(f"Current devices: {jnp.arange(3).devices()}")
         self._rng = jax.random.key(seed)
         self._build_networks_and_optimizer(observation_shape, optimizer, args_optimizer)
 
@@ -208,10 +209,10 @@ class JaxDQNAgent:
             self.cumulative_gamma,
             self._loss_type,
         )
-        if step % self.summary_writing_period == 0:
-            with self.summary_writer.as_default():
-                tf.summary.scalar("HuberLoss", loss, step=step)
-            self.summary_writer.flush()
+        # if step % self.summary_writing_period == 0:
+        #     with self.summary_writer.as_default():
+        #         tf.summary.scalar("HuberLoss", loss, step=step)
+        #     self.summary_writer.flush()
 
         if step % self.target_update_period == 0:
             self.target_network_params = self.online_params
@@ -223,13 +224,16 @@ class JaxDQNAgent:
         #  1. check if there are enough transitions in the replay buffer
         while True:
             add_count = ray.get(self.replay_actor.add_count.remote())
+            print(f"Add count: {add_count}.")
             if add_count >= self.min_replay_history:
+                print("Start training.")
                 break
             else:
-                time.wait(1)
+                print("Waiting.")
+                time.sleep(1)
         #  2. training
         transitions_processed = 0
-        for training_step in itertools.count(start=0, step=1):
+        for training_step in itertools.count(start=1, step=1):
             self._train_step(training_step)
             transitions_processed += self.batch_size
             if training_step == self.training_steps:
@@ -238,5 +242,6 @@ class JaxDQNAgent:
                 break
 
             if training_step % self.summary_writing_period == 0:
-                print(f"Transitions processed by the trainer = {transitions_processed}.")
-                print(f"Transitions added to the buffer = {ray.get(self.replay_actor.add_count.remote())}.")
+                print(f"Training step: {training_step}.")
+                print(f"Transitions processed by the trainer: {transitions_processed}.")
+                print(f"Transitions added to the buffer: {ray.get(self.replay_actor.add_count.remote())}.")
