@@ -91,7 +91,6 @@ def target_q(target_network, next_states, rewards, terminals, cumulative_gamma):
     return jax.lax.stop_gradient(rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals))
 
 
-@ray.remote(num_gpus=1, num_cpus=1)
 class JaxDQNAgent:
     """A JAX implementation of the DQN agent."""
 
@@ -181,7 +180,7 @@ class JaxDQNAgent:
         self.optimizer_state = self.optimizer.init(self.online_params)
         self.target_network_params = self.online_params
 
-    def _train_step(self, step):
+    def _train_step(self, replay_elements):
         """Runs a single training step.
 
         Runs training if both:
@@ -191,7 +190,6 @@ class JaxDQNAgent:
         Also, syncs weights from online_params to target_network_params if training
         steps is a multiple of target update period.
         """
-        replay_elements = ray.get(self.replay_actor.sample_from_replay_buffer.remote())
         states = self.preprocess_fn(replay_elements["state"])
         next_states = self.preprocess_fn(replay_elements["next_state"])
 
@@ -209,18 +207,26 @@ class JaxDQNAgent:
             self.cumulative_gamma,
             self._loss_type,
         )
-        # if step % self.summary_writing_period == 0:
-        #     with self.summary_writer.as_default():
-        #         tf.summary.scalar("HuberLoss", loss, step=step)
-        #     self.summary_writer.flush()
-
-        if step % self.target_update_period == 0:
-            self.target_network_params = self.online_params
-
-        if step % self.synchronization_period == 0:
-            ray.get(self.control_actor.set_parameters.remote(self.online_params))
-
+    
     def training(self):
+        transitions_processed = 0
+        for training_step in itertools.count(start=1, step=1):
+            replay_elements = self.replay_actor.sample_from_replay_buffer()
+            self._train_step(replay_elements)
+            transitions_processed += self.batch_size
+
+            if training_step == self.training_steps:
+                print(f"Final training step {training_step} reached; finishing.")
+                break
+
+            if training_step % self.summary_writing_period == 0:
+                print(f"Training step: {training_step}.")
+                print(f"Transitions processed by the trainer: {transitions_processed}.")
+
+            if training_step % self.target_update_period == 0:
+                self.target_network_params = self.online_params
+
+    def training_remote(self):
         #  1. check if there are enough transitions in the replay buffer
         while True:
             add_count = ray.get(self.replay_actor.add_count.remote())
@@ -234,8 +240,10 @@ class JaxDQNAgent:
         #  2. training
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
-            self._train_step(training_step)
+            replay_elements = ray.get(self.replay_actor.sample_from_replay_buffer.remote())
+            self._train_step(replay_elements)
             transitions_processed += self.batch_size
+
             if training_step == self.training_steps:
                 ray.get(self.control_actor.set_done.remote())
                 print(f"Final training step {training_step} reached; finishing.")
@@ -245,3 +253,9 @@ class JaxDQNAgent:
                 print(f"Training step: {training_step}.")
                 print(f"Transitions processed by the trainer: {transitions_processed}.")
                 print(f"Transitions added to the buffer: {ray.get(self.replay_actor.add_count.remote())}.")
+
+            if training_step % self.target_update_period == 0:
+                self.target_network_params = self.online_params
+
+            if training_step % self.synchronization_period == 0:
+                ray.get(self.control_actor.set_parameters.remote(self.online_params))

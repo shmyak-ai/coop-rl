@@ -40,7 +40,6 @@ class ControlActor:
         return self.parameters, self.done
 
 
-@ray.remote(num_cpus=1)
 class ReplayActor:
 
     def __init__(self, config):

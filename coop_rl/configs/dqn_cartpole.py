@@ -35,7 +35,7 @@ def get_config():
     workdir = config_dict.FieldReference(None, field_type=str)
     seed = config_dict.FieldReference(42)
     gamma = config_dict.FieldReference(0.99)
-    batch_size = config_dict.FieldReference(100)  # > 1: target_q in dqn limitation
+    batch_size = config_dict.FieldReference(1000)  # > 1: target_q in dqn limitation
     update_horizon = config_dict.FieldReference(3)
     environment_name = config_dict.FieldReference("CartPole-v1")
     network = config_dict.FieldReference(networks.ClassicControlDQNNetwork)

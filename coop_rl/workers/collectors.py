@@ -26,7 +26,6 @@ from coop_rl.utils import (
 )
 
 
-@ray.remote(num_cpus=1)
 class DQNCollectorUniform:
     def __init__(
         self,
@@ -200,8 +199,6 @@ class DQNCollectorUniform:
         Returns:
           The number of steps taken and the total reward.
         """
-        step_number = 0
-        total_reward = 0.0
 
         self._replay = []
         action = self._initialize_episode()
@@ -210,9 +207,6 @@ class DQNCollectorUniform:
         while True:
             observation, reward, terminated, truncated, info = self._environment.step(action)
 
-            total_reward += reward
-            step_number += 1
-
             if terminated or truncated:
                 break
             else:
@@ -220,12 +214,12 @@ class DQNCollectorUniform:
 
         self._end_episode(action, reward, terminated, truncated)
 
-        # send transitions from episode to the replay actor
-        ray.get(self.replay_actor.add_episode.remote(self._replay))
+    def collecting(self, num_episodes):
+        for _ in range(num_episodes):
+            self.run_one_episode()
+        self.replay_actor.add_episode(self._replay)
 
-        return step_number, total_reward
-
-    def collecting(self):
+    def collecting_remote(self):
         while True:
             parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
             if done:
@@ -234,3 +228,4 @@ class DQNCollectorUniform:
             if parameters is not None:
                 self.online_params = parameters
             self.run_one_episode()
+            ray.get(self.replay_actor.add_episode.remote(self._replay))
