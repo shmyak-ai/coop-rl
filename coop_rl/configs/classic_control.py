@@ -82,7 +82,6 @@ def get_config():
     config.args_agent.observation_shape = observation_shape
     config.args_agent.network = network
     config.args_agent.seed = seed
-
     config.args_agent.optimizer = optax.adam
     config.args_agent.args_optimizer = ml_collections.ConfigDict()
     config.args_agent.args_optimizer.learning_rate = 0.001

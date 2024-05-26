@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DQN with a Gym Cartpole environment Hyperparameter configuration."""
+"""The entry point to launch local / ray distributed training."""
 
 import argparse
 import os
@@ -22,16 +22,23 @@ from pathlib import Path
 
 import ray
 
-from coop_rl.configs.dqn_cartpole import get_config
+from coop_rl.configs import atari, classic_control
 from coop_rl.utils import check_environment
 from coop_rl.workers import exchange_actors
+
+configs = {
+    "atari": atari,
+    "classic_control": classic_control,
+}
 
 
 def main():
 
-    parser = argparse.ArgumentParser(description="Cooperative training.")
-    parser.add_argument("--num-collectors", type=int)
-    parser.add_argument('--local', action='store_true', help='This enables a ray local mode.')
+    parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
+    parser.add_argument("--mode", required=True, type=str,
+                        choices=('local', 'distributed'))
+    parser.add_argument("--config", required=True, type=str,
+                        choices=('classic_control', 'atari'))
     parser.add_argument(
         "--workdir",
         type=str,
@@ -46,15 +53,12 @@ def main():
     workdir = tempfile.mkdtemp(prefix=args.workdir)
     print(f"Workdir is {workdir}.")
 
-    conf = get_config()
+    conf = configs[args.config].get_config()
     conf.observation_shape, conf.observation_dtype, conf.num_actions = \
         check_environment(conf.environment_name)
     conf.workdir = workdir
 
-    if args.num_collectors is not None:
-        conf.num_collectors = args.num_collectors
-
-    if args.local:
+    if args.mode == "local":
         replay_actor = exchange_actors.ReplayActor(conf)
         collector = conf.collector(
             collector_id=0,
@@ -71,7 +75,7 @@ def main():
         trainer.training()
 
         print("Done.")
-    else:
+    elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
         ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
         ReplayActor = ray.remote(num_cpus=1)(exchange_actors.ReplayActor)
