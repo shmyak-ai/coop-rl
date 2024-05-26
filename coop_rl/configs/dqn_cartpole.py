@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DQN with a Gym Cartpole environment Hyperparameter configuration."""
+"""DQN with a Gym Cartpole environment configuration."""
 
 import ml_collections
 import numpy as np
