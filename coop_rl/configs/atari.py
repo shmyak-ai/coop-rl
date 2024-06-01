@@ -34,12 +34,13 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
 
-    environment_name = config_dict.FieldReference("Breakout-v4")
+    environment_name = config_dict.FieldReference("ALE/Breakout-v5")
     network = config_dict.FieldReference(networks.NatureDQNNetwork)
 
-    seed = config_dict.FieldReference(42)
+    seed = 42
     gamma = config_dict.FieldReference(0.99)
     batch_size = config_dict.FieldReference(100)  # > 1: target_q in dqn limitation
+    stack_size = config_dict.FieldReference(2)  # >= 1, 1 - no stacking
     update_horizon = config_dict.FieldReference(3)
 
     config.seed = seed
@@ -48,6 +49,7 @@ def get_config():
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
+    config.stack_size = stack_size 
     config.workdir = workdir
 
     config.replay = circular_replay_buffer.OutOfGraphReplayBuffer
@@ -55,7 +57,7 @@ def get_config():
     config.args_replay.replay_capacity = 100000  # in transitions
     config.args_replay.gamma = gamma
     config.args_replay.batch_size = batch_size
-    config.args_replay.stack_size = 1
+    config.args_replay.stack_size = stack_size 
     config.args_replay.update_horizon = update_horizon
     config.args_replay.observation_shape = observation_shape
     config.args_replay.observation_dtype = observation_dtype
@@ -65,6 +67,7 @@ def get_config():
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
     config.args_collector.environment_name = environment_name
+    config.args_collector.stack_size = stack_size
     config.args_collector.network = network
     config.args_collector.seed = seed
     config.args_collector.epsilon_fn = identity_epsilon

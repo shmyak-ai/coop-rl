@@ -1,10 +1,10 @@
-# Copyright 2018 The Dopamine Authors.
+# Copyright 2024 The Coop RL Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#      http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,15 +18,89 @@ import time
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
+from gymnasium.wrappers import FrameStack
 
 
-def check_environment(environment_name: str):
-    train_env = gym.make(environment_name)
-    return (
-        train_env.observation_space.shape,
-        train_env.observation_space.dtype,
-        train_env.action_space.n,
-    )
+class HandlerEnv:
+    def __init__(self, env_name, stack_size):
+        self._env = HandlerEnv.make_env(env_name, stack_size)
+
+    def reset(self, seed):
+        observation, info = self._env.reset(seed=int(seed))
+        # call [:] to get a stacked array from gym
+        return observation[:], info
+
+    def step(self, action):
+        observation, reward, terminated, truncated, info = self._env.step(action)
+        return observation[:], reward, terminated, truncated, info 
+    
+    @staticmethod
+    def make_env(env_name, stack_size):
+        env = gym.make(env_name)
+        if stack_size > 1:
+            env = FrameStack(env, stack_size)
+        return env
+
+    @staticmethod
+    def check_env(env_name, stack_size):
+        env = HandlerEnv.make_env(env_name, stack_size)
+        return (
+            env.observation_space.shape,
+            env.observation_space.dtype,
+            env.action_space.n,
+        )
+
+
+class HandlerDopamineReplay:
+    def __init__(self, stack_size):
+        self._replay = []
+        self._stack_size = stack_size
+    
+    def reset(self):
+        self._replay = []
+
+    def _store_transition(self, last_observation, action, reward, terminated, *args, priority=None, truncated=False):
+        """Stores a transition when in training mode.
+
+        Stores the following tuple in the replay buffer (last_observation, action,
+        reward, is_terminal, priority). Follows the dopamine replay buffer naming.
+
+        Args:
+          last_observation: Last observation, type determined via observation_type
+            parameter in the replay_memory constructor.
+          action: An integer, the action taken.
+          reward: A float, the reward.
+          terminated: Boolean indicating if the current state is a terminal state.
+          Or terminal in dopamine. Similar to gymnasium terminated.
+          *args: Any, other items to be added to the replay buffer.
+          priority: Float. Priority of sampling the transition. If None, the default
+            priority will be used. If replay scheme is uniform, the default priority
+            is 1. If the replay scheme is prioritized, the default priority is the
+            maximum ever seen [Schaul et al., 2015].
+          truncated: bool, whether this transition is the last for the episode.
+            This can be different than terminal when ending the episode because of a
+            timeout. Episode_end in dopamine. Similar to gymnasium truncated.
+        """
+        if self._stack_size > 1:
+            last_observation = last_observation[-1, ...]
+
+        self._replay.append(
+            (
+                last_observation,
+                action,
+                reward,
+                terminated,
+                *args,
+                {
+                    "priority": priority,
+                    "truncated": truncated,
+                },
+            )
+        )
+    
+    @property
+    def replay(self):
+        return self._replay
 
 
 def timeit(func):

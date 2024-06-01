@@ -23,7 +23,7 @@ from pathlib import Path
 import ray
 
 from coop_rl.configs import atari, classic_control
-from coop_rl.utils import check_environment
+from coop_rl.utils import HandlerEnv
 from coop_rl.workers import exchange_actors
 
 configs = {
@@ -55,7 +55,7 @@ def main():
 
     conf = configs[args.config].get_config()
     conf.observation_shape, conf.observation_dtype, conf.num_actions = \
-        check_environment(conf.environment_name)
+        HandlerEnv.check_env(conf.environment_name, conf.stack_size)
     conf.workdir = workdir
 
     if args.mode == "local":
@@ -71,7 +71,7 @@ def main():
             control_actor=None,
             replay_actor=replay_actor,
         )
-        collector.collecting(1000)
+        collector.collecting(10)
         trainer.training()
 
         print("Done.")

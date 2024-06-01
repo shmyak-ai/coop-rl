@@ -23,6 +23,7 @@ off-policy corrections.
 The differencies from the vanilla dopamine buffer:
 - rename end_episode in add method to truncated to match gymnasium name
 - delete absl logging since moving to ray distributed version
+- add stack size check to remove the first stack dim from gymnasium
 
 """
 
@@ -148,6 +149,8 @@ class OutOfGraphReplayBuffer:
             transition.
         """
         assert isinstance(observation_shape, tuple)
+        if stack_size > 1:  # gymnasium has 1st dimension for stacking
+            observation_shape = observation_shape[1:]
         if replay_capacity < update_horizon + stack_size:
             raise ValueError("There is not enough capacity to cover update_horizon and stack_size.")
 

@@ -14,13 +14,14 @@
 
 import time
 
-import gymnasium as gym
 import jax
 import numpy as np
 import ray
 
 from coop_rl import networks
 from coop_rl.utils import (
+    HandlerDopamineReplay,
+    HandlerEnv,
     identity_epsilon,
     select_action,
 )
@@ -35,6 +36,7 @@ class DQNCollectorUniform:
         num_actions,
         observation_shape,
         environment_name,
+        stack_size,
         network,
         min_replay_history=20000,
         epsilon_fn=identity_epsilon,
@@ -51,7 +53,7 @@ class DQNCollectorUniform:
 
         self.num_actions = num_actions
 
-        self._environment = gym.make(environment_name)
+        self._environment = HandlerEnv(environment_name, stack_size)
 
         if preprocess_fn is None:
             self.network = network(num_actions=num_actions)
@@ -66,7 +68,7 @@ class DQNCollectorUniform:
         self.training_steps = 0  # get remotely to use linear eps decay
         self.min_replay_history = min_replay_history
 
-        self._replay = []  # to store episode transitions
+        self._replay = HandlerDopamineReplay(stack_size)  # to store episode transitions
 
         self._rng = jax.random.key(seed + collector_id)
 
@@ -77,43 +79,6 @@ class DQNCollectorUniform:
         self._rng, rng = jax.random.split(self._rng)
         state = self.preprocess_fn(self._observation)
         self.online_params = self.network.init(rng, x=state)
-
-    def _store_transition(self, last_observation, action, reward, terminated, *args, priority=None, truncated=False):
-        """Stores a transition when in training mode.
-
-        Stores the following tuple in the replay buffer (last_observation, action,
-        reward, is_terminal, priority). Follows the dopamine replay buffer naming.
-
-        Args:
-          last_observation: Last observation, type determined via observation_type
-            parameter in the replay_memory constructor.
-          action: An integer, the action taken.
-          reward: A float, the reward.
-          terminated: Boolean indicating if the current state is a terminal state.
-          Or terminal in dopamine. Similar to gymnasium terminated.
-          *args: Any, other items to be added to the replay buffer.
-          priority: Float. Priority of sampling the transition. If None, the default
-            priority will be used. If replay scheme is uniform, the default priority
-            is 1. If the replay scheme is prioritized, the default priority is the
-            maximum ever seen [Schaul et al., 2015].
-          truncated: bool, whether this transition is the last for the episode.
-            This can be different than terminal when ending the episode because of a
-            timeout. Episode_end in dopamine. Similar to gymnasium truncated.
-        """
-
-        self._replay.append(
-            (
-                last_observation,
-                action,
-                reward,
-                terminated,
-                *args,
-                {
-                    "priority": priority,
-                    "truncated": truncated,
-                },
-            )
-        )
 
     def _initialize_episode(self):
         """Returns the agent's first action for this episode.
@@ -162,7 +127,7 @@ class DQNCollectorUniform:
         last_observation = self._observation
         self._observation = observation
 
-        self._store_transition(last_observation, action, reward, False)
+        self._replay._store_transition(last_observation, action, reward, False)
 
         self._rng, action = select_action(
             self.network,
@@ -191,7 +156,7 @@ class DQNCollectorUniform:
           reward: float, the last reward from the environment.
           episode_end: bool, whether the last state-action led to a terminal state.
         """
-        self._store_transition(self._observation, action, reward, terminated, truncated=truncated)
+        self._replay._store_transition(self._observation, action, reward, terminated, truncated=truncated)
 
     def run_one_episode(self):
         """Executes a full trajectory of the agent interacting with the environment.
@@ -200,7 +165,7 @@ class DQNCollectorUniform:
           The number of steps taken and the total reward.
         """
 
-        self._replay = []
+        self._replay.reset()
         action = self._initialize_episode()
 
         # Keep interacting until terminated / truncated state.
@@ -217,7 +182,7 @@ class DQNCollectorUniform:
     def collecting(self, num_episodes):
         for _ in range(num_episodes):
             self.run_one_episode()
-        self.replay_actor.add_episode(self._replay)
+            self.replay_actor.add_episode(self._replay.replay)
 
     def collecting_remote(self):
         while True:
@@ -228,4 +193,4 @@ class DQNCollectorUniform:
             if parameters is not None:
                 self.online_params = parameters
             self.run_one_episode()
-            ray.get(self.replay_actor.add_episode.remote(self._replay))
+            ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
