@@ -18,7 +18,7 @@ import time
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
-from gymnasium.wrappers import FrameStack
+from gymnasium.wrappers import AtariPreprocessing, FrameStack
 
 
 class HandlerEnv:
@@ -32,8 +32,8 @@ class HandlerEnv:
 
     def step(self, action):
         observation, reward, terminated, truncated, info = self._env.step(action)
-        return observation[:], reward, terminated, truncated, info 
-    
+        return observation[:], reward, terminated, truncated, info
+
     @staticmethod
     def make_env(env_name, stack_size):
         env = gym.make(env_name)
@@ -51,11 +51,42 @@ class HandlerEnv:
         )
 
 
+class HandlerEnvAtari:
+    def __init__(self, env_name, stack_size):
+        self._env = HandlerEnvAtari.make_env(env_name, stack_size)
+
+    def reset(self, seed):
+        observation, info = self._env.reset(seed=int(seed))
+        # call [:] to get a stacked array from gym
+        return observation[:], info
+
+    def step(self, action):
+        observation, reward, terminated, truncated, info = self._env.step(action)
+        return observation[:], reward, terminated, truncated, info
+
+    @staticmethod
+    def make_env(env_name, stack_size):
+        env = gym.make(env_name, frameskip=1)
+        env = AtariPreprocessing(env, terminal_on_life_loss=True, grayscale_obs=True, scale_obs=True)
+        if stack_size > 1:
+            env = FrameStack(env, stack_size)
+        return env
+
+    @staticmethod
+    def check_env(env_name, stack_size):
+        env = HandlerEnvAtari.make_env(env_name, stack_size)
+        return (
+            env.observation_space.shape,
+            env.observation_space.dtype,
+            env.action_space.n,
+        )
+
+
 class HandlerDopamineReplay:
     def __init__(self, stack_size):
         self._replay = []
         self._stack_size = stack_size
-    
+
     def reset(self):
         self._replay = []
 
@@ -97,7 +128,7 @@ class HandlerDopamineReplay:
                 },
             )
         )
-    
+
     @property
     def replay(self):
         return self._replay

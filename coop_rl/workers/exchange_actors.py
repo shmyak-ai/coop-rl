@@ -14,12 +14,12 @@
 
 import collections
 
+import numpy as np
 import ray
 
 
 @ray.remote(num_cpus=0)
 class ControlActor:
-
     def __init__(self):
         self.done = False
         self.parameters = None
@@ -35,14 +35,15 @@ class ControlActor:
 
     def get_parameters(self):
         return self.parameters
-    
+
     def get_parameters_done(self):
         return self.parameters, self.done
 
 
-class ReplayActor:
-
+class ReplayActorDopamine:
     def __init__(self, config):
+        if config.stack_size > 1:
+            self.stacking = True
         self._replay = config.replay(**config.args_replay)
 
     def add_episode(self, episode_transitions):
@@ -51,7 +52,7 @@ class ReplayActor:
         """
         for observation, action, reward, terminated, *args, kwargs in episode_transitions:
             self._replay.add(observation, action, reward, terminated, *args, **kwargs)
-    
+
     def add_count(self):
         """
         Returns:
@@ -63,11 +64,9 @@ class ReplayActor:
         samples = self._replay.sample_transition_batch()
         types = self._replay.get_transition_elements()
         replay_elements = collections.OrderedDict()
-        # dopamine replay buffer return 'states' which have the last 'stack' dimension 
-        # in states and next_states, we don't use it so far
         for element, element_type in zip(samples, types, strict=False):
-            if element_type.name in ('state', 'next_state'):
-                element = element[..., 0]
+            if element_type.name in ("state", "next_state"):
+                element = np.moveaxis(element, -1, 1) if self.stacking else element[..., 0]
             replay_elements[element_type.name] = element
 
         return replay_elements

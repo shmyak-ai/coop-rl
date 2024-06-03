@@ -23,7 +23,6 @@ from pathlib import Path
 import ray
 
 from coop_rl.configs import atari, classic_control
-from coop_rl.utils import HandlerEnv
 from coop_rl.workers import exchange_actors
 
 configs = {
@@ -33,33 +32,31 @@ configs = {
 
 
 def main():
-
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
-    parser.add_argument("--mode", required=True, type=str,
-                        choices=('local', 'distributed'))
-    parser.add_argument("--config", required=True, type=str,
-                        choices=('classic_control', 'atari'))
+    parser.add_argument("--mode", required=True, type=str, choices=("local", "distributed"))
+    parser.add_argument("--config", required=True, type=str, choices=("classic_control", "atari"))
     parser.add_argument(
         "--workdir",
         type=str,
         default=os.path.join(Path.home(), "coop-rl_results/"),
-        help="Path to the tensorboard logs, checkpoints, etc."
+        help="Path to the tensorboard logs, checkpoints, etc.",
     )
 
     args = parser.parse_args()
-    
+
     if not os.path.exists(args.workdir):
         os.mkdir(args.workdir)
     workdir = tempfile.mkdtemp(prefix=args.workdir)
     print(f"Workdir is {workdir}.")
 
     conf = configs[args.config].get_config()
-    conf.observation_shape, conf.observation_dtype, conf.num_actions = \
-        HandlerEnv.check_env(conf.environment_name, conf.stack_size)
+    conf.observation_shape, conf.observation_dtype, conf.num_actions = conf.args_collector.handler_env.check_env(
+        conf.env_name, conf.stack_size
+    )
     conf.workdir = workdir
 
     if args.mode == "local":
-        replay_actor = exchange_actors.ReplayActor(conf)
+        replay_actor = exchange_actors.ReplayActorDopamine(conf)
         collector = conf.collector(
             collector_id=0,
             **conf.args_collector,
@@ -71,26 +68,29 @@ def main():
             control_actor=None,
             replay_actor=replay_actor,
         )
-        collector.collecting(10)
+        collector.collecting(3)
         trainer.training()
 
         print("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
         ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
-        ReplayActor = ray.remote(num_cpus=1)(exchange_actors.ReplayActor)
+        ReplayActor = ray.remote(num_cpus=1)(exchange_actors.ReplayActorDopamine)
         conf.collector = ray.remote(num_cpus=1)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization
         control_actor = exchange_actors.ControlActor.remote()
         replay_actor = ReplayActor.remote(conf)
-        collector_agents = [conf.collector.remote(
-            collector_id=100*i,
-            **conf.args_collector,
-            control_actor=control_actor,
-            replay_actor=replay_actor,
-            ) for i in range(1, conf.num_collectors + 1)]
+        collector_agents = [
+            conf.collector.remote(
+                collector_id=100 * i,
+                **conf.args_collector,
+                control_actor=control_actor,
+                replay_actor=replay_actor,
+            )
+            for i in range(1, conf.num_collectors + 1)
+        ]
         trainer_agent = conf.agent.remote(
             **conf.args_agent,
             control_actor=control_actor,
@@ -114,5 +114,5 @@ def main():
         print("Done; ray shutdown.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

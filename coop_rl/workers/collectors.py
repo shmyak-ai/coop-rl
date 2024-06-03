@@ -20,8 +20,6 @@ import ray
 
 from coop_rl import networks
 from coop_rl.utils import (
-    HandlerDopamineReplay,
-    HandlerEnv,
     identity_epsilon,
     select_action,
 )
@@ -35,9 +33,11 @@ class DQNCollectorUniform:
         replay_actor,
         num_actions,
         observation_shape,
-        environment_name,
-        stack_size,
         network,
+        handler_env,
+        args_handler_env,
+        handler_replay,
+        args_handler_replay,
         min_replay_history=20000,
         epsilon_fn=identity_epsilon,
         epsilon=0.01,
@@ -53,7 +53,7 @@ class DQNCollectorUniform:
 
         self.num_actions = num_actions
 
-        self._environment = HandlerEnv(environment_name, stack_size)
+        self._environment = handler_env(**args_handler_env)
 
         if preprocess_fn is None:
             self.network = network(num_actions=num_actions)
@@ -68,7 +68,7 @@ class DQNCollectorUniform:
         self.training_steps = 0  # get remotely to use linear eps decay
         self.min_replay_history = min_replay_history
 
-        self._replay = HandlerDopamineReplay(stack_size)  # to store episode transitions
+        self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
 
         self._rng = jax.random.key(seed + collector_id)
 

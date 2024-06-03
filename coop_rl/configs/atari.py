@@ -22,7 +22,11 @@ from ml_collections import config_dict
 from coop_rl import networks
 from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.replay_memory import circular_replay_buffer
-from coop_rl.utils import identity_epsilon
+from coop_rl.utils import (
+    HandlerDopamineReplay,
+    HandlerEnvAtari,
+    identity_epsilon,
+)
 from coop_rl.workers.collectors import DQNCollectorUniform
 
 
@@ -34,22 +38,22 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
 
-    environment_name = config_dict.FieldReference("ALE/Breakout-v5")
+    env_name = config_dict.FieldReference("ALE/Breakout-v5")
     network = config_dict.FieldReference(networks.NatureDQNNetwork)
 
     seed = 42
     gamma = config_dict.FieldReference(0.99)
-    batch_size = config_dict.FieldReference(100)  # > 1: target_q in dqn limitation
-    stack_size = config_dict.FieldReference(2)  # >= 1, 1 - no stacking
+    batch_size = config_dict.FieldReference(300)  # > 1: target_q in dqn limitation
+    stack_size = config_dict.FieldReference(3)  # >= 1, 1 - no stacking
     update_horizon = config_dict.FieldReference(3)
 
     config.seed = seed
     config.num_collectors = 3
-    config.environment_name = environment_name
+    config.env_name = env_name
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
-    config.stack_size = stack_size 
+    config.stack_size = stack_size
     config.workdir = workdir
 
     config.replay = circular_replay_buffer.OutOfGraphReplayBuffer
@@ -57,7 +61,7 @@ def get_config():
     config.args_replay.replay_capacity = 100000  # in transitions
     config.args_replay.gamma = gamma
     config.args_replay.batch_size = batch_size
-    config.args_replay.stack_size = stack_size 
+    config.args_replay.stack_size = stack_size
     config.args_replay.update_horizon = update_horizon
     config.args_replay.observation_shape = observation_shape
     config.args_replay.observation_dtype = observation_dtype
@@ -66,11 +70,16 @@ def get_config():
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
-    config.args_collector.environment_name = environment_name
-    config.args_collector.stack_size = stack_size
     config.args_collector.network = network
     config.args_collector.seed = seed
     config.args_collector.epsilon_fn = identity_epsilon
+    config.args_collector.handler_env = HandlerEnvAtari
+    config.args_collector.args_handler_env = ml_collections.ConfigDict()
+    config.args_collector.args_handler_env.env_name = env_name
+    config.args_collector.args_handler_env.stack_size = stack_size
+    config.args_collector.handler_replay = HandlerDopamineReplay
+    config.args_collector.args_handler_replay = ml_collections.ConfigDict()
+    config.args_collector.args_handler_replay.stack_size = stack_size
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
