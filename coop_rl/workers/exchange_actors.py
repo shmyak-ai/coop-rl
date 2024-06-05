@@ -15,10 +15,10 @@
 import collections
 
 import numpy as np
-import ray
+
+from coop_rl.replay_memory import circular_replay_buffer
 
 
-@ray.remote(num_cpus=0)
 class ControlActor:
     def __init__(self):
         self.done = False
@@ -41,10 +41,10 @@ class ControlActor:
 
 
 class ReplayActorDopamine:
-    def __init__(self, config):
-        if config.stack_size > 1:
+    def __init__(self, stack_size, **kwargs):
+        if stack_size > 1:
             self.stacking = True
-        self._replay = config.replay(**config.args_replay)
+        self._replay = circular_replay_buffer.OutOfGraphReplayBuffer(stack_size=stack_size, **kwargs)
 
     def add_episode(self, episode_transitions):
         """

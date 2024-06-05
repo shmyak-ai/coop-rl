@@ -23,7 +23,6 @@ from pathlib import Path
 import ray
 
 from coop_rl.configs import atari, classic_control
-from coop_rl.workers import exchange_actors
 
 configs = {
     "atari": atari,
@@ -56,7 +55,7 @@ def main():
     conf.workdir = workdir
 
     if args.mode == "local":
-        replay_actor = exchange_actors.ReplayActorDopamine(conf)
+        replay_actor = conf.replay_actor(**conf.args_replay)
         collector = conf.collector(
             collector_id=0,
             **conf.args_collector,
@@ -75,13 +74,15 @@ def main():
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
         ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
-        ReplayActor = ray.remote(num_cpus=1)(exchange_actors.ReplayActorDopamine)
+
+        conf.control_actor = ray.remote(num_cpus=0)(conf.control_actor)
+        conf.replay_actor = ray.remote(num_cpus=1)(conf.replay_actor)
         conf.collector = ray.remote(num_cpus=1)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization
-        control_actor = exchange_actors.ControlActor.remote()
-        replay_actor = ReplayActor.remote(conf)
+        control_actor = conf.control_actor.remote()
+        replay_actor = conf.replay_actor.remote(**conf.args_replay)
         collector_agents = [
             conf.collector.remote(
                 collector_id=100 * i,

@@ -21,12 +21,12 @@ from ml_collections import config_dict
 
 from coop_rl import networks
 from coop_rl.agents.dqn import JaxDQNAgent
-from coop_rl.replay_memory import circular_replay_buffer
 from coop_rl.utils import (
     HandlerDopamineReplay,
     HandlerEnvAtari,
     identity_epsilon,
 )
+from coop_rl.workers import exchange_actors
 from coop_rl.workers.collectors import DQNCollectorUniform
 
 
@@ -56,7 +56,9 @@ def get_config():
     config.stack_size = stack_size
     config.workdir = workdir
 
-    config.replay = circular_replay_buffer.OutOfGraphReplayBuffer
+    config.control_actor = exchange_actors.ControlActor
+
+    config.replay_actor = exchange_actors.ReplayActorDopamine
     config.args_replay = ml_collections.ConfigDict()
     config.args_replay.replay_capacity = 100000  # in transitions
     config.args_replay.gamma = gamma
