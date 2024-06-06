@@ -8,3 +8,4 @@ flax
 clu
 ml-collections
 ray[default]
+dm-reverb[tensorflow]

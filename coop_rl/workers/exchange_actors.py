@@ -15,6 +15,8 @@
 import collections
 
 import numpy as np
+import reverb
+import tensorflow as tf
 
 from coop_rl.replay_memory import circular_replay_buffer
 
@@ -70,3 +72,57 @@ class ReplayActorDopamine:
             replay_elements[element_type.name] = element
 
         return replay_elements
+
+
+class ReplayActorDQNUniformReverb:
+    def __init__(
+        self,
+        batch_size,
+        replay_capacity,
+        num_actions,
+        observation_shape,
+        timesteps,
+        buffer_server_port=None,
+        checkpointer=None
+        ):
+
+        min_size = batch_size
+        max_size = replay_capacity
+
+        action_spec = tf.TensorSpec([num_actions], tf.int32)
+        observation_spec = tf.TensorSpec(observation_shape, tf.float32)
+        rewards_spec = tf.TensorSpec([], tf.float32)
+        dones_spec = tf.TensorSpec([], tf.float32)
+
+        self._min_size = min_size
+        self._server = reverb.Server(
+            tables=[
+                reverb.Table(
+                    name=f"DQN_{timesteps}_timesteps_update",
+                    sampler=reverb.selectors.Uniform(),
+                    remover=reverb.selectors.Fifo(),
+                    max_size=int(max_size),
+                    rate_limiter=reverb.rate_limiters.MinSize(min_size),
+                    signature={
+                        'actions':
+                            tf.TensorSpec([timesteps, *action_spec.shape], action_spec.dtype),
+                        'observations':
+                            tf.TensorSpec([timesteps, *observation_spec.shape], observation_spec.dtype),
+                        'rewards':
+                            tf.TensorSpec([timesteps, *rewards_spec.shape], rewards_spec.dtype),
+                        'dones':
+                            tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
+                    }
+                )
+            ],
+            port=buffer_server_port,
+            checkpointer=checkpointer
+        )
+
+    @property
+    def min_size(self) -> int:
+        return self._min_size
+
+    @property
+    def server_port(self) -> int:
+        return self._server.port
