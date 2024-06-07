@@ -21,8 +21,7 @@ import time
 from pathlib import Path
 
 import ray
-
-from coop_rl.configs import atari, classic_control
+from configs.dopamine import atari, classic_control
 
 configs = {
     "atari": atari,
