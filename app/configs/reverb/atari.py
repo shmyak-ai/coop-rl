@@ -22,11 +22,11 @@ from ml_collections import config_dict
 from coop_rl import networks
 from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.utils import (
-    HandlerDopamineReplay,
     HandlerEnvAtari,
+    HandlerReverbReplay,
     identity_epsilon,
 )
-from coop_rl.workers import exchange_actors
+from coop_rl.workers import actors
 from coop_rl.workers.collectors import DQNCollectorUniform
 
 
@@ -45,7 +45,7 @@ def get_config():
     gamma = config_dict.FieldReference(0.99)
     batch_size = config_dict.FieldReference(300)  # > 1: target_q in dqn limitation
     stack_size = config_dict.FieldReference(3)  # >= 1, 1 - no stacking
-    update_horizon = config_dict.FieldReference(3)
+    timesteps = config_dict.FieldReference(4)
 
     config.seed = seed
     config.num_collectors = 3
@@ -56,17 +56,15 @@ def get_config():
     config.stack_size = stack_size
     config.workdir = workdir
 
-    config.control_actor = exchange_actors.ControlActor
+    config.control_actor = actors.ControlActor
 
-    config.replay_actor = exchange_actors.ReplayActorDopamine
-    config.args_replay = ml_collections.ConfigDict()
-    config.args_replay.replay_capacity = 100000  # in transitions
-    config.args_replay.gamma = gamma
-    config.args_replay.batch_size = batch_size
-    config.args_replay.stack_size = stack_size
-    config.args_replay.update_horizon = update_horizon
-    config.args_replay.observation_shape = observation_shape
-    config.args_replay.observation_dtype = observation_dtype
+    config.reverb_server = actors.DQNUniformReverbServer
+    config.args_reverb_server = ml_collections.ConfigDict()
+    config.args_reverb_server.batch_size = batch_size
+    config.args_reverb_server.replay_capacity = 100000  # in transitions
+    config.args_reverb_server.num_actions = num_actions
+    config.args_reverb_server.observation_shape = observation_shape
+    config.args_reverb_server.timesteps = timesteps
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
@@ -79,9 +77,9 @@ def get_config():
     config.args_collector.args_handler_env = ml_collections.ConfigDict()
     config.args_collector.args_handler_env.env_name = env_name
     config.args_collector.args_handler_env.stack_size = stack_size
-    config.args_collector.handler_replay = HandlerDopamineReplay
+    config.args_collector.handler_replay = HandlerReverbReplay
     config.args_collector.args_handler_replay = ml_collections.ConfigDict()
-    config.args_collector.args_handler_replay.stack_size = stack_size
+    config.args_collector.args_handler_replay.timesteps = timesteps
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
@@ -92,7 +90,7 @@ def get_config():
     config.args_agent.loss_type = "huber"
     config.args_agent.gamma = gamma
     config.args_agent.batch_size = batch_size
-    config.args_agent.update_horizon = update_horizon
+    config.args_agent.update_horizon = timesteps - 1
     config.args_agent.target_update_period = 100  # periods are in training_steps
     config.args_agent.synchronization_period = 100  # send parameters to contol actor
     config.args_agent.summary_writing_period = 100  # tensorflow logging and reporting

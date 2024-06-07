@@ -74,7 +74,7 @@ class ReplayActorDopamine:
         return replay_elements
 
 
-class ReplayActorDQNUniformReverb:
+class DQNUniformReverbServer:
     def __init__(
         self,
         batch_size,
@@ -104,13 +104,15 @@ class ReplayActorDQNUniformReverb:
                     max_size=int(max_size),
                     rate_limiter=reverb.rate_limiters.MinSize(min_size),
                     signature={
-                        'actions':
-                            tf.TensorSpec([timesteps, *action_spec.shape], action_spec.dtype),
-                        'observations':
+                        'observation':
                             tf.TensorSpec([timesteps, *observation_spec.shape], observation_spec.dtype),
-                        'rewards':
+                        'action':
+                            tf.TensorSpec([timesteps, *action_spec.shape], action_spec.dtype),
+                        'reward':
                             tf.TensorSpec([timesteps, *rewards_spec.shape], rewards_spec.dtype),
-                        'dones':
+                        'terminated':
+                            tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
+                        'truncated':
                             tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
                     }
                 )

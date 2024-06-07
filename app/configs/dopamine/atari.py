@@ -26,7 +26,7 @@ from coop_rl.utils import (
     HandlerEnvAtari,
     identity_epsilon,
 )
-from coop_rl.workers import exchange_actors
+from coop_rl.workers import actors
 from coop_rl.workers.collectors import DQNCollectorUniform
 
 
@@ -56,9 +56,9 @@ def get_config():
     config.stack_size = stack_size
     config.workdir = workdir
 
-    config.control_actor = exchange_actors.ControlActor
+    config.control_actor = actors.ControlActor
 
-    config.replay_actor = exchange_actors.ReplayActorDopamine
+    config.replay_actor = actors.ReplayActorDopamine
     config.args_replay = ml_collections.ConfigDict()
     config.args_replay.replay_capacity = 100000  # in transitions
     config.args_replay.gamma = gamma

@@ -66,8 +66,8 @@ def main():
             control_actor=None,
             replay_actor=replay_actor,
         )
-        collector.collecting(3)
-        trainer.training()
+        collector.collecting_dopamine(3)
+        trainer.training_dopamine()
 
         print("Done.")
     elif args.mode == "distributed":
@@ -98,8 +98,8 @@ def main():
         )
 
         # remote calls
-        collect_info_futures = [agent.collecting_remote.remote() for agent in collector_agents]
-        trainer_futures = trainer_agent.training_remote.remote()
+        collect_info_futures = [agent.collecting_dopamine_remote.remote() for agent in collector_agents]
+        trainer_futures = trainer_agent.training_dopamine_remote.remote()
         # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
         # get results

@@ -54,17 +54,12 @@ def main():
     conf.workdir = workdir
 
     if args.mode == "local":
-        replay_actor = conf.replay_actor(**conf.args_replay)
+        reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
         collector = conf.collector(
-            collector_id=0,
             **conf.args_collector,
-            control_actor=None,
-            replay_actor=replay_actor,
         )
         trainer = conf.agent(
             **conf.args_agent,
-            control_actor=None,
-            replay_actor=replay_actor,
         )
         collector.collecting(3)
         trainer.training()

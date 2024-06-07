@@ -28,9 +28,6 @@ from coop_rl.utils import (
 class DQNCollectorUniform:
     def __init__(
         self,
-        collector_id,
-        control_actor,
-        replay_actor,
         num_actions,
         observation_shape,
         network,
@@ -38,10 +35,13 @@ class DQNCollectorUniform:
         args_handler_env,
         handler_replay,
         args_handler_replay,
+        collector_id=0,
         min_replay_history=20000,
         epsilon_fn=identity_epsilon,
         epsilon=0.01,
         epsilon_decay_period=250000,
+        control_actor=None,
+        replay_actor=None,
         seed=None,
         preprocess_fn=None,
     ):
@@ -179,12 +179,16 @@ class DQNCollectorUniform:
 
         self._end_episode(action, reward, terminated, truncated)
 
-    def collecting(self, num_episodes):
+    def collecting_dopamine(self, num_episodes):
         for _ in range(num_episodes):
             self.run_one_episode()
             self.replay_actor.add_episode(self._replay.replay)
 
-    def collecting_remote(self):
+    def collecting_reverb(self, num_episodes):
+        for _ in range(num_episodes):
+            self.run_one_episode()
+
+    def collecting_dopamine_remote(self):
         while True:
             parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
             if done:

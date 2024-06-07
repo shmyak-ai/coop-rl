@@ -18,6 +18,7 @@ import time
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
+import reverb
 from gymnasium.wrappers import AtariPreprocessing, FrameStack
 
 
@@ -99,8 +100,8 @@ class HandlerDopamineReplay:
         Args:
           last_observation: Last observation, type determined via observation_type
             parameter in the replay_memory constructor.
-          action: An integer, the action taken.
-          reward: A float, the reward.
+          action: An integer, the action taken for last observation.
+          reward: A float, the reward received after the action for the last observation.
           terminated: Boolean indicating if the current state is a terminal state.
           Or terminal in dopamine. Similar to gymnasium terminated.
           *args: Any, other items to be added to the replay buffer.
@@ -132,6 +133,53 @@ class HandlerDopamineReplay:
     @property
     def replay(self):
         return self._replay
+
+
+class HandlerReverbReplay:
+    def __init__(self, ip: str = "localhost", buffer_server_port: str = "8023"):
+        self.client = reverb.Client(f"{ip}:{buffer_server_port}")
+        self.writer = self.client.trajectory_writer(num_keep_alive_refs=self._n_points)
+
+    def reset(self):
+        pass
+
+    def _store_transition(self, last_observation, action, reward, terminated, *args, priority=None, truncated=False):
+        """Stores a transition when in training mode.
+
+        Stores the following tuple in the replay buffer (last_observation, action,
+        reward, is_terminal, priority). Follows the dopamine replay buffer naming.
+
+        Args:
+          last_observation: Last observation, type determined via observation_type
+            parameter in the replay_memory constructor.
+          action: An integer, the action taken for last observation.
+          reward: A float, the reward received after the action for the last observation.
+          terminated: Boolean indicating if the current state is a terminal state.
+          Or terminal in dopamine. Similar to gymnasium terminated.
+          *args: Any, other items to be added to the replay buffer.
+          priority: Float. Priority of sampling the transition. If None, the default
+            priority will be used. If replay scheme is uniform, the default priority
+            is 1. If the replay scheme is prioritized, the default priority is the
+            maximum ever seen [Schaul et al., 2015].
+          truncated: bool, whether this transition is the last for the episode.
+            This can be different than terminal when ending the episode because of a
+            timeout. Episode_end in dopamine. Similar to gymnasium truncated.
+        """
+        self.writer.append((action, policy_logits, obs, reward, done))
+
+        self._replay.append(
+            (
+                last_observation,
+                action,
+                reward,
+                terminated,
+                *args,
+                {
+                    "priority": priority,
+                    "truncated": truncated,
+                },
+            )
+        )
 
 
 def timeit(func):

@@ -96,12 +96,9 @@ class JaxDQNAgent:
 
     def __init__(
         self,
-        control_actor,
-        replay_actor,
         workdir,
         optimizer,
         args_optimizer,
-        min_replay_history,
         training_steps,
         num_actions,
         observation_shape,
@@ -113,6 +110,9 @@ class JaxDQNAgent:
         target_update_period,
         synchronization_period,
         summary_writing_period,
+        min_replay_history=20000,
+        replay_actor=None,
+        control_actor=None,
         seed=None,
         preprocess_fn=None,
     ):
@@ -208,7 +208,7 @@ class JaxDQNAgent:
             self._loss_type,
         )
 
-    def training(self):
+    def training_dopamine(self):
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
             replay_elements = self.replay_actor.sample_from_replay_buffer()
@@ -226,7 +226,7 @@ class JaxDQNAgent:
             if training_step % self.target_update_period == 0:
                 self.target_network_params = self.online_params
 
-    def training_remote(self):
+    def training_dopamine_remote(self):
         #  1. check if there are enough transitions in the replay buffer
         while True:
             add_count = ray.get(self.replay_actor.add_count.remote())
