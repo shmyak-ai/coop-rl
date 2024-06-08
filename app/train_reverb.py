@@ -55,14 +55,16 @@ def main():
 
     if args.mode == "local":
         reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
+        conf.args_collector.args_handler_replay.table_name = reverb_server.table_name
+
         collector = conf.collector(
             **conf.args_collector,
         )
         trainer = conf.agent(
             **conf.args_agent,
         )
-        collector.collecting(3)
-        trainer.training()
+        collector.collecting_reverb(3)
+        trainer.training_reverb()
 
         print("Done.")
     elif args.mode == "distributed":

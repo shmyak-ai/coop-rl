@@ -37,6 +37,7 @@ def get_config():
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
+    table_name = config_dict.FieldReference(None, field_type=str)
 
     env_name = config_dict.FieldReference("ALE/Breakout-v5")
     network = config_dict.FieldReference(networks.NatureDQNNetwork)
@@ -45,7 +46,8 @@ def get_config():
     gamma = config_dict.FieldReference(0.99)
     batch_size = config_dict.FieldReference(300)  # > 1: target_q in dqn limitation
     stack_size = config_dict.FieldReference(3)  # >= 1, 1 - no stacking
-    timesteps = config_dict.FieldReference(4)
+    timesteps = config_dict.FieldReference(2)
+    buffer_server_port = 8023
 
     config.seed = seed
     config.num_collectors = 3
@@ -62,9 +64,9 @@ def get_config():
     config.args_reverb_server = ml_collections.ConfigDict()
     config.args_reverb_server.batch_size = batch_size
     config.args_reverb_server.replay_capacity = 100000  # in transitions
-    config.args_reverb_server.num_actions = num_actions
     config.args_reverb_server.observation_shape = observation_shape
     config.args_reverb_server.timesteps = timesteps
+    config.args_reverb_server.buffer_server_port = buffer_server_port
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
@@ -80,6 +82,8 @@ def get_config():
     config.args_collector.handler_replay = HandlerReverbReplay
     config.args_collector.args_handler_replay = ml_collections.ConfigDict()
     config.args_collector.args_handler_replay.timesteps = timesteps
+    config.args_collector.args_handler_replay.buffer_server_port = buffer_server_port
+    config.args_collector.args_handler_replay.table_name = table_name
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()

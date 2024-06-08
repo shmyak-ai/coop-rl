@@ -79,7 +79,6 @@ class DQNUniformReverbServer:
         self,
         batch_size,
         replay_capacity,
-        num_actions,
         observation_shape,
         timesteps,
         buffer_server_port=None,
@@ -89,16 +88,17 @@ class DQNUniformReverbServer:
         min_size = batch_size
         max_size = replay_capacity
 
-        action_spec = tf.TensorSpec([num_actions], tf.int32)
         observation_spec = tf.TensorSpec(observation_shape, tf.float32)
+        action_spec = tf.TensorSpec([], tf.int32)
         rewards_spec = tf.TensorSpec([], tf.float32)
-        dones_spec = tf.TensorSpec([], tf.float32)
+        dones_spec = tf.TensorSpec([], tf.bool)
 
+        self._table_name = f"DQN_{timesteps}_timesteps_update"
         self._min_size = min_size
         self._server = reverb.Server(
             tables=[
                 reverb.Table(
-                    name=f"DQN_{timesteps}_timesteps_update",
+                    name=self._table_name,
                     sampler=reverb.selectors.Uniform(),
                     remover=reverb.selectors.Fifo(),
                     max_size=int(max_size),
@@ -124,6 +124,10 @@ class DQNUniformReverbServer:
     @property
     def min_size(self) -> int:
         return self._min_size
+
+    @property
+    def table_name(self) -> str:
+        return self._table_name
 
     @property
     def server_port(self) -> int:

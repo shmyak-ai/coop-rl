@@ -165,19 +165,22 @@ class DQNCollectorUniform:
           The number of steps taken and the total reward.
         """
 
-        self._replay.reset()
-        action = self._initialize_episode()
+        try:
+            self._replay.reset()
+            action = self._initialize_episode()
 
-        # Keep interacting until terminated / truncated state.
-        while True:
-            observation, reward, terminated, truncated, info = self._environment.step(action)
+            # Keep interacting until terminated / truncated state.
+            while True:
+                observation, reward, terminated, truncated, info = self._environment.step(action)
 
-            if terminated or truncated:
-                break
-            else:
-                action = self._step(action, reward, observation)
+                if terminated or truncated:
+                    break
+                else:
+                    action = self._step(action, reward, observation)
 
-        self._end_episode(action, reward, terminated, truncated)
+            self._end_episode(action, reward, terminated, truncated)
+        finally:
+            self._replay.close()
 
     def collecting_dopamine(self, num_episodes):
         for _ in range(num_episodes):

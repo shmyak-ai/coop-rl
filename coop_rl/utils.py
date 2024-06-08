@@ -18,6 +18,7 @@ import time
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
+import numpy as np
 import reverb
 from gymnasium.wrappers import AtariPreprocessing, FrameStack
 
@@ -100,8 +101,8 @@ class HandlerDopamineReplay:
         Args:
           last_observation: Last observation, type determined via observation_type
             parameter in the replay_memory constructor.
-          action: An integer, the action taken for last observation.
-          reward: A float, the reward received after the action for the last observation.
+          action: An integer, the action taken after the last observation.
+          reward: A float, the reward received for the action after the last observation.
           terminated: Boolean indicating if the current state is a terminal state.
           Or terminal in dopamine. Similar to gymnasium terminated.
           *args: Any, other items to be added to the replay buffer.
@@ -133,15 +134,25 @@ class HandlerDopamineReplay:
     @property
     def replay(self):
         return self._replay
+    
+    def close(self):
+        pass
 
 
 class HandlerReverbReplay:
-    def __init__(self, ip: str = "localhost", buffer_server_port: str = "8023"):
+    def __init__(self, timesteps: int, table_name: str, ip: str = "localhost", buffer_server_port: int = 8023):
+        """
+        Args:
+            timesteps
+            table_name
+            ip and buffer_server_port: this is server adress.
+        """
+        self.timesteps = timesteps
+        self.table_name = table_name
         self.client = reverb.Client(f"{ip}:{buffer_server_port}")
-        self.writer = self.client.trajectory_writer(num_keep_alive_refs=self._n_points)
 
     def reset(self):
-        pass
+        self.writer = self.client.trajectory_writer(num_keep_alive_refs=self.timesteps)
 
     def _store_transition(self, last_observation, action, reward, terminated, *args, priority=None, truncated=False):
         """Stores a transition when in training mode.
@@ -152,8 +163,8 @@ class HandlerReverbReplay:
         Args:
           last_observation: Last observation, type determined via observation_type
             parameter in the replay_memory constructor.
-          action: An integer, the action taken for last observation.
-          reward: A float, the reward received after the action for the last observation.
+          action: An integer, the action taken after the last observation.
+          reward: A float, the reward received for the action after the last observation.
           terminated: Boolean indicating if the current state is a terminal state.
           Or terminal in dopamine. Similar to gymnasium terminated.
           *args: Any, other items to be added to the replay buffer.
@@ -165,21 +176,36 @@ class HandlerReverbReplay:
             This can be different than terminal when ending the episode because of a
             timeout. Episode_end in dopamine. Similar to gymnasium truncated.
         """
-        self.writer.append((action, policy_logits, obs, reward, done))
-
-        self._replay.append(
-            (
-                last_observation,
-                action,
-                reward,
-                terminated,
-                *args,
-                {
-                    "priority": priority,
-                    "truncated": truncated,
+        self.writer.append(
+            {
+                "observation": np.array(last_observation, dtype=np.float32),
+                "action": np.array(action, dtype=np.int32),
+                "reward": np.array(reward, dtype=np.float32),
+                "terminated": np.array(terminated, dtype=bool),
+                "truncated": np.array(truncated, dtype=bool)
+            }
+        )
+        if self.writer.episode_steps >= self.timesteps:
+            self.writer.create_item(
+                table=self.table_name,
+                priority=1,
+                trajectory={
+                    "observation": self.writer.history["observation"][-self.timesteps :],
+                    "action": self.writer.history["action"][-self.timesteps :],
+                    "reward": self.writer.history["reward"][-self.timesteps :],
+                    "terminated": self.writer.history["terminated"][-self.timesteps :],
+                    "truncated": self.writer.history["truncated"][-self.timesteps :],
                 },
             )
-        )
+            self.writer.flush(block_until_num_items=self.timesteps)
+        if terminated or truncated:
+            # Block until all pending items have been sent to the server and
+            # inserted into 'my_table'. This also clears the buffers so history will
+            # once again be empty and `writer.episode_steps` is 0.
+            self.writer.end_episode()
+    
+    def close(self):
+        self.writer.close()
 
 
 def timeit(func):
