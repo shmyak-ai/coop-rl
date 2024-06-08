@@ -134,7 +134,7 @@ class HandlerDopamineReplay:
     @property
     def replay(self):
         return self._replay
-    
+
     def close(self):
         pass
 
@@ -182,7 +182,7 @@ class HandlerReverbReplay:
                 "action": np.array(action, dtype=np.int32),
                 "reward": np.array(reward, dtype=np.float32),
                 "terminated": np.array(terminated, dtype=bool),
-                "truncated": np.array(truncated, dtype=bool)
+                "truncated": np.array(truncated, dtype=bool),
             }
         )
         if self.writer.episode_steps >= self.timesteps:
@@ -203,9 +203,32 @@ class HandlerReverbReplay:
             # inserted into 'my_table'. This also clears the buffers so history will
             # once again be empty and `writer.episode_steps` is 0.
             self.writer.end_episode()
-    
+
     def close(self):
         self.writer.close()
+
+
+class HandlerReverbSampler:
+    def __init__(
+        self, batch_size: int, timesteps: int, table_name: str, ip: str = "localhost", buffer_server_port: int = 8023
+    ):
+        """
+        Args:
+            timesteps
+            table_name
+            ip and buffer_server_port: this is server adress.
+        """
+        self.timesteps = timesteps
+        self.table_name = table_name
+        ds = reverb.TrajectoryDataset.from_table_signature(
+            server_address=f"{ip}:{buffer_server_port}", table=table_name, max_in_flight_samples_per_worker=10
+        )
+        ds = ds.batch(batch_size).prefetch(1)
+        self.iterator = ds.as_numpy_iterator()
+
+    def sample_from_replay_buffer(self):
+        foo = next(self.iterator)
+        return foo
 
 
 def timeit(func):

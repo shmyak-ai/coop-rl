@@ -55,7 +55,7 @@ def main():
 
     if args.mode == "local":
         reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
-        conf.args_collector.args_handler_replay.table_name = reverb_server.table_name
+        conf.table_name = reverb_server.table_name
 
         collector = conf.collector(
             **conf.args_collector,

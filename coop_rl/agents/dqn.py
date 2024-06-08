@@ -113,6 +113,8 @@ class JaxDQNAgent:
         min_replay_history=20000,
         replay_actor=None,
         control_actor=None,
+        handler_sampler=lambda *args, **kwargs: None,
+        args_handler_sampler=None,
         seed=None,
         preprocess_fn=None,
     ):
@@ -141,8 +143,11 @@ class JaxDQNAgent:
             preprocesses (such as normalizing the pixel values between 0 and 1)
             before passing it to the Q-network. Defaults to None.
         """
+        if args_handler_sampler is None:
+            args_handler_sampler = {"": None}
         self.control_actor = control_actor
         self.replay_actor = replay_actor
+        self.sampler = handler_sampler(**args_handler_sampler)
 
         self.min_replay_history = min_replay_history
         self.training_steps = training_steps
@@ -212,6 +217,24 @@ class JaxDQNAgent:
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
             replay_elements = self.replay_actor.sample_from_replay_buffer()
+            self._train_step(replay_elements)
+            transitions_processed += self.batch_size
+
+            if training_step == self.training_steps:
+                print(f"Final training step {training_step} reached; finishing.")
+                break
+
+            if training_step % self.summary_writing_period == 0:
+                print(f"Training step: {training_step}.")
+                print(f"Transitions processed by the trainer: {transitions_processed}.")
+
+            if training_step % self.target_update_period == 0:
+                self.target_network_params = self.online_params
+
+    def training_reverb(self):
+        transitions_processed = 0
+        for training_step in itertools.count(start=1, step=1):
+            replay_elements = self.sampler.sample_from_replay_buffer()
             self._train_step(replay_elements)
             transitions_processed += self.batch_size
 

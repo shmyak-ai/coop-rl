@@ -24,6 +24,7 @@ from coop_rl.agents.dqn import JaxDQNAgent
 from coop_rl.utils import (
     HandlerEnvAtari,
     HandlerReverbReplay,
+    HandlerReverbSampler,
     identity_epsilon,
 )
 from coop_rl.workers import actors
@@ -46,7 +47,7 @@ def get_config():
     gamma = config_dict.FieldReference(0.99)
     batch_size = config_dict.FieldReference(300)  # > 1: target_q in dqn limitation
     stack_size = config_dict.FieldReference(3)  # >= 1, 1 - no stacking
-    timesteps = config_dict.FieldReference(2)
+    timesteps = config_dict.FieldReference(4)
     buffer_server_port = 8023
 
     config.seed = seed
@@ -57,6 +58,7 @@ def get_config():
     config.num_actions = num_actions
     config.stack_size = stack_size
     config.workdir = workdir
+    config.table_name = table_name
 
     config.control_actor = actors.ControlActor
 
@@ -82,8 +84,8 @@ def get_config():
     config.args_collector.handler_replay = HandlerReverbReplay
     config.args_collector.args_handler_replay = ml_collections.ConfigDict()
     config.args_collector.args_handler_replay.timesteps = timesteps
-    config.args_collector.args_handler_replay.buffer_server_port = buffer_server_port
     config.args_collector.args_handler_replay.table_name = table_name
+    config.args_collector.args_handler_replay.buffer_server_port = buffer_server_port
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
@@ -105,5 +107,11 @@ def get_config():
     config.args_agent.args_optimizer = ml_collections.ConfigDict()
     config.args_agent.args_optimizer.learning_rate = 0.001
     config.args_agent.args_optimizer.eps = 3.125e-4
+    config.args_agent.handler_sampler = HandlerReverbSampler
+    config.args_agent.args_handler_sampler = ml_collections.ConfigDict()
+    config.args_agent.args_handler_sampler.batch_size = batch_size
+    config.args_agent.args_handler_sampler.timesteps = timesteps
+    config.args_agent.args_handler_sampler.table_name = table_name
+    config.args_agent.args_handler_sampler.buffer_server_port = buffer_server_port
 
     return config
