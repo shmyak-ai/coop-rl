@@ -109,6 +109,7 @@ def get_config():
     config.args_agent.args_optimizer.eps = 3.125e-4
     config.args_agent.handler_sampler = HandlerReverbSampler
     config.args_agent.args_handler_sampler = ml_collections.ConfigDict()
+    config.args_agent.args_handler_sampler.gamma = gamma
     config.args_agent.args_handler_sampler.batch_size = batch_size
     config.args_agent.args_handler_sampler.timesteps = timesteps
     config.args_agent.args_handler_sampler.table_name = table_name

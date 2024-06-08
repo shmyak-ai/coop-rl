@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import functools
+import math
 import time
 
 import gymnasium as gym
@@ -161,8 +162,7 @@ class HandlerReverbReplay:
         reward, is_terminal, priority). Follows the dopamine replay buffer naming.
 
         Args:
-          last_observation: Last observation, type determined via observation_type
-            parameter in the replay_memory constructor.
+          last_observation: Last observation
           action: An integer, the action taken after the last observation.
           reward: A float, the reward received for the action after the last observation.
           terminated: Boolean indicating if the current state is a terminal state.
@@ -181,8 +181,7 @@ class HandlerReverbReplay:
                 "observation": np.array(last_observation, dtype=np.float32),
                 "action": np.array(action, dtype=np.int32),
                 "reward": np.array(reward, dtype=np.float32),
-                "terminated": np.array(terminated, dtype=bool),
-                "truncated": np.array(truncated, dtype=bool),
+                "terminated": np.array(terminated, dtype=np.float32),
             }
         )
         if self.writer.episode_steps >= self.timesteps:
@@ -194,7 +193,6 @@ class HandlerReverbReplay:
                     "action": self.writer.history["action"][-self.timesteps :],
                     "reward": self.writer.history["reward"][-self.timesteps :],
                     "terminated": self.writer.history["terminated"][-self.timesteps :],
-                    "truncated": self.writer.history["truncated"][-self.timesteps :],
                 },
             )
             self.writer.flush(block_until_num_items=self.timesteps)
@@ -210,7 +208,13 @@ class HandlerReverbReplay:
 
 class HandlerReverbSampler:
     def __init__(
-        self, batch_size: int, timesteps: int, table_name: str, ip: str = "localhost", buffer_server_port: int = 8023
+        self,
+        gamma: float,
+        batch_size: int,
+        timesteps: int,
+        table_name: str,
+        ip: str = "localhost",
+        buffer_server_port: int = 8023,
     ):
         """
         Args:
@@ -218,6 +222,10 @@ class HandlerReverbSampler:
             table_name
             ip and buffer_server_port: this is server adress.
         """
+        self._cumulative_discount_vector = np.array(
+            [math.pow(gamma, n) for n in range(timesteps - 1)],
+            dtype=np.float32,
+        )
         self.timesteps = timesteps
         self.table_name = table_name
         ds = reverb.TrajectoryDataset.from_table_signature(
@@ -227,8 +235,16 @@ class HandlerReverbSampler:
         self.iterator = ds.as_numpy_iterator()
 
     def sample_from_replay_buffer(self):
-        foo = next(self.iterator)
-        return foo
+        info, data = next(self.iterator)
+        return {
+            "state": data["observation"][:, 0, ...],
+            "action": data["action"][:, 0],
+            "reward": np.sum(self._cumulative_discount_vector * data["reward"][:, :-1], axis=1),
+            "next_state": data["observation"][:, -1, ...],
+            "next_action": data["action"][:, -1],
+            "next_reward": data["reward"][:, -1],
+            "terminal": data["terminated"][:, -1],
+        }
 
 
 def timeit(func):

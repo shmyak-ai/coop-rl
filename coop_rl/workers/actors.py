@@ -91,7 +91,7 @@ class DQNUniformReverbServer:
         observation_spec = tf.TensorSpec(observation_shape, tf.float32)
         action_spec = tf.TensorSpec([], tf.int32)
         rewards_spec = tf.TensorSpec([], tf.float32)
-        dones_spec = tf.TensorSpec([], tf.bool)
+        dones_spec = tf.TensorSpec([], tf.float32)
 
         self._table_name = f"DQN_{timesteps}_timesteps_update"
         self._min_size = min_size
@@ -111,8 +111,6 @@ class DQNUniformReverbServer:
                         'reward':
                             tf.TensorSpec([timesteps, *rewards_spec.shape], rewards_spec.dtype),
                         'terminated':
-                            tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
-                        'truncated':
                             tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
                     }
                 )
