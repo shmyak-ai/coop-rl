@@ -222,6 +222,7 @@ class HandlerReverbSampler:
             table_name
             ip and buffer_server_port: this is server adress.
         """
+        self.client = reverb.Client(f"{ip}:{buffer_server_port}")
         self._cumulative_discount_vector = np.array(
             [math.pow(gamma, n) for n in range(timesteps - 1)],
             dtype=np.float32,
@@ -245,6 +246,10 @@ class HandlerReverbSampler:
             "next_reward": data["reward"][:, -1],
             "terminal": data["terminated"][:, -1],
         }
+    
+    def add_count(self):
+        table_info = self.client.server_info()[self.table_name]
+        return table_info.current_size
 
 
 def timeit(func):

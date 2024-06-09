@@ -201,3 +201,13 @@ class DQNCollectorUniform:
                 self.online_params = parameters
             self.run_one_episode()
             ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
+
+    def collecting_reverb_remote(self):
+        while True:
+            parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
+            if done:
+                print("Done signal received; finishing.")
+                break
+            if parameters is not None:
+                self.online_params = parameters
+            self.run_one_episode()

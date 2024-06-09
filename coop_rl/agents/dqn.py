@@ -282,3 +282,39 @@ class JaxDQNAgent:
 
             if training_step % self.synchronization_period == 0:
                 ray.get(self.control_actor.set_parameters.remote(self.online_params))
+
+    def training_reverb_remote(self):
+        #  1. check if there are enough transitions in the replay buffer
+        while True:
+            add_count = self.sampler.add_count()
+            print(f"Add count: {add_count}.")
+            if add_count >= self.min_replay_history:
+                print("Start training.")
+                break
+            else:
+                print("Waiting.")
+                time.sleep(1)
+        #  2. training
+        transitions_processed = 0
+        for training_step in itertools.count(start=1, step=1):
+            replay_elements = self.sampler.sample_from_replay_buffer()
+            try:
+                self._train_step(replay_elements)
+            except Exception as e:
+                print(e)
+            transitions_processed += self.batch_size
+
+            if training_step == self.training_steps:
+                ray.get(self.control_actor.set_done.remote())
+                print(f"Final training step {training_step} reached; finishing.")
+                break
+
+            if training_step % self.summary_writing_period == 0:
+                print(f"Training step: {training_step}.")
+                print(f"Transitions processed by the trainer: {transitions_processed}.")
+
+            if training_step % self.target_update_period == 0:
+                self.target_network_params = self.online_params
+
+            if training_step % self.synchronization_period == 0:
+                ray.get(self.control_actor.set_parameters.remote(self.online_params))

@@ -63,40 +63,39 @@ def main():
         trainer = conf.agent(
             **conf.args_agent,
         )
-        collector.collecting_reverb(3)
+        collector.collecting_reverb(10)
         trainer.training_reverb()
 
         print("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
-        ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
+        ray.init(num_cpus=conf.num_collectors + 1, num_gpus=1)
+
+        reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
+        conf.table_name = reverb_server.table_name
 
         conf.control_actor = ray.remote(num_cpus=0)(conf.control_actor)
-        conf.replay_actor = ray.remote(num_cpus=1)(conf.replay_actor)
         conf.collector = ray.remote(num_cpus=1)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization
         control_actor = conf.control_actor.remote()
-        replay_actor = conf.replay_actor.remote(**conf.args_replay)
         collector_agents = [
             conf.collector.remote(
                 collector_id=100 * i,
                 **conf.args_collector,
                 control_actor=control_actor,
-                replay_actor=replay_actor,
             )
             for i in range(1, conf.num_collectors + 1)
         ]
         trainer_agent = conf.agent.remote(
             **conf.args_agent,
             control_actor=control_actor,
-            replay_actor=replay_actor,
         )
 
         # remote calls
-        collect_info_futures = [agent.collecting_remote.remote() for agent in collector_agents]
-        trainer_futures = trainer_agent.training_remote.remote()
+        collect_info_futures = [agent.collecting_reverb_remote.remote() for agent in collector_agents]
+        trainer_futures = trainer_agent.training_reverb_remote.remote()
         # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
         # get results
