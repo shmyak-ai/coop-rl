@@ -45,7 +45,7 @@ def get_config():
 
     seed = 42
     gamma = config_dict.FieldReference(0.99)
-    batch_size = config_dict.FieldReference(300)  # > 1: target_q in dqn limitation
+    batch_size = config_dict.FieldReference(1000)  # > 1: target_q in dqn limitation
     stack_size = config_dict.FieldReference(3)  # >= 1, 1 - no stacking
     timesteps = config_dict.FieldReference(4)
     buffer_server_port = 8023

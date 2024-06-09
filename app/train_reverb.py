@@ -69,16 +69,16 @@ def main():
         print("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
-        ray.init(num_cpus=conf.num_collectors + 1, num_gpus=1)
-
-        reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
-        conf.table_name = reverb_server.table_name
+        ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
 
         conf.control_actor = ray.remote(num_cpus=0)(conf.control_actor)
+        conf.reverb_server = ray.remote(num_cpus=1)(conf.reverb_server)
         conf.collector = ray.remote(num_cpus=1)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization
+        reverb_server = conf.reverb_server.remote(**conf.args_reverb_server)  # noqa: F841
+        conf.table_name = ray.get(reverb_server.table_name.remote())
         control_actor = conf.control_actor.remote()
         collector_agents = [
             conf.collector.remote(

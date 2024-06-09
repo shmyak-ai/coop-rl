@@ -232,11 +232,13 @@ class HandlerReverbSampler:
         ds = reverb.TrajectoryDataset.from_table_signature(
             server_address=f"{ip}:{buffer_server_port}", table=table_name, max_in_flight_samples_per_worker=10
         )
-        ds = ds.batch(batch_size).prefetch(1)
+        ds = ds.batch(batch_size).prefetch(3)
         self.iterator = ds.as_numpy_iterator()
 
     def sample_from_replay_buffer(self):
+        start = time.perf_counter()
         info, data = next(self.iterator)
+        fetch_time = time.perf_counter() - start
         return {
             "state": data["observation"][:, 0, ...],
             "action": data["action"][:, 0],
@@ -245,7 +247,7 @@ class HandlerReverbSampler:
             "next_action": data["action"][:, -1],
             "next_reward": data["reward"][:, -1],
             "terminal": data["terminated"][:, -1],
-        }
+        }, fetch_time
     
     def add_count(self):
         table_info = self.client.server_info()[self.table_name]

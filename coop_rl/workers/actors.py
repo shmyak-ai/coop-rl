@@ -123,8 +123,7 @@ class DQNUniformReverbServer:
     def min_size(self) -> int:
         return self._min_size
 
-    @property
-    def table_name(self) -> str:
+    def table_name(self) -> str:  # ray.remote doesn't recognize properties
         return self._table_name
 
     @property
