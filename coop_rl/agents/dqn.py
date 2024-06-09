@@ -233,9 +233,17 @@ class JaxDQNAgent:
 
     def training_reverb(self):
         transitions_processed = 0
+        timer_fetching = []
+        timer_sampling = []
+        timer_training = []
         for training_step in itertools.count(start=1, step=1):
-            replay_elements = self.sampler.sample_from_replay_buffer()
+            start_timer = time.perf_counter()
+            replay_elements, fetch_time = self.sampler.sample_from_replay_buffer()
+            timer_sampling.append(time.perf_counter() - start_timer)
+            timer_fetching.append(fetch_time)
+            start_timer = time.perf_counter()
             self._train_step(replay_elements)
+            timer_training.append(time.perf_counter() - start_timer)
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
@@ -245,6 +253,12 @@ class JaxDQNAgent:
             if training_step % self.summary_writing_period == 0:
                 print(f"Training step: {training_step}.")
                 print(f"Transitions processed by the trainer: {transitions_processed}.")
+                print(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
+                print(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
+                print(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
+                timer_fetching = []
+                timer_sampling = []
+                timer_training = []
 
             if training_step % self.target_update_period == 0:
                 self.target_network_params = self.online_params
