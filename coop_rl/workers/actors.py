@@ -43,9 +43,8 @@ class ControlActor:
 
 
 class ReplayActorDopamine:
-    def __init__(self, stack_size, **kwargs):
-        if stack_size > 1:
-            self.stacking = True
+    def __init__(self, stack_size=1, **kwargs):
+        self.stacking = stack_size > 1
         self._replay = circular_replay_buffer.OutOfGraphReplayBuffer(stack_size=stack_size, **kwargs)
 
     def add_episode(self, episode_transitions):
