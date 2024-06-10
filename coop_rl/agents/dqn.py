@@ -24,18 +24,18 @@ Modifications to the vanilla:
 import functools
 import itertools
 import math
+import os
 import time
 from typing import Any
 
 import jax
 import jax.numpy as jnp
-import numpy as onp
-import optax
+import orbax.checkpoint as ocp
 import ray
 from flax import core, struct
+from flax.metrics import tensorboard
 from flax.training import train_state
 
-# import tensorflow as tf
 from coop_rl import losses, networks
 
 
@@ -70,7 +70,7 @@ def target_q(state, observations, rewards, terminals, cumulative_gamma):
     return jax.lax.stop_gradient(rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals))
 
 
-# @functools.partial(jax.jit, static_argnums=(0, 3, 10, 11))
+@functools.partial(jax.jit, static_argnums=(6, 7))
 def train(
     state,
     observations,
@@ -116,6 +116,7 @@ class JaxDQNAgent:
         target_update_period,
         synchronization_period,
         summary_writing_period,
+        save_period,
         min_replay_history=20000,
         replay_actor=None,
         control_actor=None,
@@ -149,32 +150,34 @@ class JaxDQNAgent:
             preprocesses (such as normalizing the pixel values between 0 and 1)
             before passing it to the Q-network. Defaults to None.
         """
+        self.workdir = workdir
+        seed = int(time.time() * 1e6) if seed is None else seed
+
         if args_handler_sampler is None:
             args_handler_sampler = {"": None}
         self.control_actor = control_actor
         self.replay_actor = replay_actor
         self.sampler = handler_sampler(**args_handler_sampler)
 
+        self.preprocess_fn = preprocess_fn
         self.min_replay_history = min_replay_history
         self.training_steps = training_steps
 
-        seed = int(time.time() * 1e6) if seed is None else seed
-
-        self.preprocess_fn = preprocess_fn
-
         self.cumulative_gamma = math.pow(gamma, update_horizon)
         self.batch_size = batch_size
-
-        # summary_writer_dir = os.path.join(workdir, "tensorboard/")
-        # self.summary_writer = tf.summary.create_file_writer(summary_writer_dir)
-        self.summary_writing_period = summary_writing_period
-
         self._loss_type = loss_type
+
         self.target_update_period = target_update_period
         self.synchronization_period = synchronization_period
+        self.summary_writing_period = summary_writing_period
+        self.save_period = save_period
+
+        self.summary_writer = tensorboard.SummaryWriter(os.path.join(workdir, "tensorboard/"))
+        self.orbax_checkpointer = ocp.StandardCheckpointer()
 
         print(f"Current devices: {jnp.arange(3).devices()}")
-        self._rng = jax.random.key(seed)
+        # orbax so far cannot recognize a new key<fry> dtype, use the old one
+        self._rng = jax.random.PRNGKey(seed)  # jax.random.key(seed)
         self._rng, rng = jax.random.split(self._rng)
         self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
 
@@ -201,6 +204,7 @@ class JaxDQNAgent:
             self.cumulative_gamma,
             self._loss_type,
         )
+        return loss
 
     def training_dopamine(self):
         transitions_processed = 0
@@ -231,7 +235,7 @@ class JaxDQNAgent:
             timer_sampling.append(time.perf_counter() - start_timer)
             timer_fetching.append(fetch_time)
             start_timer = time.perf_counter()
-            self._train_step(replay_elements)
+            loss = self._train_step(replay_elements)
             timer_training.append(time.perf_counter() - start_timer)
             transitions_processed += self.batch_size
 
@@ -248,9 +252,14 @@ class JaxDQNAgent:
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []
+                self.summary_writer.scalar("loss", loss, self.state.step)
+                self.summary_writer.flush()
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
+
+            if training_step % self.save_period == 0:
+                self.orbax_checkpointer.save(os.path.join(self.workdir, f"chkpt_step_{training_step:07}"), self.state)
 
     def training_dopamine_remote(self):
         #  1. check if there are enough transitions in the replay buffer

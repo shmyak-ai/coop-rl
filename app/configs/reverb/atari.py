@@ -89,7 +89,7 @@ def get_config():
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
     config.args_agent.min_replay_history = 10000  # in transitions
-    config.args_agent.training_steps = 10000
+    config.args_agent.training_steps = 1000
     config.args_agent.workdir = workdir
     config.args_agent.loss_type = "huber"
     config.args_agent.gamma = gamma
@@ -97,7 +97,8 @@ def get_config():
     config.args_agent.update_horizon = timesteps - 1
     config.args_agent.target_update_period = 100  # periods are in training_steps
     config.args_agent.synchronization_period = 100  # send parameters to contol actor
-    config.args_agent.summary_writing_period = 100  # tensorflow logging and reporting
+    config.args_agent.summary_writing_period = 100  # logging and reporting
+    config.args_agent.save_period = 100  # orbax checkpointing
     config.args_agent.observation_shape = observation_shape
     config.args_agent.seed = seed
     config.args_agent.network = network
