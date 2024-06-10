@@ -25,61 +25,40 @@ import functools
 import itertools
 import math
 import time
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as onp
 import optax
 import ray
+from flax import core, struct
+from flax.training import train_state
 
-# import os
 # import tensorflow as tf
 from coop_rl import losses, networks
 
 
-@functools.partial(jax.jit, static_argnums=(0, 3, 10, 11))
-def train(
-    network_def,
-    online_params,
-    target_params,
-    optimizer,
-    optimizer_state,
-    states,
-    actions,
-    next_states,
-    rewards,
-    terminals,
-    cumulative_gamma,
-    loss_type="mse",
-):
-    """Run the training step."""
+class TrainState(train_state.TrainState):
+    key: jax.Array
+    target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    def loss_fn(params, target):
-        def q_online(state):
-            return network_def.apply(params, state)
-
-        q_values = jax.vmap(q_online)(states).q_values
-        q_values = jnp.squeeze(q_values)
-        replay_chosen_q = jax.vmap(lambda x, y: x[y])(q_values, actions)
-        if loss_type == "huber":
-            return jnp.mean(jax.vmap(losses.huber_loss)(target, replay_chosen_q))
-        return jnp.mean(jax.vmap(losses.mse_loss)(target, replay_chosen_q))
-
-    def q_target(state):
-        return network_def.apply(target_params, state)
-
-    target = target_q(q_target, next_states, rewards, terminals, cumulative_gamma)
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grad = grad_fn(online_params, target)
-    updates, optimizer_state = optimizer.update(grad, optimizer_state, params=online_params)
-    online_params = optax.apply_updates(online_params, updates)
-    return optimizer_state, online_params, loss
+    def update_target_params(self):
+        return self.replace(target_params=self.params)
 
 
-def target_q(target_network, next_states, rewards, terminals, cumulative_gamma):
+def create_train_state(rng, network, args_network, optimizer, args_optimizer, obs_shape):
+    """Creates initial `TrainState`."""
+    state_rng, init_rng = jax.random.split(rng)
+    model = network(**args_network)
+    params = model.init(init_rng, jnp.ones(obs_shape))["params"]
+    tx = optimizer(**args_optimizer)
+    return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx)
+
+
+def target_q(state, observations, rewards, terminals, cumulative_gamma):
     """Compute the target Q-value."""
-    q_vals = jax.vmap(target_network, in_axes=(0))(next_states).q_values
-    q_vals = jnp.squeeze(q_vals)
+    q_vals = jnp.squeeze(state.apply_fn({"params": state.target_params}, x=observations).q_values)
     replay_next_qt_max = jnp.max(q_vals, 1)
     # Calculate the Bellman target value.
     #   Q_t = R_t + \gamma^N * Q'_t+1
@@ -91,19 +70,46 @@ def target_q(target_network, next_states, rewards, terminals, cumulative_gamma):
     return jax.lax.stop_gradient(rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals))
 
 
+# @functools.partial(jax.jit, static_argnums=(0, 3, 10, 11))
+def train(
+    state,
+    observations,
+    next_observations,
+    actions,
+    rewards,
+    terminals,
+    cumulative_gamma,
+    loss_type="mse",
+):
+    """Run the training step."""
+
+    def loss_fn(params, target):
+        q_values = jnp.squeeze(state.apply_fn({"params": params}, x=observations).q_values)
+        replay_chosen_q = jax.vmap(lambda x, y: x[y])(q_values, actions)
+        if loss_type == "huber":
+            return jnp.mean(jax.vmap(losses.huber_loss)(target, replay_chosen_q))
+        return jnp.mean(jax.vmap(losses.mse_loss)(target, replay_chosen_q))
+
+    target = target_q(state, next_observations, rewards, terminals, cumulative_gamma)
+    grad_fn = jax.value_and_grad(loss_fn)
+    loss, grad = grad_fn(state.params, target)
+    state = state.apply_gradients(grads=grad)
+    return state, loss
+
+
 class JaxDQNAgent:
     """A JAX implementation of the DQN agent."""
 
     def __init__(
         self,
         workdir,
-        optimizer,
-        args_optimizer,
-        training_steps,
-        num_actions,
         observation_shape,
         network,
+        args_network,
+        optimizer,
+        args_optimizer,
         gamma,
+        training_steps,
         batch_size,
         update_horizon,
         loss_type,
@@ -116,7 +122,7 @@ class JaxDQNAgent:
         handler_sampler=lambda *args, **kwargs: None,
         args_handler_sampler=None,
         seed=None,
-        preprocess_fn=None,
+        preprocess_fn=networks.identity_preprocess_fn,
     ):
         """Initializes the agent and constructs the necessary components.
 
@@ -152,15 +158,9 @@ class JaxDQNAgent:
         self.min_replay_history = min_replay_history
         self.training_steps = training_steps
 
-        assert isinstance(observation_shape, tuple)
         seed = int(time.time() * 1e6) if seed is None else seed
 
-        if preprocess_fn is None:
-            self.network = network(num_actions=num_actions)
-            self.preprocess_fn = networks.identity_preprocess_fn
-        else:
-            self.network = network(num_actions=num_actions, inputs_preprocessed=True)
-            self.preprocess_fn = preprocess_fn
+        self.preprocess_fn = preprocess_fn
 
         self.cumulative_gamma = math.pow(gamma, update_horizon)
         self.batch_size = batch_size
@@ -175,15 +175,8 @@ class JaxDQNAgent:
 
         print(f"Current devices: {jnp.arange(3).devices()}")
         self._rng = jax.random.key(seed)
-        self._build_networks_and_optimizer(observation_shape, optimizer, args_optimizer)
-
-    def _build_networks_and_optimizer(self, observation_shape, optimizer, args_optimizer):
         self._rng, rng = jax.random.split(self._rng)
-        state = self.preprocess_fn(onp.zeros(observation_shape))
-        self.online_params = self.network.init(rng, x=state)
-        self.optimizer = optimizer(**args_optimizer)
-        self.optimizer_state = self.optimizer.init(self.online_params)
-        self.target_network_params = self.online_params
+        self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
 
     def _train_step(self, replay_elements):
         """Runs a single training step.
@@ -195,18 +188,14 @@ class JaxDQNAgent:
         Also, syncs weights from online_params to target_network_params if training
         steps is a multiple of target update period.
         """
-        states = self.preprocess_fn(replay_elements["state"])
-        next_states = self.preprocess_fn(replay_elements["next_state"])
+        observations = self.preprocess_fn(replay_elements["state"])
+        next_observations = self.preprocess_fn(replay_elements["next_state"])
 
-        self.optimizer_state, self.online_params, loss = train(
-            self.network,
-            self.online_params,
-            self.target_network_params,
-            self.optimizer,
-            self.optimizer_state,
-            states,
+        self.state, loss = train(
+            self.state,
+            observations,
+            next_observations,
             replay_elements["action"],
-            next_states,
             replay_elements["reward"],
             replay_elements["terminal"],
             self.cumulative_gamma,
@@ -229,7 +218,7 @@ class JaxDQNAgent:
                 print(f"Transitions processed by the trainer: {transitions_processed}.")
 
             if training_step % self.target_update_period == 0:
-                self.target_network_params = self.online_params
+                self.state = self.state.update_target_params()
 
     def training_reverb(self):
         transitions_processed = 0
@@ -261,7 +250,7 @@ class JaxDQNAgent:
                 timer_training = []
 
             if training_step % self.target_update_period == 0:
-                self.target_network_params = self.online_params
+                self.state = self.state.update_target_params()
 
     def training_dopamine_remote(self):
         #  1. check if there are enough transitions in the replay buffer
@@ -292,7 +281,7 @@ class JaxDQNAgent:
                 print(f"Transitions added to the buffer: {ray.get(self.replay_actor.add_count.remote())}.")
 
             if training_step % self.target_update_period == 0:
-                self.target_network_params = self.online_params
+                self.state = self.state.update_target_params()
 
             if training_step % self.synchronization_period == 0:
                 ray.get(self.control_actor.set_parameters.remote(self.online_params))
@@ -342,7 +331,7 @@ class JaxDQNAgent:
                 timer_training = []
 
             if training_step % self.target_update_period == 0:
-                self.target_network_params = self.online_params
+                self.state = self.state.update_target_params()
 
             if training_step % self.synchronization_period == 0:
                 ray.get(self.control_actor.set_parameters.remote(self.online_params))
