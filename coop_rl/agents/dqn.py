@@ -318,7 +318,7 @@ class JaxDQNAgent:
             timer_fetching.append(fetch_time)
             start_timer = time.perf_counter()
             try:
-                self._train_step(replay_elements)
+                loss = self._train_step(replay_elements)
             except Exception as e:
                 print(e)
             timer_training.append(time.perf_counter() - start_timer)
@@ -338,6 +338,8 @@ class JaxDQNAgent:
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []
+                self.summary_writer.scalar("loss", loss, self.state.step)
+                self.summary_writer.flush()
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
