@@ -343,4 +343,7 @@ class JaxDQNAgent:
                 self.state = self.state.update_target_params()
 
             if training_step % self.synchronization_period == 0:
-                ray.get(self.control_actor.set_parameters.remote(self.online_params))
+                ray.get(self.control_actor.set_parameters.remote({"params": self.state.params}))
+
+            if training_step % self.save_period == 0:
+                self.orbax_checkpointer.save(os.path.join(self.workdir, f"chkpt_step_{training_step:07}"), self.state)
