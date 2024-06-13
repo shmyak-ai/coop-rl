@@ -71,9 +71,9 @@ def main():
         # collectors, agent, replay actor use cpus
         ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
 
-        conf.control_actor = ray.remote(num_cpus=0)(conf.control_actor)
-        conf.reverb_server = ray.remote(num_cpus=1)(conf.reverb_server)
-        conf.collector = ray.remote(num_cpus=1)(conf.collector)
+        conf.control_actor = ray.remote(num_cpus=0, num_gpus=0)(conf.control_actor)
+        conf.reverb_server = ray.remote(num_cpus=1, num_gpus=0)(conf.reverb_server)
+        conf.collector = ray.remote(num_cpus=1, num_gpus=0)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization

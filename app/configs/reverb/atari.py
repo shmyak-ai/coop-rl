@@ -44,7 +44,7 @@ def get_config():
     gamma = 0.99
     batch_size = 300  # > 1: target_q in dqn limitation
     stack_size = 3  # >= 1, 1 - no stacking
-    timesteps = 4  # DQN n-steps update
+    timesteps = 2  # DQN n-steps update
     buffer_server_port = 8023
     env_name = "ALE/Breakout-v5"
     network = networks.NatureDQNNetwork
@@ -64,7 +64,7 @@ def get_config():
     config.reverb_server = actors.DQNUniformReverbServer
     config.args_reverb_server = ml_collections.ConfigDict()
     config.args_reverb_server.batch_size = batch_size
-    config.args_reverb_server.replay_capacity = 100000  # in transitions
+    config.args_reverb_server.replay_capacity = 1000000  # in transitions
     config.args_reverb_server.observation_shape = observation_shape
     config.args_reverb_server.timesteps = timesteps
     config.args_reverb_server.buffer_server_port = buffer_server_port
@@ -88,17 +88,17 @@ def get_config():
 
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
-    config.args_agent.min_replay_history = 10000  # in transitions
-    config.args_agent.training_steps = 1000
+    config.args_agent.min_replay_history = 20000  # in transitions
+    config.args_agent.training_steps = 10000
     config.args_agent.workdir = workdir
     config.args_agent.loss_type = "huber"
     config.args_agent.gamma = gamma
     config.args_agent.batch_size = batch_size
     config.args_agent.update_horizon = timesteps - 1
-    config.args_agent.target_update_period = 100  # periods are in training_steps
-    config.args_agent.synchronization_period = 100  # send parameters to contol actor
-    config.args_agent.summary_writing_period = 100  # logging and reporting
-    config.args_agent.save_period = 100  # orbax checkpointing
+    config.args_agent.target_update_period = 1000  # periods are in training_steps
+    config.args_agent.synchronization_period = 1000  # send parameters to contol actor
+    config.args_agent.summary_writing_period = 1000  # logging and reporting
+    config.args_agent.save_period = 1000  # orbax checkpointing
     config.args_agent.observation_shape = observation_shape
     config.args_agent.seed = seed
     config.args_agent.network = network
@@ -106,8 +106,8 @@ def get_config():
     config.args_agent.args_network.num_actions = num_actions
     config.args_agent.optimizer = optax.adam
     config.args_agent.args_optimizer = ml_collections.ConfigDict()
-    config.args_agent.args_optimizer.learning_rate = 0.001
-    config.args_agent.args_optimizer.eps = 3.125e-4
+    config.args_agent.args_optimizer.learning_rate = 6.25e-5
+    config.args_agent.args_optimizer.eps = 1.5e-4
     config.args_agent.handler_sampler = HandlerReverbSampler
     config.args_agent.args_handler_sampler = ml_collections.ConfigDict()
     config.args_agent.args_handler_sampler.gamma = gamma
