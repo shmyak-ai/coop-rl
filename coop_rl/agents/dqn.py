@@ -23,6 +23,7 @@ Modifications to the vanilla:
 
 import functools
 import itertools
+import logging
 import math
 import os
 import time
@@ -150,6 +151,8 @@ class JaxDQNAgent:
             preprocesses (such as normalizing the pixel values between 0 and 1)
             before passing it to the Q-network. Defaults to None.
         """
+        self.logger  = logging.getLogger("ray")
+
         self.workdir = workdir
         seed = int(time.time() * 1e6) if seed is None else seed
 
@@ -175,7 +178,7 @@ class JaxDQNAgent:
         self.summary_writer = tensorboard.SummaryWriter(os.path.join(workdir, "tensorboard/"))
         self.orbax_checkpointer = ocp.StandardCheckpointer()
 
-        print(f"Current devices: {jnp.arange(3).devices()}")
+        self.logger.info(f"Current devices: {jnp.arange(3).devices()}")
         # orbax so far cannot recognize a new key<fry> dtype, use the old one
         self._rng = jax.random.PRNGKey(seed)  # jax.random.key(seed)
         self._rng, rng = jax.random.split(self._rng)
@@ -214,12 +217,12 @@ class JaxDQNAgent:
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
-                print(f"Final training step {training_step} reached; finishing.")
+                self.logger.info(f"Final training step {training_step} reached; finishing.")
                 break
 
             if training_step % self.summary_writing_period == 0:
-                print(f"Training step: {training_step}.")
-                print(f"Transitions processed by the trainer: {transitions_processed}.")
+                self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
@@ -240,15 +243,15 @@ class JaxDQNAgent:
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
-                print(f"Final training step {training_step} reached; finishing.")
+                self.logger.info(f"Final training step {training_step} reached; finishing.")
                 break
 
             if training_step % self.summary_writing_period == 0:
-                print(f"Training step: {training_step}.")
-                print(f"Transitions processed by the trainer: {transitions_processed}.")
-                print(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
-                print(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
-                print(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
+                self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
+                self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
+                self.logger.info(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
+                self.logger.info(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []
@@ -265,12 +268,12 @@ class JaxDQNAgent:
         #  1. check if there are enough transitions in the replay buffer
         while True:
             add_count = ray.get(self.replay_actor.add_count.remote())
-            print(f"Add count: {add_count}.")
+            self.logger.info(f"Add count: {add_count}.")
             if add_count >= self.min_replay_history:
-                print("Start training.")
+                self.logger.info("Start training.")
                 break
             else:
-                print("Waiting.")
+                self.logger.info("Waiting.")
                 time.sleep(1)
         #  2. training
         transitions_processed = 0
@@ -281,13 +284,13 @@ class JaxDQNAgent:
 
             if training_step == self.training_steps:
                 ray.get(self.control_actor.set_done.remote())
-                print(f"Final training step {training_step} reached; finishing.")
+                self.logger.info(f"Final training step {training_step} reached; finishing.")
                 break
 
             if training_step % self.summary_writing_period == 0:
-                print(f"Training step: {training_step}.")
-                print(f"Transitions processed by the trainer: {transitions_processed}.")
-                print(f"Transitions added to the buffer: {ray.get(self.replay_actor.add_count.remote())}.")
+                self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
+                self.logger.info(f"Transitions added to the buffer: {ray.get(self.replay_actor.add_count.remote())}.")
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
@@ -299,12 +302,12 @@ class JaxDQNAgent:
         #  1. check if there are enough transitions in the replay buffer
         while True:
             add_count = self.sampler.add_count()
-            print(f"Add count: {add_count}.")
+            self.logger.info(f"Add count: {add_count}.")
             if add_count >= self.min_replay_history:
-                print("Start training.")
+                self.logger.info("Start training.")
                 break
             else:
-                print("Waiting.")
+                self.logger.info("Waiting.")
                 time.sleep(1)
         #  2. training
         timer_fetching = []
@@ -320,21 +323,21 @@ class JaxDQNAgent:
             try:
                 loss = self._train_step(replay_elements)
             except Exception as e:
-                print(e)
+                self.logger.debug(e)
             timer_training.append(time.perf_counter() - start_timer)
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
                 ray.get(self.control_actor.set_done.remote())
-                print(f"Final training step {training_step} reached; finishing.")
+                self.logger.info(f"Final training step {training_step} reached; finishing.")
                 break
 
             if training_step % self.summary_writing_period == 0:
-                print(f"Training step: {training_step}.")
-                print(f"Transitions processed by the trainer: {transitions_processed}.")
-                print(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
-                print(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
-                print(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
+                self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
+                self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
+                self.logger.info(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
+                self.logger.info(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []
@@ -343,6 +346,7 @@ class JaxDQNAgent:
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
+                self.logger.info("Parameters sent.")
 
             if training_step % self.synchronization_period == 0:
                 ray.get(self.control_actor.set_parameters.remote({"params": self.state.params}))

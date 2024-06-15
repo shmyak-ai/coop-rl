@@ -15,6 +15,7 @@
 """The entry point to launch local / ray distributed training."""
 
 import argparse
+import logging
 import os
 import tempfile
 import time
@@ -42,10 +43,12 @@ def main():
 
     args = parser.parse_args()
 
+    logger = logging.getLogger("ray")  # ray logger appears after import ray
+
     if not os.path.exists(args.workdir):
         os.mkdir(args.workdir)
     workdir = tempfile.mkdtemp(prefix=args.workdir)
-    print(f"Workdir is {workdir}.")
+    logger.info(f"Workdir is {workdir}.")
 
     conf = configs[args.config].get_config()
     conf.observation_shape, conf.observation_dtype, conf.num_actions = conf.args_collector.handler_env.check_env(
@@ -66,7 +69,7 @@ def main():
         collector.collecting_reverb(10)
         trainer.training_reverb()
 
-        print("Done.")
+        logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
         ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
@@ -103,11 +106,10 @@ def main():
         ray.get(trainer_futures)
         # ray.get(eval_futures)
         # ray.get(control_actor.set_done.remote())
-        # print(f"3. Add count in the buffer: {ray.get(replay_actor.add_count.remote())}")
         time.sleep(1)
 
         ray.shutdown()
-        print("Done; ray shutdown.")
+        logger.info("Done; ray shutdown.")
 
 
 if __name__ == "__main__":

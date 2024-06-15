@@ -70,6 +70,7 @@ def get_config():
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
+    config.args_collector.report_period = 100  # per episodes sampled
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network

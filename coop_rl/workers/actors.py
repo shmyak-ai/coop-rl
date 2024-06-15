@@ -36,7 +36,9 @@ class ControlActor:
         self.parameters = w
 
     def get_parameters(self):
-        return self.parameters
+        parameters = self.parameters
+        self.parameters = None
+        return parameters
 
     def get_parameters_done(self):
         return self.parameters, self.done

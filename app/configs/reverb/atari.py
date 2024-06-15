@@ -42,8 +42,8 @@ def get_config():
 
     seed = 42
     gamma = 0.99
-    batch_size = 300  # > 1: target_q in dqn limitation
-    stack_size = 3  # >= 1, 1 - no stacking
+    batch_size = 100  # > 1: target_q in dqn limitation
+    stack_size = 4  # >= 1, 1 - no stacking
     timesteps = 2  # DQN n-steps update
     buffer_server_port = 8023
     env_name = "ALE/Breakout-v5"
@@ -71,6 +71,7 @@ def get_config():
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
+    config.args_collector.report_period = 100  # per episodes sampled
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
+import logging
 import time
 
 import jax
@@ -28,6 +30,7 @@ from coop_rl.utils import (
 class DQNCollectorUniform:
     def __init__(
         self,
+        report_period,
         num_actions,
         observation_shape,
         network,
@@ -45,6 +48,9 @@ class DQNCollectorUniform:
         seed=None,
         preprocess_fn=None,
     ):
+        self.logger  = logging.getLogger("ray")
+        self.report_period = report_period
+
         self.control_actor = control_actor
         self.replay_actor = replay_actor
 
@@ -165,6 +171,8 @@ class DQNCollectorUniform:
           The number of steps taken and the total reward.
         """
 
+        steps = 0
+        rewards = 0
         try:
             self._replay.reset()
             action = self._initialize_episode()
@@ -172,6 +180,8 @@ class DQNCollectorUniform:
             # Keep interacting until terminated / truncated state.
             while True:
                 observation, reward, terminated, truncated, info = self._environment.step(action)
+                steps += 1
+                rewards += reward
 
                 if terminated or truncated:
                     break
@@ -181,6 +191,7 @@ class DQNCollectorUniform:
             self._end_episode(action, reward, terminated, truncated)
         finally:
             self._replay.close()
+        return steps, rewards
 
     def collecting_dopamine(self, num_episodes):
         for _ in range(num_episodes):
@@ -195,7 +206,7 @@ class DQNCollectorUniform:
         while True:
             parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
             if done:
-                print("Done signal received; finishing.")
+                self.logger.info("Done signal received; finishing.")
                 break
             if parameters is not None:
                 self.online_params = parameters
@@ -203,11 +214,21 @@ class DQNCollectorUniform:
             ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
 
     def collecting_reverb_remote(self):
-        while True:
+        episode_steps = []
+        episode_rewards = []
+        for episodes_count in itertools.count(start=1, step=1):
             parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
             if done:
-                print("Done signal received; finishing.")
+                self.logger.info("Done signal received; finishing.")
                 break
             if parameters is not None:
                 self.online_params = parameters
-            self.run_one_episode()
+                self.logger.info("Parameters updated.")
+            steps, rewards = self.run_one_episode()
+            episode_steps.append(steps)
+            episode_rewards.append(rewards)
+            if episodes_count % self.report_period == 0:
+                self.logger.info(f"Mean episode length: {sum(episode_steps) / len(episode_steps):.4f}.")
+                self.logger.info(f"Mean episode reward: {sum(episode_rewards) / len(episode_rewards):.4f}.")
+                episode_steps = []
+                episode_rewards = []
