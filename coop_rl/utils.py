@@ -328,8 +328,8 @@ def select_action(
     epsilon_eval,
     epsilon_train,
     epsilon_decay_period,
-    training_steps,
-    min_replay_history,
+    step,
+    warmup_steps,
     epsilon_fn,
 ):
     """Select an action from the set of available actions.
@@ -362,8 +362,8 @@ def select_action(
         epsilon_eval,
         epsilon_fn(
             epsilon_decay_period,
-            training_steps,
-            min_replay_history,
+            step,
+            warmup_steps,
             epsilon_train,
         ),
     )
@@ -374,4 +374,4 @@ def select_action(
         p <= epsilon,
         jax.random.randint(rng2, (), 0, num_actions),
         jnp.argmax(network_def.apply(params, state).q_values),
-    )
+    ), epsilon

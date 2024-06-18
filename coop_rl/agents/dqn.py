@@ -302,7 +302,7 @@ class JaxDQNAgent:
         #  1. check if there are enough transitions in the replay buffer
         while True:
             add_count = self.sampler.add_count()
-            self.logger.info(f"Add count: {add_count}.")
+            self.logger.info(f"Current buffer size: {add_count}.")
             if add_count >= self.min_replay_history:
                 self.logger.info("Start training.")
                 break
@@ -333,7 +333,9 @@ class JaxDQNAgent:
                 break
 
             if training_step % self.summary_writing_period == 0:
+                buffer_size = self.sampler.add_count()
                 self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Current buffer size: {buffer_size}.")
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
                 self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
                 self.logger.info(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
@@ -346,7 +348,6 @@ class JaxDQNAgent:
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
-                self.logger.info("Parameters sent.")
 
             if training_step % self.synchronization_period == 0:
                 ray.get(self.control_actor.set_parameters.remote({"params": self.state.params}))

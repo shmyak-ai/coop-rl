@@ -25,7 +25,7 @@ from coop_rl.utils import (
     HandlerEnvAtari,
     HandlerReverbReplay,
     HandlerReverbSampler,
-    identity_epsilon,
+    linearly_decaying_epsilon,
 )
 from coop_rl.workers import actors
 from coop_rl.workers.collectors import DQNCollectorUniform
@@ -50,7 +50,7 @@ def get_config():
     network = networks.NatureDQNNetwork
 
     config.seed = seed
-    config.num_collectors = 3
+    config.num_collectors = 10
     config.env_name = env_name
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -76,7 +76,10 @@ def get_config():
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.seed = seed
-    config.args_collector.epsilon_fn = identity_epsilon
+    config.args_collector.warmup_steps = 2000
+    config.args_collector.epsilon_fn = linearly_decaying_epsilon
+    config.args_collector.epsilon = 0.01
+    config.args_collector.epsilon_decay_period = 25000
     config.args_collector.handler_env = HandlerEnvAtari
     config.args_collector.args_handler_env = ml_collections.ConfigDict()
     config.args_collector.args_handler_env.env_name = env_name
@@ -90,7 +93,7 @@ def get_config():
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
     config.args_agent.min_replay_history = 20000  # in transitions
-    config.args_agent.training_steps = 10000
+    config.args_agent.training_steps = 1000000
     config.args_agent.workdir = workdir
     config.args_agent.loss_type = "huber"
     config.args_agent.gamma = gamma
@@ -99,7 +102,7 @@ def get_config():
     config.args_agent.target_update_period = 1000  # periods are in training_steps
     config.args_agent.synchronization_period = 1000  # send parameters to contol actor
     config.args_agent.summary_writing_period = 1000  # logging and reporting
-    config.args_agent.save_period = 1000  # orbax checkpointing
+    config.args_agent.save_period = 10000  # orbax checkpointing
     config.args_agent.observation_shape = observation_shape
     config.args_agent.seed = seed
     config.args_agent.network = network

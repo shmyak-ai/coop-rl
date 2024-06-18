@@ -22,7 +22,7 @@ import ray
 
 from coop_rl import networks
 from coop_rl.utils import (
-    identity_epsilon,
+    linearly_decaying_epsilon,
     select_action,
 )
 
@@ -39,8 +39,8 @@ class DQNCollectorUniform:
         handler_replay,
         args_handler_replay,
         collector_id=0,
-        min_replay_history=20000,
-        epsilon_fn=identity_epsilon,
+        warmup_steps=10000,
+        epsilon_fn=linearly_decaying_epsilon,
         epsilon=0.01,
         epsilon_decay_period=250000,
         control_actor=None,
@@ -71,8 +71,9 @@ class DQNCollectorUniform:
         self.epsilon_fn = epsilon_fn
         self.epsilon = epsilon
         self.epsilon_decay_period = epsilon_decay_period
-        self.training_steps = 0  # get remotely to use linear eps decay
-        self.min_replay_history = min_replay_history
+        self.epsilon_current = None
+        self.collecting_steps = 0
+        self.warmup_steps = warmup_steps
 
         self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
 
@@ -100,7 +101,7 @@ class DQNCollectorUniform:
         seed = jax.random.bits(rng)
         self._observation, info = self._environment.reset(seed=int(seed))
 
-        self._rng, action = select_action(
+        self._rng, action, self.epsilon_current = select_action(
             self.network,
             self.online_params,
             self.preprocess_fn(self._observation),
@@ -110,8 +111,8 @@ class DQNCollectorUniform:
             0.001,  # epsilon_eval,
             self.epsilon,  # epsilon_train,
             self.epsilon_decay_period,
-            self.training_steps,
-            self.min_replay_history,
+            self.collecting_steps,
+            self.warmup_steps,
             self.epsilon_fn,
         )
         return np.asarray(action)
@@ -135,7 +136,7 @@ class DQNCollectorUniform:
 
         self._replay._store_transition(last_observation, action, reward, False)
 
-        self._rng, action = select_action(
+        self._rng, action, self.epsilon_current = select_action(
             self.network,
             self.online_params,
             self.preprocess_fn(self._observation),
@@ -145,10 +146,11 @@ class DQNCollectorUniform:
             0.001,  # epsilon_eval,
             self.epsilon,  # epsilon_train,
             self.epsilon_decay_period,
-            self.training_steps,
-            self.min_replay_history,
+            self.collecting_steps,
+            self.warmup_steps,
             self.epsilon_fn,
         )
+        self.collecting_steps += 1
         return np.asarray(action)
 
     def _end_episode(self, action, reward, terminated, truncated):
@@ -223,12 +225,12 @@ class DQNCollectorUniform:
                 break
             if parameters is not None:
                 self.online_params = parameters
-                self.logger.info("Parameters updated.")
             steps, rewards = self.run_one_episode()
             episode_steps.append(steps)
             episode_rewards.append(rewards)
             if episodes_count % self.report_period == 0:
                 self.logger.info(f"Mean episode length: {sum(episode_steps) / len(episode_steps):.4f}.")
                 self.logger.info(f"Mean episode reward: {sum(episode_rewards) / len(episode_rewards):.4f}.")
+                self.logger.info(f"Current epsilon: {float(self.epsilon_current)}.")
                 episode_steps = []
                 episode_rewards = []
