@@ -62,16 +62,25 @@ class HandlerEnvAtari:
         if seed is not None:
             seed = int(seed)
         observation, info = self._env.reset(*args, seed=seed, **kwargs)
+        self.consecutive_steps = 0
+        self.prev_action = None
         # call [:] to get a stacked array from gym
         return observation[:], info
 
     def step(self, action, *args, **kwargs):
         observation, reward, terminated, truncated, info = self._env.step(action, *args, **kwargs)
+        if action == self.prev_action:
+            self.consecutive_steps += 1
+        else:
+            self.consecutive_steps = 0
+        self.prev_action = action
+        if self.consecutive_steps > 33:
+            truncated = True
         return observation[:], reward, terminated, truncated, info
 
     @staticmethod
     def make_env(env_name, stack_size, *args, **kwargs):
-        env = gym.make(env_name, *args, frameskip=1, **kwargs)
+        env = gym.make(env_name, *args, frameskip=1, repeat_action_probability=0, **kwargs)
         env = AtariPreprocessing(env, terminal_on_life_loss=True, grayscale_obs=True, scale_obs=True)
         if stack_size > 1:
             env = FrameStack(env, stack_size)
@@ -258,6 +267,12 @@ class HandlerReverbSampler:
     def sample_from_replay_buffer(self):
         start = time.perf_counter()
         info, data = next(self.iterator)
+        # terminated = data["terminated"]
+        # rewards = data["reward"]
+        # if (rewards != 0).any():
+        #     pass
+        # if (terminated != 0).any():
+        #     pass
         fetch_time = time.perf_counter() - start
         return {
             "state": data["observation"][:, 0, ...],

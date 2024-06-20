@@ -77,6 +77,7 @@ class DQNCollectorUniform:
 
         self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
 
+        self.logger.debug(f"Seed: {seed + collector_id}.")
         self._rng = jax.random.key(seed + collector_id)
 
         self._observation = np.zeros(observation_shape)

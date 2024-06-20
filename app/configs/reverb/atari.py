@@ -41,16 +41,18 @@ def get_config():
     table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
+    num_collectors = 7
+    replay_capacity = 1000000  # in transitions
     gamma = 0.99
     batch_size = 100  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
-    timesteps = 2  # DQN n-steps update
+    timesteps = 7  # DQN n-steps update
     buffer_server_port = 8023
     env_name = "ALE/Breakout-v5"
     network = networks.NatureDQNNetwork
 
     config.seed = seed
-    config.num_collectors = 10
+    config.num_collectors = num_collectors
     config.env_name = env_name
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -64,7 +66,7 @@ def get_config():
     config.reverb_server = actors.DQNUniformReverbServer
     config.args_reverb_server = ml_collections.ConfigDict()
     config.args_reverb_server.batch_size = batch_size
-    config.args_reverb_server.replay_capacity = 1000000  # in transitions
+    config.args_reverb_server.replay_capacity = replay_capacity
     config.args_reverb_server.observation_shape = observation_shape
     config.args_reverb_server.timesteps = timesteps
     config.args_reverb_server.buffer_server_port = buffer_server_port
@@ -76,10 +78,10 @@ def get_config():
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.seed = seed
-    config.args_collector.warmup_steps = 2000
+    config.args_collector.warmup_steps = 10000
     config.args_collector.epsilon_fn = linearly_decaying_epsilon
     config.args_collector.epsilon = 0.01
-    config.args_collector.epsilon_decay_period = 25000
+    config.args_collector.epsilon_decay_period = int(replay_capacity / 4 / num_collectors)
     config.args_collector.handler_env = HandlerEnvAtari
     config.args_collector.args_handler_env = ml_collections.ConfigDict()
     config.args_collector.args_handler_env.env_name = env_name
@@ -99,9 +101,9 @@ def get_config():
     config.args_agent.gamma = gamma
     config.args_agent.batch_size = batch_size
     config.args_agent.update_horizon = timesteps - 1
-    config.args_agent.target_update_period = 1000  # periods are in training_steps
-    config.args_agent.synchronization_period = 1000  # send parameters to contol actor
-    config.args_agent.summary_writing_period = 1000  # logging and reporting
+    config.args_agent.target_update_period = 2000  # periods are in training_steps
+    config.args_agent.synchronization_period = 100  # send parameters to contol actor
+    config.args_agent.summary_writing_period = 2000  # logging and reporting
     config.args_agent.save_period = 10000  # orbax checkpointing
     config.args_agent.observation_shape = observation_shape
     config.args_agent.seed = seed
