@@ -83,6 +83,8 @@ class DQNCollectorUniform:
         self._observation = np.zeros(observation_shape)
         self._build_network()
 
+        self.futures = self.control_actor.get_parameters.remote()
+
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
         state = self.preprocess_fn(self._observation)
@@ -137,6 +139,12 @@ class DQNCollectorUniform:
 
         self._replay._store_transition(last_observation, action, reward, False)
 
+        if self.collecting_steps % 10 == 0:
+            parameters = ray.get(self.futures)
+            if parameters is not None:
+                self.online_params = parameters
+            self.futures = self.control_actor.get_parameters.remote()
+
         self._rng, action, self.epsilon_current = select_action(
             self.network,
             self.online_params,
@@ -152,6 +160,7 @@ class DQNCollectorUniform:
             self.epsilon_fn,
         )
         self.collecting_steps += 1
+
         return np.asarray(action)
 
     def _end_episode(self, action, reward, terminated, truncated):
@@ -220,12 +229,10 @@ class DQNCollectorUniform:
         episode_steps = []
         episode_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
-            parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
+            done = ray.get(self.control_actor.is_done.remote())
             if done:
                 self.logger.info("Done signal received; finishing.")
                 break
-            if parameters is not None:
-                self.online_params = parameters
             steps, rewards = self.run_one_episode()
             episode_steps.append(steps)
             episode_rewards.append(rewards)

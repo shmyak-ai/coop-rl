@@ -41,12 +41,12 @@ def get_config():
     table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
-    num_collectors = 7
+    num_collectors = 2
     replay_capacity = 1000000  # in transitions
     gamma = 0.99
-    batch_size = 100  # > 1: target_q in dqn limitation
+    batch_size = 300  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
-    timesteps = 7  # DQN n-steps update
+    timesteps = 4  # DQN n-steps update
     buffer_server_port = 8023
     env_name = "ALE/Breakout-v5"
     network = networks.NatureDQNNetwork
@@ -102,7 +102,6 @@ def get_config():
     config.args_agent.batch_size = batch_size
     config.args_agent.update_horizon = timesteps - 1
     config.args_agent.target_update_period = 2000  # periods are in training_steps
-    config.args_agent.synchronization_period = 100  # send parameters to contol actor
     config.args_agent.summary_writing_period = 2000  # logging and reporting
     config.args_agent.save_period = 10000  # orbax checkpointing
     config.args_agent.observation_shape = observation_shape

@@ -115,7 +115,6 @@ class JaxDQNAgent:
         update_horizon,
         loss_type,
         target_update_period,
-        synchronization_period,
         summary_writing_period,
         save_period,
         min_replay_history=20000,
@@ -171,7 +170,6 @@ class JaxDQNAgent:
         self._loss_type = loss_type
 
         self.target_update_period = target_update_period
-        self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
         self.save_period = save_period
 
@@ -183,6 +181,8 @@ class JaxDQNAgent:
         self._rng = jax.random.PRNGKey(seed)  # jax.random.key(seed)
         self._rng, rng = jax.random.split(self._rng)
         self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
+
+        self.futures = self.control_actor.set_parameters.remote(self.state.params)
 
     def _train_step(self, replay_elements):
         """Runs a single training step.
@@ -196,6 +196,9 @@ class JaxDQNAgent:
         """
         observations = self.preprocess_fn(replay_elements["state"])
         next_observations = self.preprocess_fn(replay_elements["next_state"])
+
+        ray.get(self.futures)
+        self.futures = self.control_actor.set_parameters.remote(self.state.params)
 
         self.state, loss = train(
             self.state,
@@ -295,9 +298,6 @@ class JaxDQNAgent:
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
 
-            if training_step % self.synchronization_period == 0:
-                ray.get(self.control_actor.set_parameters.remote(self.online_params))
-
     def training_reverb_remote(self):
         #  1. check if there are enough transitions in the replay buffer
         while True:
@@ -333,8 +333,10 @@ class JaxDQNAgent:
                 break
 
             if training_step % self.summary_writing_period == 0:
+                store_size = ray.get(self.control_actor.store_size.remote())
                 buffer_size = self.sampler.add_count()
                 self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Weights store size: {store_size}.")
                 self.logger.info(f"Current buffer size: {buffer_size}.")
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
                 self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
@@ -348,9 +350,6 @@ class JaxDQNAgent:
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
-
-            if training_step % self.synchronization_period == 0:
-                ray.get(self.control_actor.set_parameters.remote({"params": self.state.params}))
 
             if training_step % self.save_period == 0:
                 self.orbax_checkpointer.save(os.path.join(self.workdir, f"chkpt_step_{training_step:07}"), self.state)

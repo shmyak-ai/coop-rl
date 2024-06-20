@@ -24,7 +24,7 @@ from coop_rl.replay_memory import circular_replay_buffer
 class ControlActor:
     def __init__(self):
         self.done = False
-        self.parameters = None
+        self.params_store = []
 
     def set_done(self):
         self.done = True
@@ -33,13 +33,20 @@ class ControlActor:
         return self.done
 
     def set_parameters(self, w):
-        self.parameters = w
+        self.params_store.append(w)
 
     def get_parameters(self):
-        return self.parameters
+        try:
+            w = self.params_store.pop(0)
+        except IndexError:
+            return None
+        return {"params": w}
 
     def get_parameters_done(self):
-        return self.parameters, self.done
+        return self.get_parameters(), self.done
+    
+    def store_size(self):
+        return len(self.params_store)
 
 
 class ReplayActorDopamine:
