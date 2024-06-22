@@ -182,7 +182,10 @@ class JaxDQNAgent:
         self._rng, rng = jax.random.split(self._rng)
         self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
 
-        self.futures = self.control_actor.set_parameters.remote(self.state.params)
+        try:
+            self.futures = self.control_actor.set_parameters.remote(self.state.params)
+        except AttributeError:
+            self.control_actor.set_parameters(self.state.params)
 
     def _train_step(self, replay_elements):
         """Runs a single training step.
@@ -197,9 +200,6 @@ class JaxDQNAgent:
         observations = self.preprocess_fn(replay_elements["state"])
         next_observations = self.preprocess_fn(replay_elements["next_state"])
 
-        ray.get(self.futures)
-        self.futures = self.control_actor.set_parameters.remote(self.state.params)
-
         self.state, loss = train(
             self.state,
             observations,
@@ -210,6 +210,13 @@ class JaxDQNAgent:
             self.cumulative_gamma,
             self._loss_type,
         )
+
+        try:
+            ray.get(self.futures)
+            self.futures = self.control_actor.set_parameters.remote(self.state.params)
+        except AttributeError:
+            self.control_actor.set_parameters(self.state.params)
+
         return loss
 
     def training_dopamine(self):

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import itertools
 import logging
 import time
@@ -45,16 +46,21 @@ class DQNCollectorUniform:
         epsilon_decay_period=250000,
         control_actor=None,
         replay_actor=None,
+        trainer=lambda *args, **kwargs: None,
+        args_trainer=None,
         seed=None,
         preprocess_fn=None,
     ):
-        self.logger  = logging.getLogger("ray")
+        self.logger = logging.getLogger("ray")
         self.report_period = report_period
+
+        if args_trainer is None:
+            args_trainer = {"": None}
+        self.trainer = trainer(**args_trainer, control_actor=control_actor)
 
         self.control_actor = control_actor
         self.replay_actor = replay_actor
 
-        assert isinstance(observation_shape, tuple)
         seed = int(time.time() * 1e6) if seed is None else seed
 
         self.num_actions = num_actions
@@ -73,6 +79,7 @@ class DQNCollectorUniform:
         self.epsilon_decay_period = epsilon_decay_period
         self.epsilon_current = None
         self.collecting_steps = 0
+        self.train_period_steps = 4
         self.warmup_steps = warmup_steps
 
         self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
@@ -83,7 +90,8 @@ class DQNCollectorUniform:
         self._observation = np.zeros(observation_shape)
         self._build_network()
 
-        self.futures = self.control_actor.get_parameters.remote()
+        with contextlib.suppress(AttributeError):
+            self.futures = self.control_actor.get_parameters.remote()
 
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
@@ -139,11 +147,25 @@ class DQNCollectorUniform:
 
         self._replay._store_transition(last_observation, action, reward, False)
 
-        if self.collecting_steps % 10 == 0:
+        with contextlib.suppress(AttributeError):
+            if (
+                self.collecting_steps > self.trainer.min_replay_history
+                and self.collecting_steps % self.train_period_steps == 0
+            ):
+                replay_elements, fetch_time = self.trainer.sampler.sample_from_replay_buffer()
+                self.trainer._train_step(replay_elements)
+        
+        with contextlib.suppress(AttributeError):
+            if self.collecting_steps % (self.trainer.target_update_period * self.train_period_steps) == 0:
+                self.trainer.state = self.trainer.state.update_target_params()
+
+        try:
             parameters = ray.get(self.futures)
-            if parameters is not None:
-                self.online_params = parameters
             self.futures = self.control_actor.get_parameters.remote()
+        except AttributeError:
+            parameters = self.control_actor.get_parameters()
+        if parameters is not None:
+            self.online_params = parameters
 
         self._rng, action, self.epsilon_current = select_action(
             self.network,
@@ -205,14 +227,15 @@ class DQNCollectorUniform:
             self._replay.close()
         return steps, rewards
 
-    def collecting_dopamine(self, num_episodes):
-        for _ in range(num_episodes):
-            self.run_one_episode()
-            self.replay_actor.add_episode(self._replay.replay)
-
-    def collecting_reverb(self, num_episodes):
-        for _ in range(num_episodes):
-            self.run_one_episode()
+    def collecting(self):
+        steps = 0
+        while True:
+            if steps >= self.trainer.training_steps * self.train_period_steps:
+                break
+            episode_steps, episode_rewards = self.run_one_episode()
+            steps += episode_steps
+            with contextlib.suppress(AttributeError):
+                self.replay_actor.add_episode(self._replay.replay)
 
     def collecting_dopamine_remote(self):
         while True:

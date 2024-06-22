@@ -59,16 +59,13 @@ def main():
     if args.mode == "local":
         reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
         conf.table_name = reverb_server.table_name()
-
         collector = conf.collector(
             **conf.args_collector,
+            control_actor=conf.control_actor(),
+            trainer=conf.agent,
+            args_trainer=conf.args_agent,
         )
-        trainer = conf.agent(
-            **conf.args_agent,
-        )
-        collector.collecting_reverb(10)
-        trainer.training_reverb()
-
+        collector.collecting()
         logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus

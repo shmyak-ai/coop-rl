@@ -21,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import reverb
+import tensorflow as tf
 from gymnasium.wrappers import AtariPreprocessing, FrameStack
 
 
@@ -248,6 +249,8 @@ class HandlerReverbSampler:
             table_name
             ip and buffer_server_port: this is server adress.
         """
+        # dataset creation calls tf, which occupies all memory
+        tf.config.experimental.set_visible_devices([], "GPU")
         self.client = reverb.Client(f"{ip}:{buffer_server_port}")
         self._cumulative_discount_vector = np.array(
             [math.pow(gamma, n) for n in range(timesteps - 1)],
