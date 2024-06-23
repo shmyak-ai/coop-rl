@@ -41,12 +41,12 @@ def get_config():
     table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
-    num_collectors = 2
+    num_collectors = 1
     replay_capacity = 1000000  # in transitions
     gamma = 0.99
-    batch_size = 300  # > 1: target_q in dqn limitation
+    batch_size = 32  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
-    timesteps = 4  # DQN n-steps update
+    timesteps = 2  # DQN n-steps update
     buffer_server_port = 8023
     env_name = "ALE/Breakout-v5"
     network = networks.NatureDQNNetwork
@@ -78,7 +78,7 @@ def get_config():
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.seed = seed
-    config.args_collector.warmup_steps = 10000
+    config.args_collector.warmup_steps = 20000
     config.args_collector.epsilon_fn = linearly_decaying_epsilon
     config.args_collector.epsilon = 0.01
     config.args_collector.epsilon_decay_period = int(replay_capacity / 4 / num_collectors)

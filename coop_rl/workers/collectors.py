@@ -15,6 +15,7 @@
 import contextlib
 import itertools
 import logging
+import sys
 import time
 
 import jax
@@ -74,21 +75,21 @@ class DQNCollectorUniform:
             self.network = network(num_actions=num_actions, inputs_preprocessed=True)
             self.preprocess_fn = preprocess_fn
 
+        self._observation = np.zeros(observation_shape)
+        self._build_network()
+
         self.epsilon_fn = epsilon_fn
         self.epsilon = epsilon
         self.epsilon_decay_period = epsilon_decay_period
         self.epsilon_current = None
         self.collecting_steps = 0
-        self.train_period_steps = 4
+        self.train_period_steps = 4  # from dopamine - train each 4 collecting steps
         self.warmup_steps = warmup_steps
 
         self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
 
         self.logger.debug(f"Seed: {seed + collector_id}.")
         self._rng = jax.random.key(seed + collector_id)
-
-        self._observation = np.zeros(observation_shape)
-        self._build_network()
 
         with contextlib.suppress(AttributeError):
             self.futures = self.control_actor.get_parameters.remote()
@@ -108,9 +109,7 @@ class DQNCollectorUniform:
           int, the selected action.
         """
 
-        self._rng, rng = jax.random.split(self._rng)
-        seed = jax.random.bits(rng)
-        self._observation, info = self._environment.reset(seed=int(seed))
+        self._observation, info = self._environment.reset()
 
         self._rng, action, self.epsilon_current = select_action(
             self.network,
@@ -154,7 +153,7 @@ class DQNCollectorUniform:
             ):
                 replay_elements, fetch_time = self.trainer.sampler.sample_from_replay_buffer()
                 self.trainer._train_step(replay_elements)
-        
+
         with contextlib.suppress(AttributeError):
             if self.collecting_steps % (self.trainer.target_update_period * self.train_period_steps) == 0:
                 self.trainer.state = self.trainer.state.update_target_params()
@@ -227,15 +226,38 @@ class DQNCollectorUniform:
             self._replay.close()
         return steps, rewards
 
-    def collecting(self):
-        steps = 0
+    def collecting_training(self):
+        steps, period_steps = 0, 0
+        episodes_steps = []
+        episodes_rewards = []
+        phase = 0
+        self.logger.info(f"Phase {phase} begins.")
         while True:
-            if steps >= self.trainer.training_steps * self.train_period_steps:
-                break
             episode_steps, episode_rewards = self.run_one_episode()
+            sys.stdout.write(
+                f"Steps executed: {period_steps} "
+                + f"Episode length: {episode_steps} "
+                + f"Return: {episode_rewards}\r"
+            )
+            sys.stdout.flush()
             steps += episode_steps
+            period_steps += episode_steps
+
             with contextlib.suppress(AttributeError):
                 self.replay_actor.add_episode(self._replay.replay)
+
+            episodes_steps.append(episode_steps)
+            episodes_rewards.append(episode_rewards)
+            if period_steps >= 250000:  # dopamine phase length
+                self.logger.info(f"Mean episode length: {sum(episodes_steps) / len(episodes_steps):.4f}.")
+                self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
+                episodes_steps = []
+                episodes_rewards = []
+                period_steps = 0
+                phase += 1
+                self.logger.info(f"Phase {phase} begins.")
+            if steps >= self.trainer.training_steps * self.train_period_steps:
+                break
 
     def collecting_dopamine_remote(self):
         while True:
@@ -249,19 +271,19 @@ class DQNCollectorUniform:
             ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
 
     def collecting_reverb_remote(self):
-        episode_steps = []
-        episode_rewards = []
+        episodes_steps = []
+        episodes_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
             done = ray.get(self.control_actor.is_done.remote())
             if done:
                 self.logger.info("Done signal received; finishing.")
                 break
-            steps, rewards = self.run_one_episode()
-            episode_steps.append(steps)
-            episode_rewards.append(rewards)
+            episode_steps, episode_rewards = self.run_one_episode()
+            episodes_steps.append(episode_steps)
+            episodes_rewards.append(episode_rewards)
             if episodes_count % self.report_period == 0:
-                self.logger.info(f"Mean episode length: {sum(episode_steps) / len(episode_steps):.4f}.")
-                self.logger.info(f"Mean episode reward: {sum(episode_rewards) / len(episode_rewards):.4f}.")
+                self.logger.info(f"Mean episode length: {sum(episodes_steps) / len(episodes_steps):.4f}.")
+                self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
                 self.logger.info(f"Current epsilon: {float(self.epsilon_current)}.")
-                episode_steps = []
-                episode_rewards = []
+                episodes_steps = []
+                episodes_rewards = []

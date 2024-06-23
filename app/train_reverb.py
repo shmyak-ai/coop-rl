@@ -65,7 +65,7 @@ def main():
             trainer=conf.agent,
             args_trainer=conf.args_agent,
         )
-        collector.collecting()
+        collector.collecting_training()
         logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
