@@ -75,7 +75,8 @@ class DQNCollectorUniform:
             self.network = network(num_actions=num_actions, inputs_preprocessed=True)
             self.preprocess_fn = preprocess_fn
 
-        self._observation = np.zeros(observation_shape)
+        self._rng = jax.random.key(seed + collector_id)
+        self._observation = np.ones((1, *observation_shape))
         self._build_network()
 
         self.epsilon_fn = epsilon_fn
@@ -89,7 +90,6 @@ class DQNCollectorUniform:
         self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
 
         self.logger.debug(f"Seed: {seed + collector_id}.")
-        self._rng = jax.random.key(seed + collector_id)
 
         with contextlib.suppress(AttributeError):
             self.futures = self.control_actor.get_parameters.remote()

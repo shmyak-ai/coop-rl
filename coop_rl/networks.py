@@ -135,7 +135,7 @@ class NatureDQNNetwork(nn.Module):
         x = nn.relu(x)
         x = nn.Conv(features=64, kernel_size=(3, 3), strides=(1, 1), kernel_init=initializer)(x)
         x = nn.relu(x)
-        x = x.reshape((x.shape[0], -1))
+        x = x.reshape((x.shape[0], -1))  # flatten
         x = nn.Dense(features=512, kernel_init=initializer)(x)
         x = nn.relu(x)
         q_values = nn.Dense(features=self.num_actions, kernel_init=initializer)(x)

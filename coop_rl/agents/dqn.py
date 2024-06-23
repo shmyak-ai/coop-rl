@@ -52,7 +52,7 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     """Creates initial `TrainState`."""
     state_rng, init_rng = jax.random.split(rng)
     model = network(**args_network)
-    params = model.init(init_rng, jnp.ones(obs_shape))["params"]
+    params = model.init(init_rng, jnp.ones((1, *obs_shape)))["params"]
     tx = optimizer(**args_optimizer)
     return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx)
 

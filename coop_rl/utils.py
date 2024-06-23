@@ -22,7 +22,21 @@ import jax.numpy as jnp
 import numpy as np
 import reverb
 import tensorflow as tf
+from gymnasium import ObservationWrapper
+from gymnasium.spaces import Box
 from gymnasium.wrappers import AtariPreprocessing, FrameStack
+
+
+class FirstDimToLast(ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        new_obs_space_shape = list(env.observation_space.shape[1:])
+        new_obs_space_shape.append(env.observation_space.shape[0])
+        self.observation_space = Box(shape=tuple(new_obs_space_shape), low=-np.inf, high=np.inf)
+
+    def observation(self, obs):
+        transposed_obs = np.moveaxis(obs, 0, -1)
+        return transposed_obs
 
 
 class HandlerEnv:
@@ -85,6 +99,7 @@ class HandlerEnvAtari:
         env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=True)
         if stack_size > 1:
             env = FrameStack(env, stack_size)
+            env = FirstDimToLast(env)
         return env
 
     @staticmethod
@@ -386,6 +401,7 @@ def select_action(
         ),
     )
 
+    state = jnp.expand_dims(state, axis=0)
     rng, rng1, rng2 = jax.random.split(rng, num=3)
     p = jax.random.uniform(rng1)
     return rng, jnp.where(
