@@ -219,61 +219,6 @@ class JaxDQNAgent:
 
         return loss
 
-    def training_dopamine(self):
-        transitions_processed = 0
-        for training_step in itertools.count(start=1, step=1):
-            replay_elements = self.replay_actor.sample_from_replay_buffer()
-            self._train_step(replay_elements)
-            transitions_processed += self.batch_size
-
-            if training_step == self.training_steps:
-                self.logger.info(f"Final training step {training_step} reached; finishing.")
-                break
-
-            if training_step % self.summary_writing_period == 0:
-                self.logger.info(f"Training step: {training_step}.")
-                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
-
-            if training_step % self.target_update_period == 0:
-                self.state = self.state.update_target_params()
-
-    def training_reverb(self):
-        transitions_processed = 0
-        timer_fetching = []
-        timer_sampling = []
-        timer_training = []
-        for training_step in itertools.count(start=1, step=1):
-            start_timer = time.perf_counter()
-            replay_elements, fetch_time = self.sampler.sample_from_replay_buffer()
-            timer_sampling.append(time.perf_counter() - start_timer)
-            timer_fetching.append(fetch_time)
-            start_timer = time.perf_counter()
-            loss = self._train_step(replay_elements)
-            timer_training.append(time.perf_counter() - start_timer)
-            transitions_processed += self.batch_size
-
-            if training_step == self.training_steps:
-                self.logger.info(f"Final training step {training_step} reached; finishing.")
-                break
-
-            if training_step % self.summary_writing_period == 0:
-                self.logger.info(f"Training step: {training_step}.")
-                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
-                self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
-                self.logger.info(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
-                self.logger.info(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
-                timer_fetching = []
-                timer_sampling = []
-                timer_training = []
-                self.summary_writer.scalar("loss", loss, self.state.step)
-                self.summary_writer.flush()
-
-            if training_step % self.target_update_period == 0:
-                self.state = self.state.update_target_params()
-
-            if training_step % self.save_period == 0:
-                self.orbax_checkpointer.save(os.path.join(self.workdir, f"chkpt_step_{training_step:07}"), self.state)
-
     def training_dopamine_remote(self):
         #  1. check if there are enough transitions in the replay buffer
         while True:

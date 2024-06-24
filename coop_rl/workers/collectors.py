@@ -15,6 +15,7 @@
 import contextlib
 import itertools
 import logging
+import os
 import sys
 import time
 
@@ -254,6 +255,10 @@ class DQNCollectorUniform:
                 episodes_steps = []
                 episodes_rewards = []
                 period_steps = 0
+                self.trainer.orbax_checkpointer.save(
+                    os.path.join(self.trainer.workdir, f"chkpt_train_step_{self.trainer.state.step:07}"),
+                    self.trainer.state,
+                )
                 phase += 1
                 self.logger.info(f"Phase {phase} begins.")
             if steps >= self.trainer.training_steps * self.train_period_steps:

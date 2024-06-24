@@ -97,7 +97,7 @@ def get_config():
     config.args_agent.min_replay_history = 20000  # in transitions
     config.args_agent.training_steps = 1000000
     config.args_agent.workdir = workdir
-    config.args_agent.loss_type = "huber"
+    config.args_agent.loss_type = "mse"
     config.args_agent.gamma = gamma
     config.args_agent.batch_size = batch_size
     config.args_agent.update_horizon = timesteps - 1
