@@ -58,7 +58,7 @@ class DQNCollectorUniform:
 
         if args_trainer is None:
             args_trainer = {"": None}
-        self.trainer = trainer(**args_trainer, control_actor=control_actor)
+        self.trainer = trainer(**args_trainer, control_actor=control_actor, replay_actor=replay_actor)
 
         self.control_actor = control_actor
         self.replay_actor = replay_actor
@@ -152,7 +152,11 @@ class DQNCollectorUniform:
                 self.collecting_steps > self.trainer.min_replay_history
                 and self.collecting_steps % self.train_period_steps == 0
             ):
-                replay_elements, fetch_time = self.trainer.sampler.sample_from_replay_buffer()
+                with contextlib.suppress(AttributeError):
+                    replay_elements, fetch_time = self.trainer.sampler.sample_from_replay_buffer()
+                with contextlib.suppress(AttributeError):
+                    replay_elements = self.trainer.replay_actor.sample_from_replay_buffer()
+
                 self.trainer._train_step(replay_elements)
 
         with contextlib.suppress(AttributeError):

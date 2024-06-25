@@ -77,20 +77,58 @@ class HandlerEnvAtari:
         if seed is not None:
             seed = int(seed)
         observation, info = self._env.reset(*args, seed=seed, **kwargs)
-        # self.consecutive_steps = 0
-        # self.prev_action = None
-        # call [:] to get a stacked array from gym
         return observation[:], info
 
     def step(self, action, *args, **kwargs):
         observation, reward, terminated, truncated, info = self._env.step(action, *args, **kwargs)
-        # if action == self.prev_action:
-        #     self.consecutive_steps += 1
-        # else:
-        #     self.consecutive_steps = 0
-        # self.prev_action = action
-        # if self.consecutive_steps > 33:
-        #     truncated = True
+        return observation[:], reward, terminated, truncated, info
+
+    @staticmethod
+    def make_env(env_name, stack_size, *args, **kwargs):
+        env = gym.make(env_name, *args, frameskip=1, repeat_action_probability=0, **kwargs)
+        env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=True)
+        if stack_size > 1:
+            env = FrameStack(env, stack_size)
+            env = FirstDimToLast(env)
+        return env
+
+    @staticmethod
+    def check_env(env_name, stack_size, *args, **kwargs):
+        env = HandlerEnvAtari.make_env(env_name, stack_size, *args, **kwargs)
+        return (
+            env.observation_space.shape,
+            env.observation_space.dtype,
+            env.action_space.n,
+        )
+    
+    @property
+    def action_space(self):
+        return self._env.action_space
+    
+    @property
+    def observation_space(self):
+        return self._env.observation_space
+
+    @property
+    def reward_range(self):
+        return self._env.reward_range
+    
+    def close(self):
+        self._env.close()
+
+
+class HandlerEnvAtariDopamine:
+    def __init__(self, env_name, *args, stack_size=1, **kwargs):
+        self._env = HandlerEnvAtari.make_env(env_name, stack_size, *args, **kwargs)
+
+    def reset(self, *args, seed=None, **kwargs):
+        if seed is not None:
+            seed = int(seed)
+        observation, info = self._env.reset(*args, seed=seed, **kwargs)
+        return observation[:], info
+
+    def step(self, action, *args, **kwargs):
+        observation, reward, terminated, truncated, info = self._env.step(action, *args, **kwargs)
         return observation[:], reward, terminated, truncated, info
 
     @staticmethod
@@ -158,7 +196,7 @@ class HandlerDopamineReplay:
             timeout. Episode_end in dopamine. Similar to gymnasium truncated.
         """
         if self._stack_size > 1:
-            last_observation = last_observation[-1, ...]
+            last_observation = last_observation[..., -1]
 
         self._replay.append(
             (
@@ -285,12 +323,6 @@ class HandlerReverbSampler:
     def sample_from_replay_buffer(self):
         start = time.perf_counter()
         info, data = next(self.iterator)
-        # terminated = data["terminated"]
-        # rewards = data["reward"]
-        # if (rewards != 0).any():
-        #     pass
-        # if (terminated != 0).any():
-        #     pass
         fetch_time = time.perf_counter() - start
         return {
             "state": data["observation"][:, 0, ...],

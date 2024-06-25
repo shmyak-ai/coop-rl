@@ -14,7 +14,6 @@
 
 import collections
 
-import numpy as np
 import reverb
 import tensorflow as tf
 
@@ -44,15 +43,19 @@ class ControlActor:
 
     def get_parameters_done(self):
         return self.get_parameters(), self.done
-    
+
     def store_size(self):
         return len(self.params_store)
 
 
 class ReplayActorDopamine:
-    def __init__(self, stack_size=1, **kwargs):
+    def __init__(self, observation_shape, stack_size=1, **kwargs):
         self.stacking = stack_size > 1
-        self._replay = circular_replay_buffer.OutOfGraphReplayBuffer(stack_size=stack_size, **kwargs)
+        if self.stacking:
+            observation_shape = observation_shape[:-1]
+        self._replay = circular_replay_buffer.OutOfGraphReplayBuffer(
+            stack_size=stack_size, observation_shape=observation_shape, **kwargs
+        )
 
     def add_episode(self, episode_transitions):
         """
@@ -73,8 +76,6 @@ class ReplayActorDopamine:
         types = self._replay.get_transition_elements()
         replay_elements = collections.OrderedDict()
         for element, element_type in zip(samples, types, strict=False):
-            if element_type.name in ("state", "next_state"):
-                element = np.moveaxis(element, -1, 1) if self.stacking else element[..., 0]
             replay_elements[element_type.name] = element
 
         return replay_elements
@@ -82,15 +83,8 @@ class ReplayActorDopamine:
 
 class DQNUniformReverbServer:
     def __init__(
-        self,
-        batch_size,
-        replay_capacity,
-        observation_shape,
-        timesteps,
-        buffer_server_port=None,
-        checkpointer=None
-        ):
-
+        self, batch_size, replay_capacity, observation_shape, timesteps, buffer_server_port=None, checkpointer=None
+    ):
         min_size = batch_size
         max_size = replay_capacity
 
@@ -110,19 +104,15 @@ class DQNUniformReverbServer:
                     max_size=int(max_size),
                     rate_limiter=reverb.rate_limiters.MinSize(min_size),
                     signature={
-                        'observation':
-                            tf.TensorSpec([timesteps, *observation_spec.shape], observation_spec.dtype),
-                        'action':
-                            tf.TensorSpec([timesteps, *action_spec.shape], action_spec.dtype),
-                        'reward':
-                            tf.TensorSpec([timesteps, *rewards_spec.shape], rewards_spec.dtype),
-                        'terminated':
-                            tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
-                    }
+                        "observation": tf.TensorSpec([timesteps, *observation_spec.shape], observation_spec.dtype),
+                        "action": tf.TensorSpec([timesteps, *action_spec.shape], action_spec.dtype),
+                        "reward": tf.TensorSpec([timesteps, *rewards_spec.shape], rewards_spec.dtype),
+                        "terminated": tf.TensorSpec([timesteps, *dones_spec.shape], dones_spec.dtype),
+                    },
                 )
             ],
             port=buffer_server_port,
-            checkpointer=checkpointer
+            checkpointer=checkpointer,
         )
 
     @property

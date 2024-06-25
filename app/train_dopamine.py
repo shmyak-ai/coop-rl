@@ -15,6 +15,7 @@
 """The entry point to launch local / ray distributed training."""
 
 import argparse
+import logging
 import os
 import tempfile
 import time
@@ -42,6 +43,8 @@ def main():
 
     args = parser.parse_args()
 
+    logger = logging.getLogger("ray")  # ray logger appears after import ray
+
     if not os.path.exists(args.workdir):
         os.mkdir(args.workdir)
     workdir = tempfile.mkdtemp(prefix=args.workdir)
@@ -56,20 +59,14 @@ def main():
     if args.mode == "local":
         replay_actor = conf.replay_actor(**conf.args_replay)
         collector = conf.collector(
-            collector_id=0,
             **conf.args_collector,
-            control_actor=None,
+            control_actor=conf.control_actor(),
+            trainer=conf.agent,
+            args_trainer=conf.args_agent,
             replay_actor=replay_actor,
         )
-        trainer = conf.agent(
-            **conf.args_agent,
-            control_actor=None,
-            replay_actor=replay_actor,
-        )
-        collector.collecting_dopamine(3)
-        trainer.training_dopamine()
-
-        print("Done.")
+        collector.collecting_training()
+        logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
         ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
