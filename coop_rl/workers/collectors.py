@@ -92,8 +92,13 @@ class DQNCollectorUniform:
 
         self.logger.debug(f"Seed: {seed + collector_id}.")
 
-        with contextlib.suppress(AttributeError):
+        try:
+            parameters = ray.get(self.control_actor.get_parameters.remote())
             self.futures = self.control_actor.get_parameters.remote()
+        except AttributeError:
+            parameters = self.control_actor.get_parameters()
+        if parameters is not None:
+            self.online_params = parameters
 
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
@@ -224,6 +229,7 @@ class DQNCollectorUniform:
                 if terminated or truncated:
                     break
                 else:
+                    reward = np.clip(reward, -1, 1)
                     action = self._step(action, reward, observation)
 
             self._end_episode(action, reward, terminated, truncated)
