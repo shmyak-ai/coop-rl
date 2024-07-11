@@ -23,7 +23,7 @@ from coop_rl.replay_memory import circular_replay_buffer
 class ControlActor:
     def __init__(self):
         self.done = False
-        self.params_store = []
+        self.params_store = collections.deque(maxlen=10)
 
     def set_done(self):
         self.done = True
@@ -32,11 +32,13 @@ class ControlActor:
         return self.done
 
     def set_parameters(self, w):
+        # add to the right side of the deque
         self.params_store.append(w)
 
     def get_parameters(self):
         try:
-            w = self.params_store.pop(0)
+            # pop from the right side
+            w = self.params_store.pop()
         except IndexError:
             return None
         return {"params": w}

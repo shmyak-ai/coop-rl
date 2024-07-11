@@ -95,7 +95,7 @@ def get_config():
     config.agent = JaxDQNAgent
     config.args_agent = ml_collections.ConfigDict()
     config.args_agent.min_replay_history = 20000  # in transitions
-    config.args_agent.training_steps = 1000000
+    config.args_agent.training_steps = 10000000
     config.args_agent.workdir = workdir
     config.args_agent.loss_type = "mse"
     config.args_agent.gamma = gamma

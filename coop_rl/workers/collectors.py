@@ -16,8 +16,10 @@ import contextlib
 import itertools
 import logging
 import os
+import random
 import sys
 import time
+from collections import deque
 
 import jax
 import numpy as np
@@ -78,6 +80,8 @@ class DQNCollectorUniform:
 
         self._rng = jax.random.key(seed + collector_id)
         self._observation = np.ones((1, *observation_shape))
+        # to improve obs diversity during exp collection
+        self.online_params = deque(maxlen=10)
         self._build_network()
 
         self.epsilon_fn = epsilon_fn
@@ -98,12 +102,12 @@ class DQNCollectorUniform:
         except AttributeError:
             parameters = self.control_actor.get_parameters()
         if parameters is not None:
-            self.online_params = parameters
+            self.online_params.append(parameters)
 
     def _build_network(self):
         self._rng, rng = jax.random.split(self._rng)
         state = self.preprocess_fn(self._observation)
-        self.online_params = self.network.init(rng, x=state)
+        self.online_params.append(self.network.init(rng, x=state))
 
     def _initialize_episode(self):
         """Returns the agent's first action for this episode.
@@ -119,7 +123,7 @@ class DQNCollectorUniform:
 
         self._rng, action, self.epsilon_current = select_action(
             self.network,
-            self.online_params,
+            random.choice(self.online_params),
             self.preprocess_fn(self._observation),
             self._rng,
             self.num_actions,
@@ -162,23 +166,19 @@ class DQNCollectorUniform:
                 with contextlib.suppress(AttributeError):
                     replay_elements = self.trainer.replay_actor.sample_from_replay_buffer()
 
+                # train_step will put new parameters into control actor store
                 self.trainer._train_step(replay_elements)
+                # and fetch it back
+                parameters = self.control_actor.get_parameters()
+                if parameters is not None:
+                    self.online_params.append(parameters)
 
-        with contextlib.suppress(AttributeError):
             if self.collecting_steps % (self.trainer.target_update_period * self.train_period_steps) == 0:
                 self.trainer.state = self.trainer.state.update_target_params()
 
-        try:
-            parameters = ray.get(self.futures)
-            self.futures = self.control_actor.get_parameters.remote()
-        except AttributeError:
-            parameters = self.control_actor.get_parameters()
-        if parameters is not None:
-            self.online_params = parameters
-
         self._rng, action, self.epsilon_current = select_action(
             self.network,
-            self.online_params,
+            random.choice(self.online_params),
             self.preprocess_fn(self._observation),
             self._rng,
             self.num_actions,
@@ -233,6 +233,12 @@ class DQNCollectorUniform:
                     action = self._step(action, reward, observation)
 
             self._end_episode(action, reward, terminated, truncated)
+
+            with contextlib.suppress(AttributeError):
+                parameters = ray.get(self.futures)
+                if parameters is not None:
+                    self.online_params.append(parameters)
+                self.futures = self.control_actor.get_parameters.remote()
         finally:
             self._replay.close()
         return steps, rewards
@@ -281,7 +287,7 @@ class DQNCollectorUniform:
                 self.logger.info("Done signal received; finishing.")
                 break
             if parameters is not None:
-                self.online_params = parameters
+                self.online_params.append(parameters)
             self.run_one_episode()
             ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
 
