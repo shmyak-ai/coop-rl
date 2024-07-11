@@ -41,7 +41,7 @@ def get_config():
     table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
-    num_collectors = 1
+    num_collectors = 4
     replay_capacity = 1000000  # in transitions
     gamma = 0.99
     batch_size = 32  # > 1: target_q in dqn limitation

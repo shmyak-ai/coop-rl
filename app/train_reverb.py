@@ -80,6 +80,10 @@ def main():
         reverb_server = conf.reverb_server.remote(**conf.args_reverb_server)  # noqa: F841
         conf.table_name = ray.get(reverb_server.table_name.remote())
         control_actor = conf.control_actor.remote()
+        trainer_agent = conf.agent.remote(
+            **conf.args_agent,
+            control_actor=control_actor,
+        )
         collector_agents = [
             conf.collector.remote(
                 collector_id=100 * i,
@@ -88,14 +92,10 @@ def main():
             )
             for i in range(1, conf.num_collectors + 1)
         ]
-        trainer_agent = conf.agent.remote(
-            **conf.args_agent,
-            control_actor=control_actor,
-        )
 
         # remote calls
-        collect_info_futures = [agent.collecting_reverb_remote.remote() for agent in collector_agents]
-        trainer_futures = trainer_agent.training_reverb_remote.remote()
+        collect_info_futures = [agent.collecting.remote() for agent in collector_agents]
+        trainer_futures = trainer_agent.training.remote()
         # eval_info_futures = [agent.evaluating.remote() for agent in evaluator_agents]
 
         # get results

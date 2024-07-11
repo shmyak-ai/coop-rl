@@ -219,41 +219,13 @@ class JaxDQNAgent:
 
         return loss
 
-    def training_dopamine_remote(self):
+    def training(self):
         #  1. check if there are enough transitions in the replay buffer
         while True:
-            add_count = ray.get(self.replay_actor.add_count.remote())
-            self.logger.info(f"Add count: {add_count}.")
-            if add_count >= self.min_replay_history:
-                self.logger.info("Start training.")
-                break
-            else:
-                self.logger.info("Waiting.")
-                time.sleep(1)
-        #  2. training
-        transitions_processed = 0
-        for training_step in itertools.count(start=1, step=1):
-            replay_elements = ray.get(self.replay_actor.sample_from_replay_buffer.remote())
-            self._train_step(replay_elements)
-            transitions_processed += self.batch_size
-
-            if training_step == self.training_steps:
-                ray.get(self.control_actor.set_done.remote())
-                self.logger.info(f"Final training step {training_step} reached; finishing.")
-                break
-
-            if training_step % self.summary_writing_period == 0:
-                self.logger.info(f"Training step: {training_step}.")
-                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
-                self.logger.info(f"Transitions added to the buffer: {ray.get(self.replay_actor.add_count.remote())}.")
-
-            if training_step % self.target_update_period == 0:
-                self.state = self.state.update_target_params()
-
-    def training_reverb_remote(self):
-        #  1. check if there are enough transitions in the replay buffer
-        while True:
-            add_count = self.sampler.add_count()
+            try:
+                add_count = self.sampler.add_count()
+            except AttributeError:
+                add_count = ray.get(self.replay_actor.add_count.remote())
             self.logger.info(f"Current buffer size: {add_count}.")
             if add_count >= self.min_replay_history:
                 self.logger.info("Start training.")
@@ -268,7 +240,12 @@ class JaxDQNAgent:
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
             start_timer = time.perf_counter()
-            replay_elements, fetch_time = self.sampler.sample_from_replay_buffer()
+            try:
+                replay_elements, fetch_time = self.sampler.sample_from_replay_buffer()
+            except AttributeError:
+                start = time.perf_counter()
+                replay_elements = ray.get(self.replay_actor.sample_from_replay_buffer.remote())
+                fetch_time = time.perf_counter() - start
             timer_sampling.append(time.perf_counter() - start_timer)
             timer_fetching.append(fetch_time)
             start_timer = time.perf_counter()

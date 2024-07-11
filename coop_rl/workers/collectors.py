@@ -280,18 +280,7 @@ class DQNCollectorUniform:
             if steps >= self.trainer.training_steps * self.train_period_steps:
                 break
 
-    def collecting_dopamine_remote(self):
-        while True:
-            parameters, done = ray.get(self.control_actor.get_parameters_done.remote())
-            if done:
-                self.logger.info("Done signal received; finishing.")
-                break
-            if parameters is not None:
-                self.online_params.append(parameters)
-            self.run_one_episode()
-            ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
-
-    def collecting_reverb_remote(self):
+    def collecting(self):
         episodes_steps = []
         episodes_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
@@ -300,6 +289,8 @@ class DQNCollectorUniform:
                 self.logger.info("Done signal received; finishing.")
                 break
             episode_steps, episode_rewards = self.run_one_episode()
+            with contextlib.suppress(AttributeError):
+                ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
             episodes_steps.append(episode_steps)
             episodes_rewards.append(episode_rewards)
             if episodes_count % self.report_period == 0:
