@@ -297,5 +297,6 @@ class DQNCollectorUniform:
                 self.logger.info(f"Mean episode length: {sum(episodes_steps) / len(episodes_steps):.4f}.")
                 self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
                 self.logger.info(f"Current epsilon: {float(self.epsilon_current)}.")
+                self.logger.info(f"Online params deque size: {len(self.online_params)}.")
                 episodes_steps = []
                 episodes_rewards = []

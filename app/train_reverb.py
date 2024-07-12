@@ -29,6 +29,17 @@ configs = {
     "classic_control": None,
 }
 
+runtime_env_cpu = {
+    "env_vars": {
+        "JAX_PLATFORMS": "cpu",
+    }
+}
+runtime_env_debug = {
+    "env_vars": {
+        "RAY_DEBUG": "1",
+    }
+}
+
 
 def main():
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
@@ -69,11 +80,11 @@ def main():
         logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
-        ray.init(num_cpus=conf.num_collectors + 2, num_gpus=1)
+        ray.init(runtime_env=runtime_env_debug)
 
-        conf.control_actor = ray.remote(num_cpus=0, num_gpus=0)(conf.control_actor)
-        conf.reverb_server = ray.remote(num_cpus=1, num_gpus=0)(conf.reverb_server)
-        conf.collector = ray.remote(num_cpus=1, num_gpus=0)(conf.collector)
+        conf.control_actor = ray.remote(num_cpus=0, num_gpus=0, runtime_env=runtime_env_cpu)(conf.control_actor)
+        conf.reverb_server = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.reverb_server)
+        conf.collector = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization

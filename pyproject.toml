@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ml-cpu = [
-  "jax[cpu]",
+  "jax",
   "tensorflow",
   "tensorflow-probability",
   "tensorflow-datasets",
@@ -32,6 +32,19 @@ ml-cpu = [
   "clu",
   "ml-collections",
   "ray[default]",
+  "dm-reverb[tensorflow]",
+]
+ml-gpu = [
+  "jax[cuda12]",
+  "tensorflow",
+  "tensorflow-probability",
+  "tensorflow-datasets",
+  "optax",
+  "flax",
+  "clu",
+  "ml-collections",
+  "ray[default]",
+  "dm-reverb[tensorflow]",
 ]
 
 [tool.setuptools.packages.find]

@@ -21,6 +21,7 @@ Modifications to the vanilla:
 
 """
 
+import contextlib
 import functools
 import itertools
 import logging
@@ -117,6 +118,7 @@ class JaxDQNAgent:
         target_update_period,
         summary_writing_period,
         save_period,
+        synchronization_period=100,
         min_replay_history=20000,
         replay_actor=None,
         control_actor=None,
@@ -170,6 +172,7 @@ class JaxDQNAgent:
         self._loss_type = loss_type
 
         self.target_update_period = target_update_period
+        self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
         self.save_period = save_period
 
@@ -211,12 +214,8 @@ class JaxDQNAgent:
             self._loss_type,
         )
 
-        try:
-            ray.get(self.futures)
-            self.futures = self.control_actor.set_parameters.remote(self.state.params)
-        except AttributeError:
+        with contextlib.suppress(TypeError):
             self.control_actor.set_parameters(self.state.params)
-
         return loss
 
     def training(self):
@@ -249,10 +248,10 @@ class JaxDQNAgent:
             timer_sampling.append(time.perf_counter() - start_timer)
             timer_fetching.append(fetch_time)
             start_timer = time.perf_counter()
-            try:
-                loss = self._train_step(replay_elements)
-            except Exception as e:
-                self.logger.debug(e)
+            # try:
+            loss = self._train_step(replay_elements)
+            # except Exception as e:
+            #     self.logger.debug(e)
             timer_training.append(time.perf_counter() - start_timer)
             transitions_processed += self.batch_size
 
@@ -279,6 +278,10 @@ class JaxDQNAgent:
 
             if training_step % self.target_update_period == 0:
                 self.state = self.state.update_target_params()
+
+            if training_step % self.synchronization_period == 0:
+                ray.get(self.futures)
+                self.futures = self.control_actor.set_parameters.remote(self.state.params)
 
             if training_step % self.save_period == 0:
                 self.orbax_checkpointer.save(os.path.join(self.workdir, f"chkpt_step_{training_step:07}"), self.state)
