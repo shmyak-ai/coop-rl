@@ -41,7 +41,7 @@ def get_config():
     table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
-    num_collectors = 1
+    num_collectors = 5
     replay_capacity = 1000000  # in transitions
     gamma = 0.99
     batch_size = 32  # > 1: target_q in dqn limitation
@@ -73,12 +73,12 @@ def get_config():
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
-    config.args_collector.report_period = 100  # per episodes sampled
+    config.args_collector.report_period = 25  # per episodes sampled
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.seed = seed
-    config.args_collector.warmup_steps = 20000
+    config.args_collector.warmup_steps = 10000
     config.args_collector.epsilon_fn = linearly_decaying_epsilon
     config.args_collector.epsilon = 0.01
     config.args_collector.epsilon_decay_period = int(replay_capacity / 4 / num_collectors)
@@ -102,8 +102,9 @@ def get_config():
     config.args_agent.batch_size = batch_size
     config.args_agent.update_horizon = timesteps - 1
     config.args_agent.target_update_period = 2000  # periods are in training_steps
-    config.args_agent.summary_writing_period = 200  # logging and reporting
-    config.args_agent.save_period = 10000  # orbax checkpointing
+    config.args_agent.summary_writing_period = 2000  # logging and reporting
+    config.args_agent.save_period = 30000  # orbax checkpointing
+    config.args_agent.synchronization_period = 10  # send params to control actor
     config.args_agent.observation_shape = observation_shape
     config.args_agent.seed = seed
     config.args_agent.network = network

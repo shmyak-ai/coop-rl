@@ -43,6 +43,7 @@ runtime_env_debug = {
 
 def main():
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
+    parser.add_argument('--debug', action='store_true', help='Ray debug environment activation.')
     parser.add_argument("--mode", required=True, type=str, choices=("local", "distributed"))
     parser.add_argument("--config", required=True, type=str, choices=("classic_control", "atari"))
     parser.add_argument(
@@ -80,7 +81,10 @@ def main():
         logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
-        ray.init(runtime_env=runtime_env_debug)
+        if args.debug:
+            ray.init(runtime_env=runtime_env_debug)
+        else:
+            ray.init()
 
         conf.control_actor = ray.remote(num_cpus=0, num_gpus=0, runtime_env=runtime_env_cpu)(conf.control_actor)
         conf.reverb_server = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.reverb_server)

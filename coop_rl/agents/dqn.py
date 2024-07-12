@@ -118,7 +118,7 @@ class JaxDQNAgent:
         target_update_period,
         summary_writing_period,
         save_period,
-        synchronization_period=100,
+        synchronization_period,
         min_replay_history=20000,
         replay_actor=None,
         control_actor=None,

@@ -214,16 +214,14 @@ class DQNCollectorUniform:
           The number of steps taken and the total reward.
         """
 
-        steps = 0
         rewards = 0
         try:
             self._replay.reset()
             action = self._initialize_episode()
 
             # Keep interacting until terminated / truncated state.
-            while True:
+            for step in itertools.count(start=1, step=1):
                 observation, reward, terminated, truncated, info = self._environment.step(action)
-                steps += 1
                 rewards += reward
 
                 if terminated or truncated:
@@ -232,16 +230,17 @@ class DQNCollectorUniform:
                     reward = np.clip(reward, -1, 1)
                     action = self._step(action, reward, observation)
 
-            self._end_episode(action, reward, terminated, truncated)
+                if step % 25 == 0:
+                    with contextlib.suppress(AttributeError):
+                        parameters = ray.get(self.futures)
+                        if parameters is not None:
+                            self.online_params.append(parameters)
+                        self.futures = self.control_actor.get_parameters.remote()
 
-            with contextlib.suppress(AttributeError):
-                parameters = ray.get(self.futures)
-                if parameters is not None:
-                    self.online_params.append(parameters)
-                self.futures = self.control_actor.get_parameters.remote()
+            self._end_episode(action, reward, terminated, truncated)
         finally:
             self._replay.close()
-        return steps, rewards
+        return step, rewards
 
     def collecting_training(self):
         steps, period_steps = 0, 0
