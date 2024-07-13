@@ -107,6 +107,7 @@ def main():
         else:
             ray.init()
 
+        # call jax stuff after ray init - after forking
         if args.orbax_checkpoint_dir is not None:
             conf.args_state_recover.checkpointdir = args.orbax_checkpoint_dir
             flax_state = conf.state_recover(**conf.args_state_recover)

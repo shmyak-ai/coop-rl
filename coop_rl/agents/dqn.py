@@ -289,7 +289,7 @@ class JaxDQNAgent:
 
             if training_step % self.save_period == 0:
                 orbax_checkpoint_path = os.path.join(
-                    self.trainer.workdir, f"chkpt_train_step_{self.trainer.state.step:07}"
+                    self.workdir, f"chkpt_train_step_{self.state.step:07}"
                 )
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
