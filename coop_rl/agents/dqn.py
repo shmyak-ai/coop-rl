@@ -125,6 +125,7 @@ class JaxDQNAgent:
         handler_sampler=lambda *args, **kwargs: None,
         args_handler_sampler=None,
         seed=None,
+        state=None,
         preprocess_fn=networks.identity_preprocess_fn,
     ):
         """Initializes the agent and constructs the necessary components.
@@ -183,7 +184,10 @@ class JaxDQNAgent:
         # orbax so far cannot recognize a new key<fry> dtype, use the old one
         self._rng = jax.random.PRNGKey(seed)  # jax.random.key(seed)
         self._rng, rng = jax.random.split(self._rng)
-        self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
+        if state is None:
+            self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
+        else:
+            self.state = state
 
         try:
             self.futures = self.control_actor.set_parameters.remote(self.state.params)
@@ -284,4 +288,9 @@ class JaxDQNAgent:
                 self.futures = self.control_actor.set_parameters.remote(self.state.params)
 
             if training_step % self.save_period == 0:
-                self.orbax_checkpointer.save(os.path.join(self.workdir, f"chkpt_step_{training_step:07}"), self.state)
+                orbax_checkpoint_path = os.path.join(
+                    self.trainer.workdir, f"chkpt_train_step_{self.trainer.state.step:07}"
+                )
+                self.orbax_checkpointer.save(orbax_checkpoint_path, self.state)
+                self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+                self.logger.info(f"Reverb checkpoint is in: {self.sampler.checkpoint()}")

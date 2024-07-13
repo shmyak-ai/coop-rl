@@ -26,6 +26,7 @@ from coop_rl.utils import (
     HandlerReverbReplay,
     HandlerReverbSampler,
     linearly_decaying_epsilon,
+    restore_dqn_flax_state,
 )
 from coop_rl.workers import actors
 from coop_rl.workers.collectors import DQNCollectorUniform
@@ -38,11 +39,14 @@ def get_config():
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
+    checkpointdir = config_dict.FieldReference(None, field_type=str)
     table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
     num_collectors = 5
     replay_capacity = 1000000  # in transitions
+    learning_rate = 6.25e-5
+    eps = 1.5e-4
     gamma = 0.99
     batch_size = 32  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
@@ -60,6 +64,14 @@ def get_config():
     config.stack_size = stack_size
     config.workdir = workdir
     config.table_name = table_name
+
+    config.state_recover = restore_dqn_flax_state
+    config.args_state_recover = ml_collections.ConfigDict()
+    config.args_state_recover.num_actions = num_actions
+    config.args_state_recover.observation_shape = observation_shape
+    config.args_state_recover.learning_rate = learning_rate
+    config.args_state_recover.eps = eps
+    config.args_state_recover.checkpointdir = checkpointdir
 
     config.control_actor = actors.ControlActor
 
@@ -112,8 +124,8 @@ def get_config():
     config.args_agent.args_network.num_actions = num_actions
     config.args_agent.optimizer = optax.adam
     config.args_agent.args_optimizer = ml_collections.ConfigDict()
-    config.args_agent.args_optimizer.learning_rate = 6.25e-5
-    config.args_agent.args_optimizer.eps = 1.5e-4
+    config.args_agent.args_optimizer.learning_rate = learning_rate
+    config.args_agent.args_optimizer.eps = eps
     config.args_agent.handler_sampler = HandlerReverbSampler
     config.args_agent.args_handler_sampler = ml_collections.ConfigDict()
     config.args_agent.args_handler_sampler.gamma = gamma

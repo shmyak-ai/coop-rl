@@ -21,12 +21,17 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
+import orbax.checkpoint as ocp
 import reverb
 import tensorflow as tf
 from gymnasium import ObservationWrapper
 from gymnasium.spaces import Box
 from gymnasium.wrappers import AtariPreprocessing
 from gymnasium.wrappers.frame_stack import LazyFrames
+
+from coop_rl import networks
+from coop_rl.agents import dqn
 
 
 class FrameStack(gym.ObservationWrapper, gym.utils.RecordConstructorArgs):
@@ -436,6 +441,9 @@ class HandlerReverbSampler:
     def add_count(self):
         table_info = self.client.server_info()[self.table_name]
         return table_info.current_size
+    
+    def checkpoint(self):
+        return self.client.checkpoint()
 
 
 def timeit(func):
@@ -544,3 +552,15 @@ def select_action(
         ),
         epsilon,
     )
+
+
+def restore_dqn_flax_state(num_actions, observation_shape, learning_rate, eps, checkpointdir):
+    orbax_checkpointer = ocp.StandardCheckpointer()
+    args_network = {"num_actions": num_actions}
+    network = networks.NatureDQNNetwork
+    optimizer = optax.adam
+    args_optimizer = {"learning_rate": learning_rate, "eps": eps}
+    rng = jax.random.PRNGKey(0)  # jax.random.key(0)
+    state = dqn.create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
+    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+    return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))

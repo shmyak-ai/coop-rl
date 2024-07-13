@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import ray
+import reverb
 from configs.reverb import atari
 
 configs = {
@@ -43,9 +44,8 @@ runtime_env_debug = {
 
 def main():
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
-    parser.add_argument('--debug-ray', action='store_true', help='Ray debug environment activation.')
-    parser.add_argument('--debug-log', action='store_true', help='Enable debug logs.')
-    parser.add_argument('--debug', action='store_true', help='Ray debug environment activation.')
+    parser.add_argument("--debug-ray", action="store_true", help="Ray debug environment activation.")
+    parser.add_argument("--debug-log", action="store_true", help="Enable debug logs.")
     parser.add_argument("--mode", required=True, type=str, choices=("local", "distributed"))
     parser.add_argument("--config", required=True, type=str, choices=("classic_control", "atari"))
     parser.add_argument(
@@ -54,12 +54,14 @@ def main():
         default=os.path.join(Path.home(), "coop-rl_results/"),
         help="Path to the tensorboard logs, checkpoints, etc.",
     )
+    parser.add_argument("--orbax-checkpoint-dir", type=str, help="The absolute path to the orbax checkpoint dir")
+    parser.add_argument("--reverb-checkpoint-dir", type=str, help="The absolute path to the reverb checkpoint dir")
 
     args = parser.parse_args()
 
     logger = logging.getLogger("ray")  # ray logger appears after import ray
     if args.debug_log:
-        logger.setLevel('DEBUG')
+        logger.setLevel("DEBUG")
 
     if not os.path.exists(args.workdir):
         os.mkdir(args.workdir)
@@ -71,15 +73,30 @@ def main():
         conf.env_name, conf.stack_size
     )
     conf.workdir = workdir
+    if args.reverb_checkpoint_dir is not None:
+        checkpointer = reverb.platform.checkpointers_lib.DefaultCheckpointer(
+            path=args.reverb_checkpoint_dir.rsplit("/", 1)[0]
+        )
+    else:
+        checkpointer = None
 
     if args.mode == "local":
-        reverb_server = conf.reverb_server(**conf.args_reverb_server)  # noqa: F841
+        if args.orbax_checkpoint_dir is not None:
+            conf.args_state_recover.checkpointdir = args.orbax_checkpoint_dir
+            flax_state = conf.state_recover(**conf.args_state_recover)
+            # update collector arguments if there is a state available
+            conf.args_collector.epsilon_decay_period = 1
+            conf.args_collector.warmup_steps = 1
+        else:
+            flax_state = None
+        reverb_server = conf.reverb_server(**conf.args_reverb_server, checkpointer=checkpointer)  # noqa: F841
         conf.table_name = reverb_server.table_name()
         collector = conf.collector(
             **conf.args_collector,
             control_actor=conf.control_actor(),
             trainer=conf.agent,
             args_trainer=conf.args_agent,
+            state=flax_state,
         )
         collector.collecting_training()
         logger.info("Done.")
@@ -90,24 +107,34 @@ def main():
         else:
             ray.init()
 
+        if args.orbax_checkpoint_dir is not None:
+            conf.args_state_recover.checkpointdir = args.orbax_checkpoint_dir
+            flax_state = conf.state_recover(**conf.args_state_recover)
+            # update collector arguments if there is a state available
+            conf.args_collector.epsilon_decay_period = 1
+            conf.args_collector.warmup_steps = 1
+        else:
+            flax_state = None
         conf.control_actor = ray.remote(num_cpus=0, num_gpus=0, runtime_env=runtime_env_cpu)(conf.control_actor)
         conf.reverb_server = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.reverb_server)
         conf.collector = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.collector)
         conf.agent = ray.remote(num_cpus=1, num_gpus=1)(conf.agent)
 
         # initialization
-        reverb_server = conf.reverb_server.remote(**conf.args_reverb_server)  # noqa: F841
+        reverb_server = conf.reverb_server.remote(**conf.args_reverb_server, checkpointer=checkpointer)  # noqa: F841
         conf.table_name = ray.get(reverb_server.table_name.remote())
         control_actor = conf.control_actor.remote()
         trainer_agent = conf.agent.remote(
             **conf.args_agent,
             control_actor=control_actor,
+            state=flax_state,
         )
         collector_agents = [
             conf.collector.remote(
                 collector_id=100 * i,
                 **conf.args_collector,
                 control_actor=control_actor,
+                state=flax_state,
             )
             for i in range(1, conf.num_collectors + 1)
         ]

@@ -53,6 +53,7 @@ class DQNCollectorUniform:
         trainer=lambda *args, **kwargs: None,
         args_trainer=None,
         seed=None,
+        state=None,
         preprocess_fn=None,
     ):
         self.logger = logging.getLogger("ray")
@@ -60,7 +61,7 @@ class DQNCollectorUniform:
 
         if args_trainer is None:
             args_trainer = {"": None}
-        self.trainer = trainer(**args_trainer, control_actor=control_actor, replay_actor=replay_actor)
+        self.trainer = trainer(**args_trainer, control_actor=control_actor, replay_actor=replay_actor, state=state)
 
         self.control_actor = control_actor
         self.replay_actor = replay_actor
@@ -82,7 +83,12 @@ class DQNCollectorUniform:
         self._observation = np.ones((1, *observation_shape))
         # to improve obs diversity during exp collection
         self.online_params = deque(maxlen=10)
-        self._build_network()
+        if state is None:
+            self._build_network()
+        else:
+            # network.init gives a dict "params"
+            # network.apply also needs "params"
+            self.online_params.append({"params": state.params})
 
         self.epsilon_fn = epsilon_fn
         self.epsilon = epsilon
@@ -270,10 +276,15 @@ class DQNCollectorUniform:
                 episodes_steps = []
                 episodes_rewards = []
                 period_steps = 0
+                orbax_checkpoint_path = os.path.join(
+                    self.trainer.workdir, f"chkpt_train_step_{self.trainer.state.step:07}"
+                )
                 self.trainer.orbax_checkpointer.save(
-                    os.path.join(self.trainer.workdir, f"chkpt_train_step_{self.trainer.state.step:07}"),
+                    orbax_checkpoint_path,
                     self.trainer.state,
                 )
+                self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+                self.logger.info(f"Reverb checkpoint is in: {self.trainer.sampler.checkpoint()}")
                 phase += 1
                 self.logger.info(f"Phase {phase} begins.")
             if steps >= self.trainer.training_steps * self.train_period_steps:
