@@ -264,12 +264,12 @@ class JaxDQNAgent:
                 store_size = ray.get(self.control_actor.store_size.remote())
                 buffer_size = self.sampler.add_count()
                 self.logger.info(f"Training step: {training_step}.")
-                self.logger.info(f"Weights store size: {store_size}.")
-                self.logger.info(f"Current buffer size: {buffer_size}.")
+                self.logger.debug(f"Weights store size: {store_size}.")
+                self.logger.debug(f"Current buffer size: {buffer_size}.")
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
                 self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
-                self.logger.info(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
-                self.logger.info(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
+                self.logger.debug(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
+                self.logger.debug(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []

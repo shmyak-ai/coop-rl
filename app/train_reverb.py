@@ -43,6 +43,8 @@ runtime_env_debug = {
 
 def main():
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
+    parser.add_argument('--debug-ray', action='store_true', help='Ray debug environment activation.')
+    parser.add_argument('--debug-log', action='store_true', help='Enable debug logs.')
     parser.add_argument('--debug', action='store_true', help='Ray debug environment activation.')
     parser.add_argument("--mode", required=True, type=str, choices=("local", "distributed"))
     parser.add_argument("--config", required=True, type=str, choices=("classic_control", "atari"))
@@ -56,6 +58,8 @@ def main():
     args = parser.parse_args()
 
     logger = logging.getLogger("ray")  # ray logger appears after import ray
+    if args.debug_log:
+        logger.setLevel('DEBUG')
 
     if not os.path.exists(args.workdir):
         os.mkdir(args.workdir)
@@ -81,7 +85,7 @@ def main():
         logger.info("Done.")
     elif args.mode == "distributed":
         # collectors, agent, replay actor use cpus
-        if args.debug:
+        if args.debug_ray:
             ray.init(runtime_env=runtime_env_debug)
         else:
             ray.init()
