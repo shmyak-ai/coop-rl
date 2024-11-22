@@ -127,6 +127,7 @@ class JaxDQNAgent:
         seed=None,
         state=None,
         preprocess_fn=networks.identity_preprocess_fn,
+        log_level="INFO",
     ):
         """Initializes the agent and constructs the necessary components.
 
@@ -153,7 +154,8 @@ class JaxDQNAgent:
             preprocesses (such as normalizing the pixel values between 0 and 1)
             before passing it to the Q-network. Defaults to None.
         """
-        self.logger  = logging.getLogger("ray")
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
 
         self.workdir = workdir
         seed = int(time.time() * 1e6) if seed is None else seed

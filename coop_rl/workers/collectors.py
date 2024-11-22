@@ -55,8 +55,10 @@ class DQNCollectorUniform:
         seed=None,
         state=None,
         preprocess_fn=None,
+        log_level="INFO",
     ):
-        self.logger = logging.getLogger("ray")
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
         self.report_period = report_period
 
         if args_trainer is None:

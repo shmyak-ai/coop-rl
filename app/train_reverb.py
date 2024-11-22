@@ -59,9 +59,11 @@ def main():
 
     args = parser.parse_args()
 
-    logger = logging.getLogger("ray")  # ray logger appears after import ray
+    logger = logging.getLogger(__name__)
+    log_level = "INFO"
     if args.debug_log:
-        logger.setLevel("DEBUG")
+        log_level = "DEBUG"
+        logger.setLevel(log_level)
 
     if not os.path.exists(args.workdir):
         os.mkdir(args.workdir)
@@ -129,6 +131,7 @@ def main():
             **conf.args_agent,
             control_actor=control_actor,
             state=flax_state,
+            log_level=log_level,
         )
         collector_agents = [
             conf.collector.remote(
@@ -136,6 +139,7 @@ def main():
                 **conf.args_collector,
                 control_actor=control_actor,
                 state=flax_state,
+                log_level=log_level,
             )
             for i in range(1, conf.num_collectors + 1)
         ]

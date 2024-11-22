@@ -222,54 +222,6 @@ class HandlerEnvAtari:
         self._env.close()
 
 
-class HandlerEnvAtariDopamine:
-    def __init__(self, env_name, *args, stack_size=1, **kwargs):
-        self._env = HandlerEnvAtari.make_env(env_name, stack_size, *args, **kwargs)
-
-    def reset(self, *args, seed=None, **kwargs):
-        if seed is not None:
-            seed = int(seed)
-        observation, info = self._env.reset(*args, seed=seed, **kwargs)
-        return observation[:], info
-
-    def step(self, action, *args, **kwargs):
-        observation, reward, terminated, truncated, info = self._env.step(action, *args, **kwargs)
-        return observation[:], reward, terminated, truncated, info
-
-    @staticmethod
-    def make_env(env_name, stack_size, *args, **kwargs):
-        env = gym.make(env_name, *args, frameskip=1, repeat_action_probability=0, **kwargs)
-        env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=True)
-        if stack_size > 1:
-            env = FrameStack(env, stack_size)
-            env = FirstDimToLast(env)
-        return env
-
-    @staticmethod
-    def check_env(env_name, stack_size, *args, **kwargs):
-        env = HandlerEnvAtari.make_env(env_name, stack_size, *args, **kwargs)
-        return (
-            env.observation_space.shape,
-            env.observation_space.dtype,
-            env.action_space.n,
-        )
-
-    @property
-    def action_space(self):
-        return self._env.action_space
-
-    @property
-    def observation_space(self):
-        return self._env.observation_space
-
-    @property
-    def reward_range(self):
-        return self._env.reward_range
-
-    def close(self):
-        self._env.close()
-
-
 class HandlerDopamineReplay:
     def __init__(self, stack_size):
         self._replay = []
