@@ -276,6 +276,11 @@ class JaxDQNAgent:
                 self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
                 self.logger.debug(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
                 self.logger.debug(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
+                try:
+                    add_count = self.sampler.add_count()
+                except AttributeError:
+                    add_count = ray.get(self.replay_actor.add_count.remote())
+                self.logger.debug(f"Current buffer size: {add_count}.")
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []
