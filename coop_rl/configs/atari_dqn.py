@@ -19,16 +19,14 @@ import numpy as np
 import optax
 from ml_collections import config_dict
 
-from coop_rl import networks
-from coop_rl.agents.dqn import JaxDQNAgent
+from coop_rl.agents.dqn import DQN
+from coop_rl.environment import HandlerEnvAtari
+from coop_rl.networks import NatureDQNNetwork
 from coop_rl.utils import (
-    HandlerEnvAtari,
-    HandlerReverbReplay,
-    HandlerReverbSampler,
     linearly_decaying_epsilon,
     restore_dqn_flax_state,
 )
-from coop_rl.workers import actors
+from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 
 
@@ -40,7 +38,6 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
     checkpointdir = config_dict.FieldReference(None, field_type=str)
-    table_name = config_dict.FieldReference(None, field_type=str)
 
     seed = 42
     num_collectors = 5
@@ -53,7 +50,7 @@ def get_config():
     timesteps = 2  # DQN n-steps update
     buffer_server_port = 8023
     env_name = "ALE/Breakout-v5"
-    network = networks.NatureDQNNetwork
+    network = NatureDQNNetwork
 
     config.seed = seed
     config.num_collectors = num_collectors
@@ -63,7 +60,6 @@ def get_config():
     config.num_actions = num_actions
     config.stack_size = stack_size
     config.workdir = workdir
-    config.table_name = table_name
 
     config.state_recover = restore_dqn_flax_state
     config.args_state_recover = ml_collections.ConfigDict()
@@ -73,15 +69,7 @@ def get_config():
     config.args_state_recover.eps = eps
     config.args_state_recover.checkpointdir = checkpointdir
 
-    config.control_actor = actors.ControlActor
-
-    config.reverb_server = actors.DQNUniformReverbServer
-    config.args_reverb_server = ml_collections.ConfigDict()
-    config.args_reverb_server.batch_size = batch_size
-    config.args_reverb_server.replay_capacity = replay_capacity
-    config.args_reverb_server.observation_shape = observation_shape
-    config.args_reverb_server.timesteps = timesteps
-    config.args_reverb_server.buffer_server_port = buffer_server_port
+    config.control_actor = Controller
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
@@ -98,13 +86,12 @@ def get_config():
     config.args_collector.args_handler_env = ml_collections.ConfigDict()
     config.args_collector.args_handler_env.env_name = env_name
     config.args_collector.args_handler_env.stack_size = stack_size
-    config.args_collector.handler_replay = HandlerReverbReplay
+    config.args_collector.handler_replay = None
     config.args_collector.args_handler_replay = ml_collections.ConfigDict()
     config.args_collector.args_handler_replay.timesteps = timesteps
-    config.args_collector.args_handler_replay.table_name = table_name
     config.args_collector.args_handler_replay.buffer_server_port = buffer_server_port
 
-    config.agent = JaxDQNAgent
+    config.agent = DQN
     config.args_agent = ml_collections.ConfigDict()
     config.args_agent.min_replay_history = 20000  # in transitions
     config.args_agent.training_steps = 10000000
@@ -126,12 +113,11 @@ def get_config():
     config.args_agent.args_optimizer = ml_collections.ConfigDict()
     config.args_agent.args_optimizer.learning_rate = learning_rate
     config.args_agent.args_optimizer.eps = eps
-    config.args_agent.handler_sampler = HandlerReverbSampler
+    config.args_agent.handler_sampler = None
     config.args_agent.args_handler_sampler = ml_collections.ConfigDict()
     config.args_agent.args_handler_sampler.gamma = gamma
     config.args_agent.args_handler_sampler.batch_size = batch_size
     config.args_agent.args_handler_sampler.timesteps = timesteps
-    config.args_agent.args_handler_sampler.table_name = table_name
     config.args_agent.args_handler_sampler.buffer_server_port = buffer_server_port
 
     return config

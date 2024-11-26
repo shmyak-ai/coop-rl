@@ -13,12 +13,6 @@
 # limitations under the License.
 
 """Compact implementation of a DQN agent in JAx.
-
-Modifications to the vanilla:
-- keep only training related functionality
-- make the agent a ray actor
-- refactor
-
 """
 
 import contextlib
@@ -99,7 +93,7 @@ def train(
     return state, loss
 
 
-class JaxDQNAgent:
+class DQN:
     """A JAX implementation of the DQN agent."""
 
     def __init__(
