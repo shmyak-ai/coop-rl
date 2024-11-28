@@ -17,10 +17,8 @@ import time
 
 import jax
 import jax.numpy as jnp
-import optax
 import orbax.checkpoint as ocp
 
-from coop_rl import networks
 from coop_rl.agents import dqn
 
 
@@ -132,11 +130,9 @@ def select_action(
     )
 
 
-def restore_dqn_flax_state(num_actions, observation_shape, learning_rate, eps, checkpointdir):
+def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, learning_rate, eps, checkpointdir):
     orbax_checkpointer = ocp.StandardCheckpointer()
     args_network = {"num_actions": num_actions}
-    network = networks.NatureDQNNetwork
-    optimizer = optax.adam
     args_optimizer = {"learning_rate": learning_rate, "eps": eps}
     rng = jax.random.PRNGKey(0)  # jax.random.key(0)
     state = dqn.create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)

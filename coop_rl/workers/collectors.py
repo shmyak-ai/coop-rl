@@ -15,10 +15,7 @@
 import contextlib
 import itertools
 import logging
-import os
 import random
-import sys
-import time
 from collections import deque
 
 import jax
@@ -35,80 +32,60 @@ from coop_rl.utils import (
 class DQNCollectorUniform:
     def __init__(
         self,
-        report_period,
+        *,
+        collectors_seed,
+        log_level="INFO",
+        report_period=25,
         num_actions,
         observation_shape,
         network,
-        handler_env,
-        args_handler_env,
-        handler_replay,
-        args_handler_replay,
-        collector_id=0,
+        args_network,
         warmup_steps=10000,
         epsilon_fn=linearly_decaying_epsilon,
         epsilon=0.01,
         epsilon_decay_period=250000,
-        control_actor=None,
-        replay_actor=None,
-        trainer=lambda *args, **kwargs: None,
-        args_trainer=None,
-        seed=None,
-        state=None,
-        preprocess_fn=None,
-        log_level="INFO",
+        flax_state,
+        buffer,
+        controller,
+        env,
+        args_env,
+        preprocess_fn=networks.identity_preprocess_fn,
     ):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
         self.report_period = report_period
 
-        if args_trainer is None:
-            args_trainer = {"": None}
-        self.trainer = trainer(**args_trainer, control_actor=control_actor, replay_actor=replay_actor, state=state)
+        self.controller = controller
+        self.buffer = buffer
 
-        self.control_actor = control_actor
-        self.replay_actor = replay_actor
-
-        seed = int(time.time() * 1e6) if seed is None else seed
+        self.env = env(**args_env)
 
         self.num_actions = num_actions
+        self.network = network(**args_network)
+        self.preprocess_fn = preprocess_fn
 
-        self._environment = handler_env(**args_handler_env)
-
-        if preprocess_fn is None:
-            self.network = network(num_actions=num_actions)
-            self.preprocess_fn = networks.identity_preprocess_fn
-        else:
-            self.network = network(num_actions=num_actions, inputs_preprocessed=True)
-            self.preprocess_fn = preprocess_fn
-
-        self._rng = jax.random.key(seed + collector_id)
+        self._rng = jax.random.PRNGKey(collectors_seed)
         self._observation = np.ones((1, *observation_shape))
         # to improve obs diversity during exp collection
         self.online_params = deque(maxlen=10)
-        if state is None:
+        if flax_state is None:
             self._build_network()
         else:
             # network.init gives a dict "params"
             # network.apply also needs "params"
-            self.online_params.append({"params": state.params})
+            self.online_params.append({"params": flax_state.params})
 
         self.epsilon_fn = epsilon_fn
         self.epsilon = epsilon
         self.epsilon_decay_period = epsilon_decay_period
         self.epsilon_current = None
+
         self.collecting_steps = 0
-        self.train_period_steps = 4  # from dopamine - train each 4 collecting steps
         self.warmup_steps = warmup_steps
 
-        self._replay = handler_replay(**args_handler_replay)  # to store episode transitions
-
-        self.logger.debug(f"Seed: {seed + collector_id}.")
-
-        try:
-            parameters = ray.get(self.control_actor.get_parameters.remote())
-            self.futures = self.control_actor.get_parameters.remote()
-        except AttributeError:
-            parameters = self.control_actor.get_parameters()
+        breakpoint()
+        parameters = ray.get(self.controller.get_parameters.remote())
+        self.futures_parameters = self.controller.get_parameters.remote()
         if parameters is not None:
             self.online_params.append(parameters)
 
@@ -127,7 +104,7 @@ class DQNCollectorUniform:
           int, the selected action.
         """
 
-        self._observation, info = self._environment.reset()
+        self._observation, info = self.env.reset()
 
         self._rng, action, self.epsilon_current = select_action(
             self.network,
@@ -177,7 +154,7 @@ class DQNCollectorUniform:
                 # train_step will put new parameters into control actor store
                 self.trainer._train_step(replay_elements)
                 # and fetch it back
-                parameters = self.control_actor.get_parameters()
+                parameters = self.controller.get_parameters()
                 if parameters is not None:
                     self.online_params.append(parameters)
 
@@ -229,7 +206,7 @@ class DQNCollectorUniform:
 
             # Keep interacting until terminated / truncated state.
             for step in itertools.count(start=1, step=1):
-                observation, reward, terminated, truncated, info = self._environment.step(action)
+                observation, reward, terminated, truncated, info = self.env.step(action)
                 rewards += reward
 
                 if terminated or truncated:
@@ -240,69 +217,28 @@ class DQNCollectorUniform:
 
                 if step % 25 == 0:
                     with contextlib.suppress(AttributeError):
-                        parameters = ray.get(self.futures)
+                        parameters = ray.get(self.futures_parameters)
                         if parameters is not None:
                             self.online_params.append(parameters)
-                        self.futures = self.control_actor.get_parameters.remote()
+                        self.futures_parameters = self.controller.get_parameters.remote()
 
             self._end_episode(action, reward, terminated, truncated)
         finally:
             self._replay.close()
         return step, rewards
 
-    def collecting_training(self):
-        steps, period_steps = 0, 0
-        episodes_steps = []
-        episodes_rewards = []
-        phase = 0
-        self.logger.info(f"Phase {phase} begins.")
-        while True:
-            episode_steps, episode_rewards = self.run_one_episode()
-            sys.stdout.write(
-                f"Steps executed: {period_steps} "
-                + f"Episode length: {episode_steps} "
-                + f"Return: {episode_rewards}\r"
-            )
-            sys.stdout.flush()
-            steps += episode_steps
-            period_steps += episode_steps
-
-            with contextlib.suppress(AttributeError):
-                self.replay_actor.add_episode(self._replay.replay)
-
-            episodes_steps.append(episode_steps)
-            episodes_rewards.append(episode_rewards)
-            if period_steps >= 250000:  # dopamine phase length
-                self.logger.info(f"Mean episode length: {sum(episodes_steps) / len(episodes_steps):.4f}.")
-                self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
-                episodes_steps = []
-                episodes_rewards = []
-                period_steps = 0
-                orbax_checkpoint_path = os.path.join(
-                    self.trainer.workdir, f"chkpt_train_step_{self.trainer.state.step:07}"
-                )
-                self.trainer.orbax_checkpointer.save(
-                    orbax_checkpoint_path,
-                    self.trainer.state,
-                )
-                self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
-                self.logger.info(f"Reverb checkpoint is in: {self.trainer.sampler.checkpoint()}")
-                phase += 1
-                self.logger.info(f"Phase {phase} begins.")
-            if steps >= self.trainer.training_steps * self.train_period_steps:
-                break
-
     def collecting(self):
         episodes_steps = []
         episodes_rewards = []
+        breakpoint()
         for episodes_count in itertools.count(start=1, step=1):
-            done = ray.get(self.control_actor.is_done.remote())
+            done = ray.get(self.controller.is_done.remote())
             if done:
                 self.logger.info("Done signal received; finishing.")
                 break
             episode_steps, episode_rewards = self.run_one_episode()
             with contextlib.suppress(AttributeError):
-                ray.get(self.replay_actor.add_episode.remote(self._replay.replay))
+                ray.get(self.buffer.add_episode.remote(self._replay.replay))
             episodes_steps.append(episode_steps)
             episodes_rewards.append(episode_rewards)
             if episodes_count % self.report_period == 0:

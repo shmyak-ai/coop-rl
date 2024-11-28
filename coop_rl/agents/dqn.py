@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compact implementation of a DQN agent in JAx.
-"""
-
 import contextlib
 import functools
 import itertools
@@ -94,79 +91,45 @@ def train(
 
 
 class DQN:
-    """A JAX implementation of the DQN agent."""
-
     def __init__(
         self,
+        *,
+        trainer_seed,
+        log_level="INFO",
         workdir,
-        observation_shape,
-        network,
-        args_network,
-        optimizer,
-        args_optimizer,
-        gamma,
         training_steps,
+        loss_type,
+        gamma,
         batch_size,
         update_horizon,
-        loss_type,
         target_update_period,
         summary_writing_period,
         save_period,
         synchronization_period,
-        min_replay_history=20000,
-        replay_actor=None,
-        control_actor=None,
-        handler_sampler=lambda *args, **kwargs: None,
-        args_handler_sampler=None,
-        seed=None,
-        state=None,
+        observation_shape,
+        flax_state,
+        buffer,
+        controller,
+        network,
+        args_network,
+        optimizer,
+        args_optimizer,
         preprocess_fn=networks.identity_preprocess_fn,
-        log_level="INFO",
     ):
-        """Initializes the agent and constructs the necessary components.
-
-        Note: We are using the Adam optimizer by default for JaxDQN, which differs
-              from the original NatureDQN and the dopamine TensorFlow version. In
-              the experiments we have ran, we have found that using Adam yields
-              improved training performance.
-
-        Args:
-          optimizer: str, name of optimizer to use.
-          num_actions: int, number of actions the agent can take at any state.
-          observation_shape: tuple of ints describing the observation shape.
-          network: Jax network to use for training.
-          gamma: float, discount factor with the usual RL meaning.
-          update_horizon: int, horizon at which updates are performed, the 'n' in
-            n-step update.
-          loss_type: str, whether to use Huber or MSE loss during training.
-          target_update_period: int, update period for the target network.
-          summary_writing_frequency: int, frequency with which summaries will be
-            written. Lower values will result in slower training.
-          seed: int, a seed for DQN's internal RNG, used for initialization and
-            sampling actions. If None, will use the current time in nanoseconds.
-          preprocess_fn: function expecting the input state as parameter which it
-            preprocesses (such as normalizing the pixel values between 0 and 1)
-            before passing it to the Q-network. Defaults to None.
-        """
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
 
         self.workdir = workdir
-        seed = int(time.time() * 1e6) if seed is None else seed
 
-        if args_handler_sampler is None:
-            args_handler_sampler = {"": None}
-        self.control_actor = control_actor
-        self.replay_actor = replay_actor
-        self.sampler = handler_sampler(**args_handler_sampler)
+        self.controller = controller
+        self.buffer = buffer
 
         self.preprocess_fn = preprocess_fn
-        self.min_replay_history = min_replay_history
         self.training_steps = training_steps
 
         self.cumulative_gamma = math.pow(gamma, update_horizon)
         self.batch_size = batch_size
-        self._loss_type = loss_type
+        self.loss_type = loss_type
 
         self.target_update_period = target_update_period
         self.synchronization_period = synchronization_period
@@ -177,18 +140,14 @@ class DQN:
         self.orbax_checkpointer = ocp.StandardCheckpointer()
 
         self.logger.info(f"Current devices: {jnp.arange(3).devices()}")
-        # orbax so far cannot recognize a new key<fry> dtype, use the old one
-        self._rng = jax.random.PRNGKey(seed)  # jax.random.key(seed)
-        self._rng, rng = jax.random.split(self._rng)
-        if state is None:
-            self.state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
-        else:
-            self.state = state
+        self._rng = jax.random.PRNGKey(trainer_seed)
+        if flax_state is None:
+            self._rng, rng = jax.random.split(self._rng)
+            self.flax_state = create_train_state(
+                rng, network, args_network, optimizer, args_optimizer, observation_shape
+            )
 
-        try:
-            self.futures = self.control_actor.set_parameters.remote(self.state.params)
-        except AttributeError:
-            self.control_actor.set_parameters(self.state.params)
+        self.futures = self.controller.set_parameters.remote(self.flax_state.params)
 
     def _train_step(self, replay_elements):
         """Runs a single training step.
@@ -203,19 +162,19 @@ class DQN:
         observations = self.preprocess_fn(replay_elements["state"])
         next_observations = self.preprocess_fn(replay_elements["next_state"])
 
-        self.state, loss = train(
-            self.state,
+        self.flax_state, loss = train(
+            self.flax_state,
             observations,
             next_observations,
             replay_elements["action"],
             replay_elements["reward"],
             replay_elements["terminal"],
             self.cumulative_gamma,
-            self._loss_type,
+            self.loss_type,
         )
 
         with contextlib.suppress(TypeError):
-            self.control_actor.set_parameters(self.state.params)
+            self.controller.set_parameters(self.flax_state.params)
         return loss
 
     def training(self):
@@ -224,7 +183,7 @@ class DQN:
             try:
                 add_count = self.sampler.add_count()
             except AttributeError:
-                add_count = ray.get(self.replay_actor.add_count.remote())
+                add_count = ray.get(self.buffer.add_count.remote())
             self.logger.info(f"Current buffer size: {add_count}.")
             if add_count >= self.min_replay_history:
                 self.logger.info("Start training.")
@@ -243,7 +202,7 @@ class DQN:
                 replay_elements, fetch_time = self.sampler.sample_from_replay_buffer()
             except AttributeError:
                 start = time.perf_counter()
-                replay_elements = ray.get(self.replay_actor.sample_from_replay_buffer.remote())
+                replay_elements = ray.get(self.buffer.sample_from_replay_buffer.remote())
                 fetch_time = time.perf_counter() - start
             timer_sampling.append(time.perf_counter() - start_timer)
             timer_fetching.append(fetch_time)
@@ -256,12 +215,12 @@ class DQN:
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
-                ray.get(self.control_actor.set_done.remote())
+                ray.get(self.controller.set_done.remote())
                 self.logger.info(f"Final training step {training_step} reached; finishing.")
                 break
 
             if training_step % self.summary_writing_period == 0:
-                store_size = ray.get(self.control_actor.store_size.remote())
+                store_size = ray.get(self.controller.store_size.remote())
                 buffer_size = self.sampler.add_count()
                 self.logger.info(f"Training step: {training_step}.")
                 self.logger.debug(f"Weights store size: {store_size}.")
@@ -273,25 +232,23 @@ class DQN:
                 try:
                     add_count = self.sampler.add_count()
                 except AttributeError:
-                    add_count = ray.get(self.replay_actor.add_count.remote())
+                    add_count = ray.get(self.buffer.add_count.remote())
                 self.logger.debug(f"Current buffer size: {add_count}.")
                 timer_fetching = []
                 timer_sampling = []
                 timer_training = []
-                self.summary_writer.scalar("loss", loss, self.state.step)
+                self.summary_writer.scalar("loss", loss, self.flax_state.step)
                 self.summary_writer.flush()
 
             if training_step % self.target_update_period == 0:
-                self.state = self.state.update_target_params()
+                self.flax_state = self.flax_state.update_target_params()
 
             if training_step % self.synchronization_period == 0:
                 ray.get(self.futures)
-                self.futures = self.control_actor.set_parameters.remote(self.state.params)
+                self.futures = self.controller.set_parameters.remote(self.flax_state.params)
 
             if training_step % self.save_period == 0:
-                orbax_checkpoint_path = os.path.join(
-                    self.workdir, f"chkpt_train_step_{self.state.step:07}"
-                )
-                self.orbax_checkpointer.save(orbax_checkpoint_path, self.state)
+                orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
+                self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
                 self.logger.info(f"Reverb checkpoint is in: {self.sampler.checkpoint()}")

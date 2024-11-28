@@ -10,15 +10,13 @@ dependencies = [
     "pyarrow",
     "numpy",
     "pandas",
-    "gymnasium",
-    "gymnasium[classic-control]",
-    "gymnasium[atari]",
-    "gymnasium[accept-rom-license]",
-    "gymnasium[other]",
+    "gymnasium[all]",
     "matplotlib",
     "seaborn",
     "ipykernel",
     "ipywidgets",
+    "tensorflow",
+    "tensorboard",
 ]
 
 [project.optional-dependencies]
