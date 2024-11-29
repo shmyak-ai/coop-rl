@@ -14,10 +14,6 @@
 
 import collections
 
-import flashbax as fbx
-import jax
-import jax.numpy as jnp
-
 
 class Controller:
     def __init__(self):
@@ -47,21 +43,3 @@ class Controller:
 
     def store_size(self):
         return len(self.params_store)
-
-
-class BufferFlat:
-    def __init__(
-        self, buffer_seed, max_length, min_length, sample_batch_size, add_sequences, add_batch_size, observation_shape
-    ):
-        self.buffer = fbx.make_flat_buffer(max_length, min_length, sample_batch_size, add_sequences, add_batch_size)
-        fake_timestep = {"obs": jnp.array(observation_shape), "reward": jnp.array(1.0)}
-        self.state = self.buffer.init(fake_timestep)
-        self.rng_key = jax.random.PRNGKey(buffer_seed)
-
-    def add(self, traj_batch):
-        self.state = self.buffer.add(self.state, traj_batch)
-
-    def sample(self):
-        self.rng_key, rng_key = jax.random.split(self.rng_key)
-        batch = self.buffer.sample(self.state, rng_key)
-        return batch

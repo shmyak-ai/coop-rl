@@ -19,14 +19,11 @@ import numpy as np
 import optax
 from ml_collections import config_dict
 
-from coop_rl.agents.dqn import DQN
+from coop_rl.agents.dqn import DQN, restore_dqn_flax_state
 from coop_rl.environment import HandlerEnvAtari
 from coop_rl.networks import NatureDQNNetwork
-from coop_rl.utils import (
-    linearly_decaying_epsilon,
-    restore_dqn_flax_state,
-)
-from coop_rl.workers.auxiliary import BufferFlat, Controller
+from coop_rl.utils import linearly_decaying_epsilon
+from coop_rl.workers.auxiliary import BufferTrajectory, Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 
 
@@ -57,7 +54,7 @@ def get_config():
     network = NatureDQNNetwork
     optimizer = optax.adam
     controller = Controller
-    buffer = BufferFlat
+    buffer = BufferTrajectory
     flax_state = None
 
     seed = 73
@@ -86,10 +83,11 @@ def get_config():
     config.args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.max_length = buffer_max_length
-    config.args_buffer.min_length = 1000
+    config.args_buffer.min_length = 10000
     config.args_buffer.sample_batch_size = batch_size
-    config.args_buffer.add_sequences = False
-    config.args_buffer.add_batch_size = None
+    config.args_buffer.add_batch_size = 1
+    config.args_buffer.sample_sequence_length = timesteps
+    config.args_buffer.period = 1
     config.args_buffer.observation_shape = observation_shape
 
     config.controller = controller

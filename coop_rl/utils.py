@@ -17,9 +17,6 @@ import time
 
 import jax
 import jax.numpy as jnp
-import orbax.checkpoint as ocp
-
-from coop_rl.agents import dqn
 
 
 def timeit(func):
@@ -63,78 +60,3 @@ def linearly_decaying_epsilon(decay_period, step, warmup_steps, epsilon):
     bonus = (1.0 - epsilon) * steps_left / decay_period
     bonus = jnp.clip(bonus, 0.0, 1.0 - epsilon)
     return epsilon + bonus
-
-
-@functools.partial(jax.jit, static_argnums=(0, 4, 5, 6, 7, 8, 10, 11))
-def select_action(
-    network_def,
-    params,
-    state,
-    rng,
-    num_actions,
-    eval_mode,
-    epsilon_eval,
-    epsilon_train,
-    epsilon_decay_period,
-    step,
-    warmup_steps,
-    epsilon_fn,
-):
-    """Select an action from the set of available actions.
-
-    Chooses an action randomly with probability self._calculate_epsilon(), and
-    otherwise acts greedily according to the current Q-value estimates.
-
-    Args:
-        network_def: Linen Module to use for inference.
-        params: Linen params (frozen dict) to use for inference.
-        state: input state to use for inference.
-        rng: Jax random number generator.
-        num_actions: int, number of actions (static_argnum).
-        eval_mode: bool, whether we are in eval mode (static_argnum).
-        epsilon_eval: float, epsilon value to use in eval mode (static_argnum).
-        epsilon_train: float, epsilon value to use in train mode (static_argnum).
-        epsilon_decay_period: float, decay period for epsilon value for certain
-            epsilon functions, such as linearly_decaying_epsilon, (static_argnum).
-        training_steps: int, number of training steps so far.
-        min_replay_history: int, minimum number of steps in replay buffer
-            (static_argnum).
-        epsilon_fn: function used to calculate epsilon value (static_argnum).
-
-    Returns:
-        rng: Jax random number generator.
-        action: int, the selected action.
-    """
-    epsilon = jnp.where(
-        eval_mode,
-        epsilon_eval,
-        epsilon_fn(
-            epsilon_decay_period,
-            step,
-            warmup_steps,
-            epsilon_train,
-        ),
-    )
-
-    state = jnp.expand_dims(state, axis=0)
-    rng, rng1, rng2 = jax.random.split(rng, num=3)
-    p = jax.random.uniform(rng1)
-    return (
-        rng,
-        jnp.where(
-            p <= epsilon,
-            jax.random.randint(rng2, (), 0, num_actions),
-            jnp.argmax(network_def.apply(params, state).q_values),
-        ),
-        epsilon,
-    )
-
-
-def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, learning_rate, eps, checkpointdir):
-    orbax_checkpointer = ocp.StandardCheckpointer()
-    args_network = {"num_actions": num_actions}
-    args_optimizer = {"learning_rate": learning_rate, "eps": eps}
-    rng = jax.random.PRNGKey(0)  # jax.random.key(0)
-    state = dqn.create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
-    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
-    return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))
