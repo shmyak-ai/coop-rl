@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import functools
 import itertools
 import logging
@@ -63,14 +62,15 @@ def select_action(
         epsilon_train: float, epsilon value to use in train mode (static_argnum).
         epsilon_decay_period: float, decay period for epsilon value for certain
             epsilon functions, such as linearly_decaying_epsilon, (static_argnum).
-        training_steps: int, number of training steps so far.
-        min_replay_history: int, minimum number of steps in replay buffer
+        step: int, number of training steps so far.
+        warmup_steps: int, minimum number of steps in replay buffer
             (static_argnum).
         epsilon_fn: function used to calculate epsilon value (static_argnum).
 
     Returns:
         rng: Jax random number generator.
         action: int, the selected action.
+        epsilon
     """
     epsilon = jnp.where(
         eval_mode,
@@ -97,16 +97,6 @@ def select_action(
     )
 
 
-def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, learning_rate, eps, checkpointdir):
-    orbax_checkpointer = ocp.StandardCheckpointer()
-    args_network = {"num_actions": num_actions}
-    args_optimizer = {"learning_rate": learning_rate, "eps": eps}
-    rng = jax.random.PRNGKey(0)  # jax.random.key(0)
-    state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
-    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
-    return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))
-
-
 class TrainState(train_state.TrainState):
     key: jax.Array
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
@@ -122,6 +112,16 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     params = model.init(init_rng, jnp.ones((1, *obs_shape)))["params"]
     tx = optimizer(**args_optimizer)
     return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx)
+
+
+def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, learning_rate, eps, checkpointdir):
+    orbax_checkpointer = ocp.StandardCheckpointer()
+    args_network = {"num_actions": num_actions}
+    args_optimizer = {"learning_rate": learning_rate, "eps": eps}
+    rng = jax.random.PRNGKey(0)  # jax.random.key(0)
+    state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
+    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+    return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))
 
 
 def target_q(state, observations, rewards, terminals, cumulative_gamma):
@@ -184,11 +184,12 @@ class DQN:
         observation_shape,
         flax_state,
         buffer,
-        controller,
+        args_buffer,
         network,
         args_network,
         optimizer,
         args_optimizer,
+        controller,
         preprocess_fn=networks.identity_preprocess_fn,
     ):
         self.logger = logging.getLogger(__name__)
@@ -196,8 +197,7 @@ class DQN:
 
         self.workdir = workdir
 
-        self.controller = controller
-        self.buffer = buffer
+        self.buffer = buffer(**args_buffer)
 
         self.preprocess_fn = preprocess_fn
         self.training_steps = training_steps
@@ -221,19 +221,16 @@ class DQN:
             self.flax_state = create_train_state(
                 rng, network, args_network, optimizer, args_optimizer, observation_shape
             )
+        else:
+            self.flax_state = flax_state
 
+        self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)
+    
+    def add_traj_batch_seq(self, traj_obs, traj_actions, traj_rewards, traj_terminated):
+        self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
 
     def _train_step(self, replay_elements):
-        """Runs a single training step.
-
-        Runs training if both:
-          (1) A minimum number of frames have been added to the replay buffer.
-          (2) `training_steps` is a multiple of `update_period`.
-
-        Also, syncs weights from online_params to target_network_params if training
-        steps is a multiple of target update period.
-        """
         observations = self.preprocess_fn(replay_elements["state"])
         next_observations = self.preprocess_fn(replay_elements["next_state"])
 
@@ -248,45 +245,22 @@ class DQN:
             self.loss_type,
         )
 
-        with contextlib.suppress(TypeError):
-            self.controller.set_parameters(self.flax_state.params)
+        self.controller.set_parameters(self.flax_state.params)
         return loss
 
     def training(self):
-        #  1. check if there are enough transitions in the replay buffer
         while True:
-            try:
-                add_count = self.sampler.add_count()
-            except AttributeError:
-                add_count = ray.get(self.buffer.add_count.remote())
-            self.logger.info(f"Current buffer size: {add_count}.")
-            if add_count >= self.min_replay_history:
+            if self.buffer.can_sample():
                 self.logger.info("Start training.")
                 break
             else:
                 self.logger.info("Waiting.")
                 time.sleep(1)
-        #  2. training
-        timer_fetching = []
-        timer_sampling = []
-        timer_training = []
+
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
-            start_timer = time.perf_counter()
-            try:
-                replay_elements, fetch_time = self.sampler.sample_from_replay_buffer()
-            except AttributeError:
-                start = time.perf_counter()
-                replay_elements = ray.get(self.buffer.sample_from_replay_buffer.remote())
-                fetch_time = time.perf_counter() - start
-            timer_sampling.append(time.perf_counter() - start_timer)
-            timer_fetching.append(fetch_time)
-            start_timer = time.perf_counter()
-            # try:
+            replay_elements = self.buffer.sample()
             loss = self._train_step(replay_elements)
-            # except Exception as e:
-            #     self.logger.debug(e)
-            timer_training.append(time.perf_counter() - start_timer)
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
@@ -296,22 +270,9 @@ class DQN:
 
             if training_step % self.summary_writing_period == 0:
                 store_size = ray.get(self.controller.store_size.remote())
-                buffer_size = self.sampler.add_count()
                 self.logger.info(f"Training step: {training_step}.")
                 self.logger.debug(f"Weights store size: {store_size}.")
-                self.logger.debug(f"Current buffer size: {buffer_size}.")
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
-                self.logger.debug(f"Fetching takes: {sum(timer_fetching) / len(timer_fetching):.4f}.")
-                self.logger.debug(f"Sampling takes: {sum(timer_sampling) / len(timer_sampling):.4f}.")
-                self.logger.debug(f"Training takes: {sum(timer_training) / len(timer_training):.4f}.")
-                try:
-                    add_count = self.sampler.add_count()
-                except AttributeError:
-                    add_count = ray.get(self.buffer.add_count.remote())
-                self.logger.debug(f"Current buffer size: {add_count}.")
-                timer_fetching = []
-                timer_sampling = []
-                timer_training = []
                 self.summary_writer.scalar("loss", loss, self.flax_state.step)
                 self.summary_writer.flush()
 

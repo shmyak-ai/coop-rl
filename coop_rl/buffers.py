@@ -12,9 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import chex
 import flashbax as fbx
 import jax
 import jax.numpy as jnp
+
+
+@chex.dataclass(frozen=True)
+class TimeStep:
+    obs: chex.Array
+    action: chex.Array
+    reward: chex.Array
+    terminated: chex.Array
 
 
 class BufferFlat:
@@ -55,14 +64,28 @@ class BufferTrajectory:
             sample_sequence_length=sample_sequence_length,
             period=period,
         )
-        fake_timestep = {"obs": jnp.array(observation_shape), "reward": jnp.array(1.0)}
+        fake_timestep = TimeStep(
+            obs = jnp.array(observation_shape),
+            action = jnp.array(1.0),
+            reward = jnp.array(1.0),
+            terminated = jnp.array(1.0),
+        )
         self.state = self.buffer.init(fake_timestep)
         self.rng_key = jax.random.PRNGKey(buffer_seed)
 
-    def add(self, traj_batch_seq):
+    def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated):
+        traj_batch_seq = TimeStep(
+            obs = jnp.array(traj_obs),
+            action = jnp.array(traj_actions),
+            reward = jnp.array(traj_rewards),
+            terminated = jnp.array(traj_terminated),
+        )
         self.state = self.buffer.add(self.state, traj_batch_seq)
 
     def sample(self):
         self.rng_key, rng_key = jax.random.split(self.rng_key)
         batch = self.buffer.sample(self.state, rng_key)
         return batch
+    
+    def can_sample(self):
+        return self.buffer.can_sample(self.state)

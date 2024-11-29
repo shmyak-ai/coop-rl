@@ -90,28 +90,27 @@ def main():
     # Transform to remote objects
     # with 0 gpus and a regular runtime jax will complain about gpu devices
     conf.controller = ray.remote(num_cpus=0, num_gpus=0, runtime_env=runtime_env_cpu)(conf.controller)
-    conf.buffer = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.buffer)
+    conf.trainer = ray.remote(num_cpus=1, num_gpus=1)(conf.trainer)
     conf.collector = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.collector)
-    # conf.trainer = ray.remote(num_cpus=1, num_gpus=1)(conf.trainer)
 
     # initialization
     # we cannot put remote refs back to conf and cannot pass jax objects
     controller = conf.controller.remote()
-    buffer = conf.buffer.remote(**conf.args_buffer)
+    # trainer = conf.trainer.options(max_concurrency=2).remote(**conf.args_trainer, controller=controller)
+    trainer = conf.trainer.remote(**conf.args_trainer, controller=controller)
     collectors = []
     for _ in range(conf.num_collectors):
         conf.args_collector.collectors_seed += 1
-        collector = conf.collector.remote(**conf.args_collector, buffer=buffer, controller=controller)
+        collector = conf.collector.remote(**conf.args_collector, controller=controller, trainer=trainer)
         collectors.append(collector)
-    # trainer = conf.trainer.remote(**conf.args_trainer, buffer=buffer, controller=controller)
 
     # remote calls
-    collect_info_futures = [agent.collecting.remote() for agent in collectors]
     # trainer_futures = trainer.training.remote()
+    collect_info_futures = [agent.collecting.remote() for agent in collectors]
 
     # get results
-    ray.get(collect_info_futures)
     # ray.get(trainer_futures)
+    ray.get(collect_info_futures)
     time.sleep(3)
 
     ray.shutdown()

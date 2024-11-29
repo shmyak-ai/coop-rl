@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import itertools
 import logging
 import random
@@ -43,10 +42,10 @@ class DQNCollectorUniform:
         epsilon=0.01,
         epsilon_decay_period=250000,
         flax_state,
-        buffer,
-        controller,
         env,
         args_env,
+        controller,
+        trainer,
         preprocess_fn=networks.identity_preprocess_fn,
     ):
         self.logger = logging.getLogger(__name__)
@@ -54,7 +53,7 @@ class DQNCollectorUniform:
         self.report_period = report_period
 
         self.controller = controller
-        self.buffer = buffer
+        self.trainer = trainer
 
         self.env = env(**args_env)
 
@@ -62,6 +61,7 @@ class DQNCollectorUniform:
         self.network = network(**args_network)
         self.preprocess_fn = preprocess_fn
 
+        random.seed(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
         # to improve obs diversity during exp collection
         self.online_params = deque(maxlen=10)
@@ -92,12 +92,12 @@ class DQNCollectorUniform:
 
     def run_one_episode(self):
         rewards = 0
-        obs, info = self.env.reset()
+        obs, _info = self.env.reset()
 
         traj_obs = []
-        traj_terminated = []
         traj_actions = []
         traj_rewards = []
+        traj_terminated = []
 
         for _step in itertools.count(start=1, step=1):
             self._rng, action, self.epsilon_current = select_action(
@@ -115,13 +115,16 @@ class DQNCollectorUniform:
                 self.epsilon_fn,
             )
             action_np = np.asarray(action)
-            next_obs, reward, terminated, truncated, info = self.env.step(action_np)
+            next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
             rewards += reward
 
             traj_obs.append(obs)
-            traj_terminated.append(terminated)
             traj_actions.append(action)
             traj_rewards.append(reward)
+            traj_terminated.append(terminated)
+
+            if terminated or truncated:
+                break
 
             obs = next_obs
 
@@ -130,20 +133,21 @@ class DQNCollectorUniform:
             self.online_params.append(parameters)
         self.futures_parameters = self.controller.get_parameters.remote()
 
+        ray.get(self.trainer.add_traj_batch_seq.remote(traj_obs, traj_actions, traj_rewards, traj_terminated))
+
         return _step, rewards
 
     def collecting(self):
         episodes_steps = []
         episodes_rewards = []
-        breakpoint()
         for episodes_count in itertools.count(start=1, step=1):
             done = ray.get(self.controller.is_done.remote())
             if done:
                 self.logger.info("Done signal received; finishing.")
                 break
+
             episode_steps, episode_rewards = self.run_one_episode()
-            with contextlib.suppress(AttributeError):
-                ray.get(self.buffer.add_episode.remote(self._replay.replay))
+
             episodes_steps.append(episode_steps)
             episodes_rewards.append(episode_rewards)
             if episodes_count % self.report_period == 0:
