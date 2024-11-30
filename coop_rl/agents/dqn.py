@@ -227,7 +227,10 @@ class DQN:
         self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)
     
-    def add_traj_batch_seq(self, traj_obs, traj_actions, traj_rewards, traj_terminated):
+    def add_traj_batch_seq(self, data):
+        if data == 1:
+            return
+        traj_obs, traj_actions, traj_rewards, traj_terminated = data
         self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
 
     def _train_step(self, replay_elements):
@@ -257,6 +260,7 @@ class DQN:
                 self.logger.info("Waiting.")
                 time.sleep(1)
 
+        breakpoint()
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
             replay_elements = self.buffer.sample()

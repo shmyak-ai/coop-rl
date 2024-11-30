@@ -56,31 +56,35 @@ class BufferTrajectory:
         period,
         observation_shape,
     ):
-        self.buffer = fbx.make_trajectory_buffer(
-            max_length_time_axis=max_length,
-            min_length_time_axis=min_length,
-            sample_batch_size=sample_batch_size,
-            add_batch_size=add_batch_size,
-            sample_sequence_length=sample_sequence_length,
-            period=period,
-        )
-        fake_timestep = TimeStep(
-            obs = jnp.array(observation_shape),
-            action = jnp.array(1.0),
-            reward = jnp.array(1.0),
-            terminated = jnp.array(1.0),
-        )
-        self.state = self.buffer.init(fake_timestep)
-        self.rng_key = jax.random.PRNGKey(buffer_seed)
+        self.cpu = jax.devices("cpu")[0]
+        with jax.default_device(self.cpu):
+            self.buffer = fbx.make_trajectory_buffer(
+                max_length_time_axis=max_length,
+                min_length_time_axis=min_length,
+                sample_batch_size=sample_batch_size,
+                add_batch_size=add_batch_size,
+                sample_sequence_length=sample_sequence_length,
+                period=period,
+            )
+            fake_timestep = TimeStep(
+                obs = jnp.ones(observation_shape, dtype='float32'),
+                action = jnp.array(1.0, dtype='float32'),
+                reward = jnp.array(1.0, dtype='float32'),
+                terminated = jnp.array(1.0, dtype='float32'),
+            )
+            self.state = self.buffer.init(fake_timestep)
+            self.rng_key = jax.random.PRNGKey(buffer_seed)
 
     def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated):
-        traj_batch_seq = TimeStep(
-            obs = jnp.array(traj_obs),
-            action = jnp.array(traj_actions),
-            reward = jnp.array(traj_rewards),
-            terminated = jnp.array(traj_terminated),
-        )
-        self.state = self.buffer.add(self.state, traj_batch_seq)
+        with jax.default_device(self.cpu):
+            traj_batch_seq = TimeStep(
+                obs = jnp.array(traj_obs),
+                action = jnp.array(traj_actions),
+                reward = jnp.array(traj_rewards),
+                terminated = jnp.array(traj_terminated),
+            )
+            traj_batch_seq = jax.tree.map(lambda x: jnp.expand_dims(x, axis=0).astype('float32'), traj_batch_seq)
+            self.state = self.buffer.add(self.state, traj_batch_seq)
 
     def sample(self):
         self.rng_key, rng_key = jax.random.split(self.rng_key)

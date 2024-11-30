@@ -42,7 +42,7 @@ def get_config():
     log_level = "INFO"
     seed = 42
     num_collectors = 1
-    buffer_max_length = 1000000  # in transitions
+    buffer_max_length = 100000  # in transitions
     learning_rate = 6.25e-5
     eps = 1.5e-4
     gamma = 0.99
@@ -81,7 +81,7 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.max_length = buffer_max_length
-    config.args_buffer.min_length = 10000
+    config.args_buffer.min_length = 1000
     config.args_buffer.sample_batch_size = batch_size
     config.args_buffer.add_batch_size = 1
     config.args_buffer.sample_sequence_length = timesteps

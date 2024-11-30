@@ -133,7 +133,7 @@ class DQNCollectorUniform:
             self.online_params.append(parameters)
         self.futures_parameters = self.controller.get_parameters.remote()
 
-        ray.get(self.trainer.add_traj_batch_seq.remote(traj_obs, traj_actions, traj_rewards, traj_terminated))
+        ray.get(self.trainer.add_traj_batch_seq.remote((traj_obs, traj_actions, traj_rewards, traj_terminated)))
 
         return _step, rewards
 
