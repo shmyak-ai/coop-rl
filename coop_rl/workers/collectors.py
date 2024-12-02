@@ -98,6 +98,7 @@ class DQNCollectorUniform:
         traj_actions = []
         traj_rewards = []
         traj_terminated = []
+        breakpoint()
 
         for _step in itertools.count(start=1, step=1):
             self._rng, action, self.epsilon_current = select_action(

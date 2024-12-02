@@ -17,6 +17,7 @@ import itertools
 import logging
 import math
 import os
+import threading
 import time
 from typing import Any
 
@@ -226,12 +227,14 @@ class DQN:
 
         self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)
+        self.lock = threading.Lock()
     
     def add_traj_batch_seq(self, data):
         if data == 1:
             return
         traj_obs, traj_actions, traj_rewards, traj_terminated = data
-        self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
+        with self.lock:
+            self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
 
     def _train_step(self, replay_elements):
         observations = self.preprocess_fn(replay_elements["state"])
@@ -263,7 +266,8 @@ class DQN:
         breakpoint()
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
-            replay_elements = self.buffer.sample()
+            with self.lock:
+                replay_elements = self.buffer.sample()
             loss = self._train_step(replay_elements)
             transitions_processed += self.batch_size
 

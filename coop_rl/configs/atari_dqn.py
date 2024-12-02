@@ -48,7 +48,7 @@ def get_config():
     gamma = 0.99
     batch_size = 32  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
-    timesteps = 2  # DQN n-steps update
+    timesteps = 5  # DQN n-steps update
     env_name = "ale_py:ALE/Breakout-v5"
     network = NatureDQNNetwork
     optimizer = optax.adam
@@ -83,7 +83,7 @@ def get_config():
     config.args_buffer.max_length = buffer_max_length
     config.args_buffer.min_length = 1000
     config.args_buffer.sample_batch_size = batch_size
-    config.args_buffer.add_batch_size = 1
+    config.args_buffer.add_batch_size = num_collectors
     config.args_buffer.sample_sequence_length = timesteps
     config.args_buffer.period = 1
     config.args_buffer.observation_shape = observation_shape

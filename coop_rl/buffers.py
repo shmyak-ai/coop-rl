@@ -66,11 +66,17 @@ class BufferTrajectory:
                 sample_sequence_length=sample_sequence_length,
                 period=period,
             )
+            self.buffer = self.buffer.replace(
+                init=jax.jit(self.buffer.init),
+                add=jax.jit(self.buffer.add, donate_argnums=0),
+                sample=self.buffer.sample,
+                can_sample=jax.jit(self.buffer.can_sample),
+            )
             fake_timestep = TimeStep(
-                obs = jnp.ones(observation_shape, dtype='float32'),
-                action = jnp.array(1.0, dtype='float32'),
-                reward = jnp.array(1.0, dtype='float32'),
-                terminated = jnp.array(1.0, dtype='float32'),
+                obs=jnp.ones(observation_shape, dtype="float32"),
+                action=jnp.array(1.0, dtype="float32"),
+                reward=jnp.array(1.0, dtype="float32"),
+                terminated=jnp.array(1.0, dtype="float32"),
             )
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
@@ -78,18 +84,19 @@ class BufferTrajectory:
     def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated):
         with jax.default_device(self.cpu):
             traj_batch_seq = TimeStep(
-                obs = jnp.array(traj_obs),
-                action = jnp.array(traj_actions),
-                reward = jnp.array(traj_rewards),
-                terminated = jnp.array(traj_terminated),
+                obs=jnp.array(traj_obs),
+                action=jnp.array(traj_actions),
+                reward=jnp.array(traj_rewards),
+                terminated=jnp.array(traj_terminated),
             )
-            traj_batch_seq = jax.tree.map(lambda x: jnp.expand_dims(x, axis=0).astype('float32'), traj_batch_seq)
+            traj_batch_seq = jax.tree.map(lambda x: jnp.expand_dims(x, axis=0).astype("float32"), traj_batch_seq)
             self.state = self.buffer.add(self.state, traj_batch_seq)
 
     def sample(self):
         self.rng_key, rng_key = jax.random.split(self.rng_key)
-        batch = self.buffer.sample(self.state, rng_key)
+        with jax.default_device(self.cpu):
+            batch = self.buffer.sample(self.state, rng_key)
         return batch
-    
+
     def can_sample(self):
         return self.buffer.can_sample(self.state)
