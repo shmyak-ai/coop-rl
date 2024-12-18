@@ -23,6 +23,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import orbax.checkpoint as ocp
 import ray
 from flax import core, struct
@@ -227,14 +228,54 @@ class DQN:
 
         self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)
-        self.lock = threading.Lock()
-    
-    def add_traj_batch_seq(self, data):
+        self.buffer_lock = threading.Lock()
+
+        self.traj_store = {}
+        self.add_batch_size = args_buffer.add_batch_size
+        self.store_lock = threading.Lock()
+
+        self.is_done = False
+
+    def add_traj_seq(self, data):
+        # a trick to start a ray thread, is it necessary?
         if data == 1:
             return
-        traj_obs, traj_actions, traj_rewards, traj_terminated = data
-        with self.lock:
-            self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
+        # save data from a collector
+        collector_seed, *_data = data
+        with self.store_lock:
+            # for collectors synchronization, put only if there is no data already
+            if self.traj_store.get(collector_seed) is not None:
+                return False
+            self.traj_store[collector_seed] = _data
+            return True
+
+    def buffer_updating(self):
+        breakpoint()
+        # timer = time.time()
+        while True:
+            # if time.time() - timer > 3:
+                # done = ray.get(self.controller.is_done.remote())
+            if self.is_done:
+                self.logger.info("Done signal received; finishing.")
+                break
+                # timer = time.time()
+
+            with self.store_lock:
+                trajectories = [self.traj_store[key] for key in self.traj_store if self.traj_store[key]]
+
+            if len(trajectories) != self.add_batch_size:
+                time.sleep(0.1)
+                continue
+
+            with self.store_lock:
+                self.traj_store = {}
+
+            transposed = list(zip(*trajectories, strict=True))
+            merged = [np.concatenate(arrays, axis=0) for arrays in transposed]
+            traj_obs, traj_actions, traj_rewards, traj_terminated = merged
+
+            with self.buffer_lock:
+                self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
 
     def _train_step(self, replay_elements):
         observations = self.preprocess_fn(replay_elements["state"])
@@ -256,7 +297,9 @@ class DQN:
 
     def training(self):
         while True:
-            if self.buffer.can_sample():
+            with self.buffer_lock:
+                can_sample = self.buffer.can_sample()
+            if can_sample:
                 self.logger.info("Start training.")
                 break
             else:
@@ -266,12 +309,13 @@ class DQN:
         breakpoint()
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
-            with self.lock:
+            with self.buffer_lock:
                 replay_elements = self.buffer.sample()
             loss = self._train_step(replay_elements)
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
+                self.is_done = True
                 ray.get(self.controller.set_done.remote())
                 self.logger.info(f"Final training step {training_step} reached; finishing.")
                 break

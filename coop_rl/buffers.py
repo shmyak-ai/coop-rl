@@ -48,28 +48,28 @@ class BufferTrajectory:
     def __init__(
         self,
         buffer_seed,
-        max_length,
-        min_length,
-        sample_batch_size,
         add_batch_size,
+        sample_batch_size,
         sample_sequence_length,
         period,
+        min_length,
+        max_size,
         observation_shape,
     ):
         self.cpu = jax.devices("cpu")[0]
         with jax.default_device(self.cpu):
             self.buffer = fbx.make_trajectory_buffer(
-                max_length_time_axis=max_length,
-                min_length_time_axis=min_length,
-                sample_batch_size=sample_batch_size,
                 add_batch_size=add_batch_size,
+                sample_batch_size=sample_batch_size,
                 sample_sequence_length=sample_sequence_length,
                 period=period,
+                min_length_time_axis=min_length,
+                max_size=max_size,
             )
             self.buffer = self.buffer.replace(
                 init=jax.jit(self.buffer.init),
                 add=jax.jit(self.buffer.add, donate_argnums=0),
-                sample=self.buffer.sample,
+                sample=jax.jit(self.buffer.sample),
                 can_sample=jax.jit(self.buffer.can_sample),
             )
             fake_timestep = TimeStep(

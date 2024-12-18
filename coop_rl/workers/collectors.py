@@ -15,6 +15,7 @@
 import itertools
 import logging
 import random
+import time
 from collections import deque
 
 import jax
@@ -61,6 +62,7 @@ class DQNCollectorUniform:
         self.network = network(**args_network)
         self.preprocess_fn = preprocess_fn
 
+        self.collector_seed = collectors_seed
         random.seed(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
         # to improve obs diversity during exp collection
@@ -91,15 +93,12 @@ class DQNCollectorUniform:
         self.online_params.append(self.network.init(rng, x=state))
 
     def run_one_episode(self):
-        rewards = 0
         obs, _info = self.env.reset()
 
         traj_obs = []
         traj_actions = []
         traj_rewards = []
         traj_terminated = []
-        breakpoint()
-
         for _step in itertools.count(start=1, step=1):
             self._rng, action, self.epsilon_current = select_action(
                 self.network,
@@ -117,10 +116,9 @@ class DQNCollectorUniform:
             )
             action_np = np.asarray(action)
             next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
-            rewards += reward
 
             traj_obs.append(obs)
-            traj_actions.append(action)
+            traj_actions.append(action_np)
             traj_rewards.append(reward)
             traj_terminated.append(terminated)
 
@@ -129,28 +127,47 @@ class DQNCollectorUniform:
 
             obs = next_obs
 
-        parameters = ray.get(self.futures_parameters)
-        if parameters is not None:
-            self.online_params.append(parameters)
-        self.futures_parameters = self.controller.get_parameters.remote()
-
-        ray.get(self.trainer.add_traj_batch_seq.remote((traj_obs, traj_actions, traj_rewards, traj_terminated)))
-
-        return _step, rewards
+        return traj_obs, traj_actions, traj_rewards, traj_terminated
 
     def collecting(self):
         episodes_steps = []
         episodes_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
-            done = ray.get(self.controller.is_done.remote())
-            if done:
-                self.logger.info("Done signal received; finishing.")
-                break
 
-            episode_steps, episode_rewards = self.run_one_episode()
+            traj_obs, traj_actions, traj_rewards, traj_terminated = self.run_one_episode()
+            traj_obs_np = np.array(traj_obs, dtype=np.float32)
+            traj_actions_np = np.array(traj_actions, dtype=np.float32)
+            traj_rewards_np = np.array(traj_rewards, dtype=np.float32)
+            traj_terminated_np = np.array(traj_terminated, dtype=np.float32)
 
-            episodes_steps.append(episode_steps)
-            episodes_rewards.append(episode_rewards)
+            while True:
+                training_done = ray.get(self.controller.is_done.remote())
+                if training_done:
+                    self.logger.info("Done signal received; finishing.")
+                    return
+
+                adding_traj_done = ray.get(
+                    self.trainer.add_traj_seq.remote(
+                        (
+                            self.collector_seed,
+                            traj_obs_np,
+                            traj_actions_np,
+                            traj_rewards_np,
+                            traj_terminated_np,
+                        )
+                    )
+                )
+                if adding_traj_done:
+                    break
+                time.sleep(1)
+
+            parameters = ray.get(self.futures_parameters)
+            if parameters is not None:
+                self.online_params.append(parameters)
+            self.futures_parameters = self.controller.get_parameters.remote()
+
+            episodes_steps.append(len(traj_obs))
+            episodes_rewards.append(sum(traj_rewards))
             if episodes_count % self.report_period == 0:
                 self.logger.info(f"Mean episode length: {sum(episodes_steps) / len(episodes_steps):.4f}.")
                 self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")

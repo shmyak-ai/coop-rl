@@ -41,8 +41,8 @@ def get_config():
 
     log_level = "INFO"
     seed = 42
-    num_collectors = 1
-    buffer_max_length = 100000  # in transitions
+    num_collectors = 2
+    buffer_max_size = 100000  # in transitions
     learning_rate = 6.25e-5
     eps = 1.5e-4
     gamma = 0.99
@@ -80,12 +80,12 @@ def get_config():
     config.buffer = buffer = BufferTrajectory
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
-    config.args_buffer.max_length = buffer_max_length
-    config.args_buffer.min_length = 1000
-    config.args_buffer.sample_batch_size = batch_size
     config.args_buffer.add_batch_size = num_collectors
+    config.args_buffer.sample_batch_size = batch_size
     config.args_buffer.sample_sequence_length = timesteps
     config.args_buffer.period = 1
+    config.args_buffer.min_length = 1000
+    config.args_buffer.max_size = buffer_max_size
     config.args_buffer.observation_shape = observation_shape
 
     config.network = network
@@ -139,7 +139,7 @@ def get_config():
     config.args_collector.warmup_steps = 10000
     config.args_collector.epsilon_fn = linearly_decaying_epsilon
     config.args_collector.epsilon = 0.01
-    config.args_collector.epsilon_decay_period = int(buffer_max_length / 4 / num_collectors)
+    config.args_collector.epsilon_decay_period = int(buffer_max_size / 4 / num_collectors)
     config.args_collector.flax_state = flax_state
     config.args_collector.env = env
     config.args_collector.args_env = args_env
