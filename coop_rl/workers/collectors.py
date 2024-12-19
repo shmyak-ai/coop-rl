@@ -79,6 +79,7 @@ class DQNCollectorUniform:
         self.epsilon_decay_period = epsilon_decay_period
         self.epsilon_current = None
 
+        self.obs = None
         self.collecting_steps = 0
         self.warmup_steps = warmup_steps
 
@@ -92,18 +93,20 @@ class DQNCollectorUniform:
         state = self.preprocess_fn(np.ones((1, *observation_shape)))
         self.online_params.append(self.network.init(rng, x=state))
 
-    def run_one_episode(self):
-        obs, _info = self.env.reset()
-
+    def run_rollout(self):
         traj_obs = []
         traj_actions = []
         traj_rewards = []
         traj_terminated = []
-        for _step in itertools.count(start=1, step=1):
+        traj_truncated = []
+
+        if self.obs is None:
+            self.obs, _info = self.env.reset()
+        for _ in range(100):
             self._rng, action, self.epsilon_current = select_action(
                 self.network,
                 random.choice(self.online_params),
-                self.preprocess_fn(obs),
+                self.preprocess_fn(self.obs),
                 self._rng,
                 self.num_actions,
                 False,  # eval mode
@@ -117,28 +120,29 @@ class DQNCollectorUniform:
             action_np = np.asarray(action)
             next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
 
-            traj_obs.append(obs)
+            traj_obs.append(self.obs)
             traj_actions.append(action_np)
             traj_rewards.append(reward)
             traj_terminated.append(terminated)
+            traj_truncated.append(truncated)
 
             if terminated or truncated:
-                break
+                next_obs, _info = self.env.reset()
 
-            obs = next_obs
+            self.obs = next_obs
 
-        return traj_obs, traj_actions, traj_rewards, traj_terminated
+        return traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated
 
     def collecting(self):
         episodes_steps = []
         episodes_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
-
-            traj_obs, traj_actions, traj_rewards, traj_terminated = self.run_one_episode()
+            traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
             traj_obs_np = np.array(traj_obs, dtype=np.float32)
             traj_actions_np = np.array(traj_actions, dtype=np.float32)
             traj_rewards_np = np.array(traj_rewards, dtype=np.float32)
             traj_terminated_np = np.array(traj_terminated, dtype=np.float32)
+            traj_truncated_np = np.array(traj_truncated, dtype=np.float32)
 
             while True:
                 training_done = ray.get(self.controller.is_done.remote())
@@ -154,12 +158,13 @@ class DQNCollectorUniform:
                             traj_actions_np,
                             traj_rewards_np,
                             traj_terminated_np,
+                            traj_truncated_np,
                         )
                     )
                 )
                 if adding_traj_done:
                     break
-                time.sleep(1)
+                time.sleep(0.1)
 
             parameters = ray.get(self.futures_parameters)
             if parameters is not None:

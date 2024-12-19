@@ -48,11 +48,10 @@ def get_config():
     gamma = 0.99
     batch_size = 32  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
-    timesteps = 5  # DQN n-steps update
+    timesteps = 3  # DQN n-steps update
     env_name = "ale_py:ALE/Breakout-v5"
     network = NatureDQNNetwork
     optimizer = optax.adam
-    controller = Controller
     flax_state = None
 
     seed = 73
@@ -102,7 +101,7 @@ def get_config():
     config.args_env.env_name = env_name
     config.args_env.stack_size = stack_size
 
-    config.controller = controller
+    config.controller = Controller
 
     config.trainer = DQN
     config.args_trainer = ml_collections.ConfigDict()

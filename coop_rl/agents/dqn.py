@@ -250,15 +250,10 @@ class DQN:
             return True
 
     def buffer_updating(self):
-        breakpoint()
-        # timer = time.time()
         while True:
-            # if time.time() - timer > 3:
-                # done = ray.get(self.controller.is_done.remote())
             if self.is_done:
-                self.logger.info("Done signal received; finishing.")
+                self.logger.info("Done signal received; finishing buffer updating.")
                 break
-                # timer = time.time()
 
             with self.store_lock:
                 trajectories = [self.traj_store[key] for key in self.traj_store if self.traj_store[key]]
@@ -271,11 +266,10 @@ class DQN:
                 self.traj_store = {}
 
             transposed = list(zip(*trajectories, strict=True))
-            merged = [np.concatenate(arrays, axis=0) for arrays in transposed]
-            traj_obs, traj_actions, traj_rewards, traj_terminated = merged
+            merged = [np.stack(arrays, axis=0) for arrays in transposed]
 
             with self.buffer_lock:
-                self.buffer.add(traj_obs, traj_actions, traj_rewards, traj_terminated)
+                self.buffer.add(*merged)
 
     def _train_step(self, replay_elements):
         observations = self.preprocess_fn(replay_elements["state"])
