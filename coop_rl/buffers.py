@@ -65,10 +65,10 @@ class BufferTrajectory:
             )
             fake_timestep = { 
                 "obs": jnp.ones(observation_shape, dtype="float32"),
-                "action": jnp.array(1.0, dtype="float32"),
+                "action": jnp.array(1.0, dtype="int32"),
                 "reward": jnp.array(1.0, dtype="float32"),
-                "terminated": jnp.array(1.0, dtype="float32"),
-                "truncated": jnp.array(1.0, dtype="float32"),
+                "terminated": jnp.array(1.0, dtype="int32"),
+                "truncated": jnp.array(1.0, dtype="int32"),
             }
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
@@ -77,10 +77,10 @@ class BufferTrajectory:
         with jax.default_device(self.cpu):
             traj_batch_seq = {
                 "obs": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_obs),
-                "action": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_actions),
+                "action": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.int32), traj_actions),
                 "reward": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_rewards),
-                "terminated": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_terminated),
-                "truncated": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_truncated),
+                "terminated": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.int32), traj_terminated),
+                "truncated": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.int32), traj_truncated),
             }
             self.state = self.buffer.add(self.state, traj_batch_seq)
 

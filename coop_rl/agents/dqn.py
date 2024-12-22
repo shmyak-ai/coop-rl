@@ -30,7 +30,7 @@ from flax import core, struct
 from flax.metrics import tensorboard
 from flax.training import train_state
 
-from coop_rl import losses, networks
+from coop_rl import losses
 
 
 @functools.partial(jax.jit, static_argnums=(0, 4, 5, 6, 7, 8, 10, 11))
@@ -48,32 +48,6 @@ def select_action(
     warmup_steps,
     epsilon_fn,
 ):
-    """Select an action from the set of available actions.
-
-    Chooses an action randomly with probability self._calculate_epsilon(), and
-    otherwise acts greedily according to the current Q-value estimates.
-
-    Args:
-        network_def: Linen Module to use for inference.
-        params: Linen params (frozen dict) to use for inference.
-        state: input state to use for inference.
-        rng: Jax random number generator.
-        num_actions: int, number of actions (static_argnum).
-        eval_mode: bool, whether we are in eval mode (static_argnum).
-        epsilon_eval: float, epsilon value to use in eval mode (static_argnum).
-        epsilon_train: float, epsilon value to use in train mode (static_argnum).
-        epsilon_decay_period: float, decay period for epsilon value for certain
-            epsilon functions, such as linearly_decaying_epsilon, (static_argnum).
-        step: int, number of training steps so far.
-        warmup_steps: int, minimum number of steps in replay buffer
-            (static_argnum).
-        epsilon_fn: function used to calculate epsilon value (static_argnum).
-
-    Returns:
-        rng: Jax random number generator.
-        action: int, the selected action.
-        epsilon
-    """
     epsilon = jnp.where(
         eval_mode,
         epsilon_eval,
@@ -192,7 +166,6 @@ class DQN:
         optimizer,
         args_optimizer,
         controller,
-        preprocess_fn=networks.identity_preprocess_fn,
     ):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
@@ -201,10 +174,13 @@ class DQN:
 
         self.buffer = buffer(**args_buffer)
 
-        self.preprocess_fn = preprocess_fn
         self.training_steps = training_steps
 
         self.cumulative_gamma = math.pow(gamma, update_horizon)
+        self._cumulative_discount_vector = jnp.array(
+            [math.pow(gamma, n) for n in range(update_horizon + 1)],
+            dtype=jnp.float32,
+        )
         self.batch_size = batch_size
         self.loss_type = loss_type
 
@@ -271,24 +247,6 @@ class DQN:
             with self.buffer_lock:
                 self.buffer.add(*merged)
 
-    def _train_step(self, replay_elements):
-        observations = self.preprocess_fn(replay_elements["state"])
-        next_observations = self.preprocess_fn(replay_elements["next_state"])
-
-        self.flax_state, loss = train(
-            self.flax_state,
-            observations,
-            next_observations,
-            replay_elements["action"],
-            replay_elements["reward"],
-            replay_elements["terminal"],
-            self.cumulative_gamma,
-            self.loss_type,
-        )
-
-        self.controller.set_parameters(self.flax_state.params)
-        return loss
-
     def training(self):
         while True:
             with self.buffer_lock:
@@ -300,12 +258,41 @@ class DQN:
                 self.logger.info("Waiting.")
                 time.sleep(1)
 
-        breakpoint()
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
             with self.buffer_lock:
-                replay_elements = self.buffer.sample()
-            loss = self._train_step(replay_elements)
+                sample = self.buffer.sample()
+
+            data = sample["experience"]
+            length_batch, length_traj = data["obs"].shape[:2]
+            mask_done = jnp.logical_or(data["truncated"] == 1, data["terminated"] == 1)
+            indices_done = jnp.argmax(mask_done, axis=1)
+            has_one = jnp.any(mask_done, axis=1)
+            indices_done = jnp.where(has_one, indices_done, length_traj - 1)
+            batch_indices = jnp.arange(length_batch)
+
+            obs = data["obs"][:, 0, ...]
+            next_obs = data["obs"][batch_indices, indices_done]
+            actions = data["action"][:, 0]
+
+            indices = jnp.arange(length_traj)
+            mask = indices[None, :] < indices_done[:, None]
+            masked_rewards = data["reward"] * mask
+            weighted_rewards = self._cumulative_discount_vector * masked_rewards
+            rewards = jnp.sum(weighted_rewards, axis=1)
+
+            terminals = data["terminated"][batch_indices, indices_done].astype(jnp.float32)
+
+            self.flax_state, loss = train(
+                self.flax_state,
+                obs,
+                next_obs,
+                actions,
+                rewards,
+                terminals,
+                self.cumulative_gamma,
+                self.loss_type,
+            )
             transitions_processed += self.batch_size
 
             if training_step == self.training_steps:
