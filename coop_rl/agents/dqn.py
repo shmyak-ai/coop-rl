@@ -100,7 +100,7 @@ def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, l
     return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))
 
 
-def target_q(state, observations, rewards, terminals, cumulative_gamma):
+def _target_q(state, observations, rewards, terminals, cumulative_gamma):
     """Compute the target Q-value."""
     q_vals = jnp.squeeze(state.apply_fn({"params": state.target_params}, x=observations).q_values)
     replay_next_qt_max = jnp.max(q_vals, 1)
@@ -115,7 +115,7 @@ def target_q(state, observations, rewards, terminals, cumulative_gamma):
 
 
 @functools.partial(jax.jit, static_argnums=(6, 7))
-def train(
+def _train(
     state,
     observations,
     next_observations,
@@ -134,10 +134,44 @@ def train(
             return jnp.mean(jax.vmap(losses.huber_loss)(target, replay_chosen_q))
         return jnp.mean(jax.vmap(losses.mse_loss)(target, replay_chosen_q))
 
-    target = target_q(state, next_observations, rewards, terminals, cumulative_gamma)
+    target = _target_q(state, next_observations, rewards, terminals, cumulative_gamma)
     grad_fn = jax.value_and_grad(loss_fn)
     loss, grad = grad_fn(state.params, target)
     state = state.apply_gradients(grads=grad)
+    return state, loss
+
+
+@functools.partial(jax.jit, static_argnums=(3,))
+def train(state, batched_timesteps, cumulative_discount_vector, loss_type):
+    length_batch, length_traj = batched_timesteps.obs.shape[:2]
+    mask_done = jnp.logical_or(batched_timesteps.truncated == 1, batched_timesteps.terminated == 1)
+    indices_done = jnp.argmax(mask_done, axis=1)
+    has_one = jnp.any(mask_done, axis=1)
+    indices_done = jnp.where(has_one, indices_done, length_traj - 1)
+    batch_indices = jnp.arange(length_batch)
+
+    obs = batched_timesteps.obs[:, 0, ...]
+    next_obs = batched_timesteps.obs[batch_indices, indices_done]
+    actions = batched_timesteps.action[:, 0]
+
+    indices = jnp.arange(length_traj)
+    mask = indices[None, :] < indices_done[:, None]
+    masked_rewards = batched_timesteps.reward * mask
+    weighted_rewards = cumulative_discount_vector * masked_rewards
+    rewards = jnp.sum(weighted_rewards, axis=1)
+
+    terminals = batched_timesteps.terminated[batch_indices, indices_done].astype(jnp.float32)
+
+    state, loss = _train(
+        state,
+        obs,
+        next_obs,
+        actions,
+        rewards,
+        terminals,
+        cumulative_discount_vector[-1],
+        loss_type,
+    )
     return state, loss
 
 
@@ -146,7 +180,7 @@ class DQN:
         self,
         *,
         trainer_seed,
-        log_level="INFO",
+        log_level,
         workdir,
         training_steps,
         loss_type,
@@ -260,40 +294,18 @@ class DQN:
 
         transitions_processed = 0
         for training_step in itertools.count(start=1, step=1):
+            # start = time.perf_counter()
             with self.buffer_lock:
                 sample = self.buffer.sample()
+            # self.logger.debug(f"Sampling time: {time.perf_counter() - start}.")
 
-            data = sample["experience"]
-            length_batch, length_traj = data["obs"].shape[:2]
-            mask_done = jnp.logical_or(data["truncated"] == 1, data["terminated"] == 1)
-            indices_done = jnp.argmax(mask_done, axis=1)
-            has_one = jnp.any(mask_done, axis=1)
-            indices_done = jnp.where(has_one, indices_done, length_traj - 1)
-            batch_indices = jnp.arange(length_batch)
-
-            obs = data["obs"][:, 0, ...]
-            next_obs = data["obs"][batch_indices, indices_done]
-            actions = data["action"][:, 0]
-
-            indices = jnp.arange(length_traj)
-            mask = indices[None, :] < indices_done[:, None]
-            masked_rewards = data["reward"] * mask
-            weighted_rewards = self._cumulative_discount_vector * masked_rewards
-            rewards = jnp.sum(weighted_rewards, axis=1)
-
-            terminals = data["terminated"][batch_indices, indices_done].astype(jnp.float32)
-
+            # start = time.perf_counter()
             self.flax_state, loss = train(
-                self.flax_state,
-                obs,
-                next_obs,
-                actions,
-                rewards,
-                terminals,
-                self.cumulative_gamma,
-                self.loss_type,
+                self.flax_state, sample["experience"], self._cumulative_discount_vector, self.loss_type
             )
+            # self.logger.debug(f"Prep and train time: {time.perf_counter() - start}.")
             transitions_processed += self.batch_size
+            # time.sleep(1)
 
             if training_step == self.training_steps:
                 self.is_done = True
@@ -320,4 +332,3 @@ class DQN:
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
-                self.logger.info(f"Reverb checkpoint is in: {self.sampler.checkpoint()}")

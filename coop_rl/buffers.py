@@ -12,9 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import chex
 import flashbax as fbx
 import jax
 import jax.numpy as jnp
+
+
+@chex.dataclass(frozen=True)
+class TimeStep:
+    obs: chex.Array
+    action: chex.Array
+    reward: chex.Array
+    terminated: chex.Array
+    truncated: chex.Array
 
 
 class BufferFlat:
@@ -63,25 +73,25 @@ class BufferTrajectory:
                 sample=jax.jit(self.buffer.sample),
                 can_sample=jax.jit(self.buffer.can_sample),
             )
-            fake_timestep = { 
-                "obs": jnp.ones(observation_shape, dtype="float32"),
-                "action": jnp.array(1.0, dtype="int32"),
-                "reward": jnp.array(1.0, dtype="float32"),
-                "terminated": jnp.array(1.0, dtype="int32"),
-                "truncated": jnp.array(1.0, dtype="int32"),
-            }
+            fake_timestep = TimeStep(
+                obs=jnp.ones(observation_shape, dtype="float32"),
+                action=jnp.array(1.0, dtype="int32"),
+                reward=jnp.array(1.0, dtype="float32"),
+                terminated=jnp.array(1.0, dtype="int32"),
+                truncated=jnp.array(1.0, dtype="int32"),
+            )
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
 
     def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
         with jax.default_device(self.cpu):
-            traj_batch_seq = {
-                "obs": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_obs),
-                "action": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.int32), traj_actions),
-                "reward": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.float32), traj_rewards),
-                "terminated": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.int32), traj_terminated),
-                "truncated": jax.tree.map(lambda x: jnp.array(x, dtype=jnp.int32), traj_truncated),
-            }
+            traj_batch_seq = TimeStep(
+                obs=jnp.array(traj_obs, dtype="float32"),
+                action=jnp.array(traj_actions, dtype="int32"),
+                reward=jnp.array(traj_rewards, dtype="float32"),
+                terminated=jnp.array(traj_terminated, dtype="int32"),
+                truncated=jnp.array(traj_truncated, dtype="int32"),
+            )
             self.state = self.buffer.add(self.state, traj_batch_seq)
 
     def sample(self):

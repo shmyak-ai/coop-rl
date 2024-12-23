@@ -139,10 +139,10 @@ class DQNCollectorUniform:
         for episodes_count in itertools.count(start=1, step=1):
             traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
             traj_obs_np = np.array(traj_obs, dtype=np.float32)
-            traj_actions_np = np.array(traj_actions, dtype=np.float32)
+            traj_actions_np = np.array(traj_actions, dtype=np.int32)
             traj_rewards_np = np.array(traj_rewards, dtype=np.float32)
-            traj_terminated_np = np.array(traj_terminated, dtype=np.float32)
-            traj_truncated_np = np.array(traj_truncated, dtype=np.float32)
+            traj_terminated_np = np.array(traj_terminated, dtype=np.int32)
+            traj_truncated_np = np.array(traj_truncated, dtype=np.int32)
 
             while True:
                 training_done = ray.get(self.controller.is_done.remote())

@@ -31,7 +31,7 @@ from coop_rl.workers.collectors import DQNCollectorUniform
 def get_config():
     config = ml_collections.ConfigDict()
 
-    log_level = config_dict.FieldReference(None, field_type=str)
+    log_level = config_dict.FieldReference("INFO", field_type=str)
     observation_shape = config_dict.FieldReference(None, field_type=tuple)
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
@@ -39,14 +39,12 @@ def get_config():
     checkpointdir = config_dict.FieldReference(None, field_type=str)
     flax_state = config_dict.FieldReference(None, field_type=object)
 
-    log_level = "INFO"
-    seed = 42
-    num_collectors = 2
+    num_collectors = 3
     buffer_max_size = 100000  # in transitions
     learning_rate = 6.25e-5
     eps = 1.5e-4
     gamma = 0.99
-    batch_size = 32  # > 1: target_q in dqn limitation
+    batch_size = 128  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
     timesteps = 3  # DQN n-steps update
     env_name = "ale_py:ALE/Breakout-v5"

@@ -38,6 +38,8 @@ runtime_env_cpu = {
 runtime_env_debug = {
     "env_vars": {
         "RAY_DEBUG_POST_MORTEM": "1",
+        "RAY_DEDUP_LOGS": "0",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
     }
 }
 
