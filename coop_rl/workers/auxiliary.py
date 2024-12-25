@@ -15,6 +15,8 @@
 import collections
 import threading
 import time
+from collections.abc import Generator
+from queue import Queue
 
 import numpy as np
 
@@ -22,7 +24,7 @@ import numpy as np
 class Controller:
     def __init__(self):
         self.done = False
-        self.params_store = collections.deque(maxlen=10)
+        self.params_store = collections.deque(maxlen=10)  # FIFO
 
     def set_done(self):
         self.done = True
@@ -36,8 +38,8 @@ class Controller:
 
     def get_parameters(self):
         try:
-            # pop from the right side
-            w = self.params_store.pop()
+            # pop from the left side
+            w = self.params_store.popleft()
         except IndexError:
             return None
         return {"params": w}
@@ -56,6 +58,7 @@ class BufferKeeper:
         self.add_batch_size = args_buffer.add_batch_size
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
+        self._samples = Queue(maxsize=100)
 
     def add_traj_seq(self, data):
         # a trick to start a ray thread, is it necessary?
@@ -91,3 +94,33 @@ class BufferKeeper:
 
             with self.buffer_lock:
                 self.buffer.add(*merged)
+
+    def buffer_sampling(self):
+        while True:
+            with self.buffer_lock:
+                can_sample = self.buffer.can_sample()
+            if can_sample:
+                break
+            else:
+                time.sleep(1)
+
+        while True:
+            if self.is_done:
+                self.logger.info("Done signal received; finishing buffer sampling.")
+                break
+
+            with self.buffer_lock:
+                sample = self.buffer.sample()
+            self._samples.put(sample)
+
+    def get_samples(self, batch_size: int = 10) -> Generator:
+        while True:
+            batch = []
+            while True:
+                if not self._samples.empty():
+                    batch.append(self._samples.get())
+                else:
+                    time.sleep(0.1)
+                if len(batch) == batch_size:
+                    break
+            yield batch

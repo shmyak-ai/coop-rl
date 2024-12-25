@@ -112,7 +112,7 @@ def get_config():
     config.args_trainer.batch_size = batch_size
     config.args_trainer.update_horizon = timesteps - 1
     config.args_trainer.target_update_period = 2000  # periods are in training_steps
-    config.args_trainer.summary_writing_period = 2000  # logging and reporting
+    config.args_trainer.summary_writing_period = 100  # logging and reporting
     config.args_trainer.save_period = 30000  # orbax checkpointing
     config.args_trainer.synchronization_period = 10  # send params to control actor
     config.args_trainer.observation_shape = observation_shape

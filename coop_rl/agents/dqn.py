@@ -236,30 +236,24 @@ class DQN(BufferKeeper):
         self.is_done = False
 
     def training(self):
-        while True:
-            with self.buffer_lock:
-                can_sample = self.buffer.can_sample()
-            if can_sample:
-                self.logger.info("Start training.")
-                break
-            else:
-                self.logger.info("Waiting.")
-                time.sleep(1)
-
+        samples_generator = self.get_samples(10)
         transitions_processed = 0
+        sampling_time = []
+        training_time = []
         for training_step in itertools.count(start=1, step=1):
-            # start = time.perf_counter()
-            with self.buffer_lock:
-                sample = self.buffer.sample()
-            # self.logger.debug(f"Sampling time: {time.perf_counter() - start}.")
+            start = time.perf_counter()
+            samples = next(samples_generator)
+            stop = time.perf_counter()
+            sampling_time.append(stop - start)
 
-            # start = time.perf_counter()
-            self.flax_state, loss = train(
-                self.flax_state, sample["experience"], self._cumulative_discount_vector, self.loss_type
-            )
-            # self.logger.debug(f"Prep and train time: {time.perf_counter() - start}.")
+            start = time.perf_counter()
+            for sample in samples:
+                self.flax_state, loss = train(
+                    self.flax_state, sample["experience"], self._cumulative_discount_vector, self.loss_type
+                )
+            stop = time.perf_counter()
+            training_time.append(stop - start)
             transitions_processed += self.batch_size
-            # time.sleep(1)
 
             if training_step == self.training_steps:
                 self.is_done = True
@@ -274,6 +268,10 @@ class DQN(BufferKeeper):
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
                 self.summary_writer.scalar("loss", loss, self.flax_state.step)
                 self.summary_writer.flush()
+                self.logger.debug(f"Sampling time: {sum(sampling_time)/len(sampling_time)}.")
+                self.logger.debug(f"Training time: {sum(training_time)/len(training_time)}.")
+                sampling_time = []
+                training_time = []
 
             if training_step % self.target_update_period == 0:
                 self.flax_state = self.flax_state.update_target_params()
