@@ -13,6 +13,10 @@
 # limitations under the License.
 
 import collections
+import threading
+import time
+
+import numpy as np
 
 
 class Controller:
@@ -43,3 +47,47 @@ class Controller:
 
     def store_size(self):
         return len(self.params_store)
+
+
+class BufferKeeper:
+    def __init__(self, buffer, args_buffer):
+        self.buffer = buffer(**args_buffer)
+        self.traj_store = {}
+        self.add_batch_size = args_buffer.add_batch_size
+        self.buffer_lock = threading.Lock()
+        self.store_lock = threading.Lock()
+
+    def add_traj_seq(self, data):
+        # a trick to start a ray thread, is it necessary?
+        if data == 1:
+            return
+        # save data from a collector
+        collector_seed, *_data = data
+        with self.store_lock:
+            # for collectors synchronization, put only if there is no data already
+            if self.traj_store.get(collector_seed) is not None:
+                return False
+            self.traj_store[collector_seed] = _data
+            return True
+
+    def buffer_updating(self):
+        while True:
+            if self.is_done:
+                self.logger.info("Done signal received; finishing buffer updating.")
+                break
+
+            with self.store_lock:
+                trajectories = [self.traj_store[key] for key in self.traj_store if self.traj_store[key]]
+
+            if len(trajectories) != self.add_batch_size:
+                time.sleep(0.1)
+                continue
+
+            with self.store_lock:
+                self.traj_store = {}
+
+            transposed = list(zip(*trajectories, strict=True))
+            merged = [np.stack(arrays, axis=0) for arrays in transposed]
+
+            with self.buffer_lock:
+                self.buffer.add(*merged)

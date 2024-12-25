@@ -17,13 +17,11 @@ import itertools
 import logging
 import math
 import os
-import threading
 import time
 from typing import Any
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import orbax.checkpoint as ocp
 import ray
 from flax import core, struct
@@ -31,6 +29,7 @@ from flax.metrics import tensorboard
 from flax.training import train_state
 
 from coop_rl import losses
+from coop_rl.workers.auxiliary import BufferKeeper
 
 
 @functools.partial(jax.jit, static_argnums=(0, 4, 5, 6, 7, 8, 10, 11))
@@ -175,7 +174,7 @@ def train(state, batched_timesteps, cumulative_discount_vector, loss_type):
     return state, loss
 
 
-class DQN:
+class DQN(BufferKeeper):
     def __init__(
         self,
         *,
@@ -201,15 +200,13 @@ class DQN:
         args_optimizer,
         controller,
     ):
+        super().__init__(buffer, args_buffer)
+
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
-
         self.workdir = workdir
 
-        self.buffer = buffer(**args_buffer)
-
         self.training_steps = training_steps
-
         self.cumulative_gamma = math.pow(gamma, update_horizon)
         self._cumulative_discount_vector = jnp.array(
             [math.pow(gamma, n) for n in range(update_horizon + 1)],
@@ -222,11 +219,9 @@ class DQN:
         self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
         self.save_period = save_period
-
         self.summary_writer = tensorboard.SummaryWriter(os.path.join(workdir, "tensorboard/"))
         self.orbax_checkpointer = ocp.StandardCheckpointer()
 
-        self.logger.info(f"Current devices: {jnp.arange(3).devices()}")
         self._rng = jax.random.PRNGKey(trainer_seed)
         if flax_state is None:
             self._rng, rng = jax.random.split(self._rng)
@@ -238,48 +233,7 @@ class DQN:
 
         self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)
-        self.buffer_lock = threading.Lock()
-
-        self.traj_store = {}
-        self.add_batch_size = args_buffer.add_batch_size
-        self.store_lock = threading.Lock()
-
         self.is_done = False
-
-    def add_traj_seq(self, data):
-        # a trick to start a ray thread, is it necessary?
-        if data == 1:
-            return
-        # save data from a collector
-        collector_seed, *_data = data
-        with self.store_lock:
-            # for collectors synchronization, put only if there is no data already
-            if self.traj_store.get(collector_seed) is not None:
-                return False
-            self.traj_store[collector_seed] = _data
-            return True
-
-    def buffer_updating(self):
-        while True:
-            if self.is_done:
-                self.logger.info("Done signal received; finishing buffer updating.")
-                break
-
-            with self.store_lock:
-                trajectories = [self.traj_store[key] for key in self.traj_store if self.traj_store[key]]
-
-            if len(trajectories) != self.add_batch_size:
-                time.sleep(0.1)
-                continue
-
-            with self.store_lock:
-                self.traj_store = {}
-
-            transposed = list(zip(*trajectories, strict=True))
-            merged = [np.stack(arrays, axis=0) for arrays in transposed]
-
-            with self.buffer_lock:
-                self.buffer.add(*merged)
 
     def training(self):
         while True:
