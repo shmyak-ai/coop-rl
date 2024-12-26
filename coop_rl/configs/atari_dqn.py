@@ -44,7 +44,7 @@ def get_config():
     learning_rate = 6.25e-5
     eps = 1.5e-4
     gamma = 0.99
-    batch_size = 128  # > 1: target_q in dqn limitation
+    batch_size = 500  # > 1: target_q in dqn limitation
     stack_size = 4  # >= 1, 1 - no stacking
     timesteps = 3  # DQN n-steps update
     env_name = "ale_py:ALE/Breakout-v5"
@@ -81,7 +81,7 @@ def get_config():
     config.args_buffer.sample_batch_size = batch_size
     config.args_buffer.sample_sequence_length = timesteps
     config.args_buffer.period = 1
-    config.args_buffer.min_length = 1000
+    config.args_buffer.min_length = 10000
     config.args_buffer.max_size = buffer_max_size
     config.args_buffer.observation_shape = observation_shape
 
@@ -106,15 +106,15 @@ def get_config():
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
-    config.args_trainer.training_steps = 1000000
+    config.args_trainer.steps = 1000000
+    config.args_trainer.training_iterations_per_step = 10  # to increase gpu load
     config.args_trainer.loss_type = "mse"
     config.args_trainer.gamma = gamma
-    config.args_trainer.batch_size = batch_size
     config.args_trainer.update_horizon = timesteps - 1
-    config.args_trainer.target_update_period = 2000  # periods are in training_steps
-    config.args_trainer.summary_writing_period = 100  # logging and reporting
-    config.args_trainer.save_period = 30000  # orbax checkpointing
-    config.args_trainer.synchronization_period = 10  # send params to control actor
+    config.args_trainer.target_update_period = 200  # periods are in steps
+    config.args_trainer.summary_writing_period = 20  # logging and reporting
+    config.args_trainer.save_period = 2000  # orbax checkpointing
+    config.args_trainer.synchronization_period = 1  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
     config.args_trainer.flax_state = flax_state
     config.args_trainer.buffer = buffer
@@ -128,7 +128,7 @@ def get_config():
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
-    config.args_collector.report_period = 25  # per episodes sampled
+    config.args_collector.report_period = 100  # per episodes sampled
     config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network

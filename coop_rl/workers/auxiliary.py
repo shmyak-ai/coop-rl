@@ -52,13 +52,13 @@ class Controller:
 
 
 class BufferKeeper:
-    def __init__(self, buffer, args_buffer):
+    def __init__(self, buffer, args_buffer, training_iterations_per_step):
         self.buffer = buffer(**args_buffer)
         self.traj_store = {}
         self.add_batch_size = args_buffer.add_batch_size
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
-        self._samples = Queue(maxsize=100)
+        self._samples = Queue(maxsize=3*training_iterations_per_step)
 
     def add_traj_seq(self, data):
         # a trick to start a ray thread, is it necessary?
@@ -120,7 +120,8 @@ class BufferKeeper:
                 if not self._samples.empty():
                     batch.append(self._samples.get())
                 else:
-                    time.sleep(0.1)
+                    self.logger.info("Not enough data; sampling generator sleeps for a second.")
+                    time.sleep(1)
                 if len(batch) == batch_size:
                     break
             yield batch

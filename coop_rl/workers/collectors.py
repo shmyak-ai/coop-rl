@@ -134,7 +134,6 @@ class DQNCollectorUniform:
         return traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated
 
     def collecting(self):
-        episodes_steps = []
         episodes_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
             traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
@@ -171,12 +170,9 @@ class DQNCollectorUniform:
                 self.online_params.append(parameters)
             self.futures_parameters = self.controller.get_parameters.remote()
 
-            episodes_steps.append(len(traj_obs))
             episodes_rewards.append(sum(traj_rewards))
             if episodes_count % self.report_period == 0:
-                self.logger.info(f"Mean episode length: {sum(episodes_steps) / len(episodes_steps):.4f}.")
                 self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
                 self.logger.debug(f"Current epsilon: {float(self.epsilon_current)}.")
                 self.logger.debug(f"Online params deque size: {len(self.online_params)}.")
-                episodes_steps = []
                 episodes_rewards = []

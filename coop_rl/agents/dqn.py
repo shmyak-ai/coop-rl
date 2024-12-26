@@ -17,7 +17,6 @@ import itertools
 import logging
 import math
 import os
-import time
 from typing import Any
 
 import jax
@@ -181,10 +180,10 @@ class DQN(BufferKeeper):
         trainer_seed,
         log_level,
         workdir,
-        training_steps,
+        steps,
+        training_iterations_per_step,
         loss_type,
         gamma,
-        batch_size,
         update_horizon,
         target_update_period,
         summary_writing_period,
@@ -200,19 +199,20 @@ class DQN(BufferKeeper):
         args_optimizer,
         controller,
     ):
-        super().__init__(buffer, args_buffer)
+        super().__init__(buffer, args_buffer, training_iterations_per_step)
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
         self.workdir = workdir
 
-        self.training_steps = training_steps
+        self.steps = steps
+        self.training_iterations_per_step = training_iterations_per_step
         self.cumulative_gamma = math.pow(gamma, update_horizon)
         self._cumulative_discount_vector = jnp.array(
             [math.pow(gamma, n) for n in range(update_horizon + 1)],
             dtype=jnp.float32,
         )
-        self.batch_size = batch_size
+        self.batch_size = args_buffer.sample_batch_size
         self.loss_type = loss_type
 
         self.target_update_period = target_update_period
@@ -236,51 +236,38 @@ class DQN(BufferKeeper):
         self.is_done = False
 
     def training(self):
-        samples_generator = self.get_samples(10)
+        sampler = self.get_samples(self.training_iterations_per_step)
         transitions_processed = 0
-        sampling_time = []
-        training_time = []
-        for training_step in itertools.count(start=1, step=1):
-            start = time.perf_counter()
-            samples = next(samples_generator)
-            stop = time.perf_counter()
-            sampling_time.append(stop - start)
-
-            start = time.perf_counter()
+        for step in itertools.count(start=1, step=1):
+            samples = next(sampler)
             for sample in samples:
                 self.flax_state, loss = train(
                     self.flax_state, sample["experience"], self._cumulative_discount_vector, self.loss_type
                 )
-            stop = time.perf_counter()
-            training_time.append(stop - start)
             transitions_processed += self.batch_size
 
-            if training_step == self.training_steps:
+            if step == self.steps:
                 self.is_done = True
                 ray.get(self.controller.set_done.remote())
-                self.logger.info(f"Final training step {training_step} reached; finishing.")
+                self.logger.info(f"Final training step {step} reached; finishing.")
                 break
 
-            if training_step % self.summary_writing_period == 0:
+            if step % self.summary_writing_period == 0:
                 store_size = ray.get(self.controller.store_size.remote())
-                self.logger.info(f"Training step: {training_step}.")
+                self.logger.info(f"Step: {step}.")
                 self.logger.debug(f"Weights store size: {store_size}.")
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
                 self.summary_writer.scalar("loss", loss, self.flax_state.step)
                 self.summary_writer.flush()
-                self.logger.debug(f"Sampling time: {sum(sampling_time)/len(sampling_time)}.")
-                self.logger.debug(f"Training time: {sum(training_time)/len(training_time)}.")
-                sampling_time = []
-                training_time = []
 
-            if training_step % self.target_update_period == 0:
+            if step % self.target_update_period == 0:
                 self.flax_state = self.flax_state.update_target_params()
 
-            if training_step % self.synchronization_period == 0:
+            if step % self.synchronization_period == 0:
                 ray.get(self.futures)
                 self.futures = self.controller.set_parameters.remote(self.flax_state.params)
 
-            if training_step % self.save_period == 0:
+            if step % self.save_period == 0:
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
