@@ -6,41 +6,13 @@ build-backend = "setuptools.build_meta"
 name = "coop_rl"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = [
-    "pyarrow",
-    "numpy",
-    "pandas",
-    "gymnasium[all]",
-    "matplotlib",
-    "seaborn",
-    "ipykernel",
-    "ipywidgets",
-    "tensorflow",
-    "tensorboard",
-]
-
-[project.optional-dependencies]
-ml-cpu = [
-  "jax",
-  "optax",
-  "flax",
-  "clu",
-  "flashbax",
-  "ml-collections",
-  "ray[default]",
-]
-ml-gpu = [
-  "jax[cuda12]",
-  "optax",
-  "flax",
-  "clu",
-  "flashbax",
-  "ml-collections",
-  "ray[default]",
-]
+dynamic = ["dependencies"]
 
 [tool.setuptools.packages.find]
 include = ["coop_rl"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
 
 [tool.ruff]
 line-length = 120

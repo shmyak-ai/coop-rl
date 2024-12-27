@@ -19,11 +19,13 @@ import numpy as np
 import optax
 from ml_collections import config_dict
 
-from coop_rl.agents.dqn import DQN, restore_dqn_flax_state
+from coop_rl.agents.dqn import DQN  # , restore_dqn_flax_state
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnvAtari
-from coop_rl.networks import NatureDQNNetwork
-from coop_rl.utils import linearly_decaying_epsilon
+from coop_rl.networks.base import FeedForwardActor
+from coop_rl.networks.heads import DiscreteQNetworkHead
+from coop_rl.networks.torso import MLPTorso
+from coop_rl.utils import get_network
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 
@@ -36,68 +38,62 @@ def get_config():
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
-    checkpointdir = config_dict.FieldReference(None, field_type=str)
+    # checkpointdir = config_dict.FieldReference(None, field_type=str)
     flax_state = config_dict.FieldReference(None, field_type=object)
-
-    num_collectors = 3
-    buffer_max_size = 100000  # in transitions
-    learning_rate = 6.25e-5
-    eps = 1.5e-4
-    gamma = 0.99
-    batch_size = 500  # > 1: target_q in dqn limitation
-    stack_size = 4  # >= 1, 1 - no stacking
-    timesteps = 3  # DQN n-steps update
-    env_name = "ale_py:ALE/Breakout-v5"
-    network = NatureDQNNetwork
-    optimizer = optax.adam
-    flax_state = None
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors
-    config.env_name = env_name
+    config.num_collectors = num_collectors = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
-    config.stack_size = stack_size
     config.workdir = workdir
 
-    config.state_recover = restore_dqn_flax_state
-    config.args_state_recover = ml_collections.ConfigDict()
-    config.args_state_recover.num_actions = num_actions
-    config.args_state_recover.network = network
-    config.args_state_recover.optimizer = optimizer
-    config.args_state_recover.observation_shape = observation_shape
-    config.args_state_recover.learning_rate = learning_rate
-    config.args_state_recover.eps = eps
-    config.args_state_recover.checkpointdir = checkpointdir
+    # config.state_recover = restore_dqn_flax_state
+    # config.args_state_recover = ml_collections.ConfigDict()
+    # config.args_state_recover.num_actions = num_actions
+    # config.args_state_recover.network = network
+    # config.args_state_recover.optimizer = optimizer
+    # config.args_state_recover.observation_shape = observation_shape
+    # config.args_state_recover.learning_rate = learning_rate
+    # config.args_state_recover.eps = eps
+    # config.args_state_recover.checkpointdir = checkpointdir
+
+    config.network = network = get_network
+    config.args_network = args_network = ml_collections.ConfigDict()
+    config.args_network.base = FeedForwardActor
+    config.args_network.torso = MLPTorso
+    config.args_network.args_torso = ml_collections.ConfigDict()
+    config.args_network.args_torso.activation = 'silu'
+    config.args_network.args_torso.layer_sizes = [256, 256]
+    config.args_network.args_torso.use_layer_norm = False
+    config.args_network.action_head = DiscreteQNetworkHead
+    config.args_network.args_action_head = ml_collections.ConfigDict()
+    config.args_network.args_action_head.action_dim = num_actions
+    config.args_network.args_action_head.epsilon = 0.01
+
+    config.optimizer = optimizer = optax.adam 
+    config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
+    config.args_optimizer.learning_rate = 6.25e-5
+    config.args_optimizer.eps = 1.5e-4
+
+    config.env = env = HandlerEnvAtari
+    config.args_env = args_env = ml_collections.ConfigDict()
+    config.args_env.env_name = "ale_py:ALE/Breakout-v5"
+    config.args_env.stack_size = 4  # >= 1, 1 - no stacking
 
     config.buffer = buffer = BufferTrajectory
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
-    config.args_buffer.sample_batch_size = batch_size
-    config.args_buffer.sample_sequence_length = timesteps
+    config.args_buffer.sample_batch_size = 500
+    config.args_buffer.sample_sequence_length = timesteps = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 10000
-    config.args_buffer.max_size = buffer_max_size
+    config.args_buffer.max_size = buffer_max_size = 100000  # in transitions
     config.args_buffer.observation_shape = observation_shape
-
-    config.network = network
-    config.args_network = args_network = ml_collections.ConfigDict()
-    config.args_network.num_actions = num_actions
-
-    config.optimizer = optimizer 
-    config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
-    config.args_optimizer.learning_rate = learning_rate
-    config.args_optimizer.eps = eps
-
-    config.env = env = HandlerEnvAtari
-    config.args_env = args_env = ml_collections.ConfigDict()
-    config.args_env.env_name = env_name
-    config.args_env.stack_size = stack_size
 
     config.controller = Controller
 
@@ -108,8 +104,7 @@ def get_config():
     config.args_trainer.workdir = workdir
     config.args_trainer.steps = 1000000
     config.args_trainer.training_iterations_per_step = 10  # to increase gpu load
-    config.args_trainer.loss_type = "mse"
-    config.args_trainer.gamma = gamma
+    config.args_trainer.gamma = 0.99
     config.args_trainer.update_horizon = timesteps - 1
     config.args_trainer.target_update_period = 200  # periods are in steps
     config.args_trainer.summary_writing_period = 20  # logging and reporting
@@ -134,7 +129,7 @@ def get_config():
     config.args_collector.network = network
     config.args_collector.args_network = args_network
     config.args_collector.warmup_steps = 10000
-    config.args_collector.epsilon_fn = linearly_decaying_epsilon
+    config.args_collector.epsilon_fn = None
     config.args_collector.epsilon = 0.01
     config.args_collector.epsilon_decay_period = int(buffer_max_size / 4 / num_collectors)
     config.args_collector.flax_state = flax_state

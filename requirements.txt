@@ -1,0 +1,22 @@
+pyarrow
+numpy
+pandas
+gymnasium[all]
+matplotlib
+seaborn
+ipykernel
+ipywidgets
+tensorflow
+tensorboard
+tensorflow_probability
+jax[cuda12]
+optax @ git+https://github.com/google-deepmind/optax.git
+chex
+flax
+brax>=0.9.0
+distrax @ git+https://github.com/google-deepmind/distrax  # distrax release doesn't support jax > 0.4.13
+flashbax @ git+https://github.com/instadeepai/flashbax
+rlax
+clu
+ml-collections
+ray[default]

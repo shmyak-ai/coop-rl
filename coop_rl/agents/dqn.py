@@ -182,7 +182,6 @@ class DQN(BufferKeeper):
         workdir,
         steps,
         training_iterations_per_step,
-        loss_type,
         gamma,
         update_horizon,
         target_update_period,
@@ -207,15 +206,8 @@ class DQN(BufferKeeper):
 
         self.steps = steps
         self.training_iterations_per_step = training_iterations_per_step
-        self.cumulative_gamma = math.pow(gamma, update_horizon)
-        self._cumulative_discount_vector = jnp.array(
-            [math.pow(gamma, n) for n in range(update_horizon + 1)],
-            dtype=jnp.float32,
-        )
         self.batch_size = args_buffer.sample_batch_size
-        self.loss_type = loss_type
 
-        self.target_update_period = target_update_period
         self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
         self.save_period = save_period
