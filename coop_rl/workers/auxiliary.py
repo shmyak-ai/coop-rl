@@ -33,16 +33,14 @@ class Controller:
         return self.done
 
     def set_parameters(self, w):
-        # add to the right side of the deque
         self.params_store.append(w)
 
     def get_parameters(self):
         try:
-            # pop from the left side
             w = self.params_store.popleft()
         except IndexError:
             return None
-        return {"params": w}
+        return w
 
     def get_parameters_done(self):
         return self.get_parameters(), self.done

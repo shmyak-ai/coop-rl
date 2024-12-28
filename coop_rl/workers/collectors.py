@@ -19,10 +19,19 @@ import time
 from collections import deque
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import ray
 
-from coop_rl.agents.dqn import select_action
+
+def get_select_action_fn(apply_fn):
+    @jax.jit
+    def select_action(key, params, observation):
+        key, policy_key = jax.random.split(key)
+        actor_policy = apply_fn(params, jnp.expand_dims(observation, axis=0))
+        return key, actor_policy.sample(seed=policy_key)
+
+    return select_action
 
 
 class DQNCollectorUniform:
@@ -30,22 +39,16 @@ class DQNCollectorUniform:
         self,
         *,
         collectors_seed,
-        log_level="INFO",
-        report_period=25,
-        num_actions,
+        log_level,
+        report_period,
         observation_shape,
         network,
         args_network,
-        warmup_steps=10000,
-        epsilon_fn,
-        epsilon=0.01,
-        epsilon_decay_period=250000,
         flax_state,
         env,
         args_env,
         controller,
         trainer,
-        preprocess_fn,
     ):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
@@ -55,41 +58,26 @@ class DQNCollectorUniform:
         self.trainer = trainer
 
         self.env = env(**args_env)
-
-        self.num_actions = num_actions
-        self.network = network(**args_network)
-        self.preprocess_fn = preprocess_fn
+        model = network(**args_network)
 
         self.collector_seed = collectors_seed
         random.seed(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
-        # to improve obs diversity during exp collection
+        # online params are to prevent dqn algs from freezing
         self.online_params = deque(maxlen=10)
         if flax_state is None:
-            self._build_network(observation_shape)
+            self._rng, init_rng = jax.random.split(self._rng)
+            self.online_params.append(model.init(init_rng, jnp.ones((1, *observation_shape))))
         else:
-            # network.init gives a dict "params"
-            # network.apply also needs "params"
-            self.online_params.append({"params": flax_state.params})
-
-        self.epsilon_fn = epsilon_fn
-        self.epsilon = epsilon
-        self.epsilon_decay_period = epsilon_decay_period
-        self.epsilon_current = None
-
-        self.obs = None
-        self.collecting_steps = 0
-        self.warmup_steps = warmup_steps
+            self.online_params.append(flax_state.params)
 
         parameters = ray.get(self.controller.get_parameters.remote())
         self.futures_parameters = self.controller.get_parameters.remote()
         if parameters is not None:
             self.online_params.append(parameters)
 
-    def _build_network(self, observation_shape):
-        self._rng, rng = jax.random.split(self._rng)
-        state = self.preprocess_fn(np.ones((1, *observation_shape)))
-        self.online_params.append(self.network.init(rng, x=state))
+        self.select_action = get_select_action_fn(model.apply)
+        self.collecting_steps = 0
 
     def run_rollout(self):
         traj_obs = []
@@ -98,24 +86,13 @@ class DQNCollectorUniform:
         traj_terminated = []
         traj_truncated = []
 
-        if self.obs is None:
-            self.obs, _info = self.env.reset()
         for _ in range(100):
-            self._rng, action, self.epsilon_current = select_action(
-                self.network,
-                random.choice(self.online_params),
-                self.preprocess_fn(self.obs),
+            self._rng, action_jnp = self.select_action(
                 self._rng,
-                self.num_actions,
-                False,  # eval mode
-                0.001,  # epsilon_eval,
-                self.epsilon,  # epsilon_train,
-                self.epsilon_decay_period,
-                self.collecting_steps,
-                self.warmup_steps,
-                self.epsilon_fn,
+                random.choice(self.online_params),
+                self.obs,
             )
-            action_np = np.asarray(action)
+            action_np = np.asarray(action_jnp, dtype=np.int32).squeeze()
             next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
 
             traj_obs.append(self.obs)
@@ -132,6 +109,7 @@ class DQNCollectorUniform:
         return traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated
 
     def collecting(self):
+        self.obs, _ = self.env.reset()
         episodes_rewards = []
         for episodes_count in itertools.count(start=1, step=1):
             traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
@@ -171,6 +149,5 @@ class DQNCollectorUniform:
             episodes_rewards.append(sum(traj_rewards))
             if episodes_count % self.report_period == 0:
                 self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
-                self.logger.debug(f"Current epsilon: {float(self.epsilon_current)}.")
                 self.logger.debug(f"Online params deque size: {len(self.online_params)}.")
                 episodes_rewards = []

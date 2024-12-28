@@ -17,6 +17,11 @@ from coop_rl.networks.inputs import ObservationInput
 from coop_rl.networks.utils import parse_rnn_cell
 
 
+def get_actor(base, torso, args_torso, action_head, args_action_head, input_layer):
+    result = base(torso=torso(**args_torso), action_head=action_head(**args_action_head), input_layer=input_layer())
+    return result
+
+
 class FeedForwardActor(nn.Module):
     """Simple Feedforward Actor Network."""
 

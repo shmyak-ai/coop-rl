@@ -22,11 +22,10 @@ from ml_collections import config_dict
 from coop_rl.agents.dqn import DQN  # , restore_dqn_flax_state
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnvAtari
-from coop_rl.networks.base import FeedForwardActor
+from coop_rl.networks.base import FeedForwardActor, get_actor
 from coop_rl.networks.heads import DiscreteQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
-from coop_rl.networks.torso import MLPTorso
-from coop_rl.utils import get_actor
+from coop_rl.networks.torso import CNNTorso
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 
@@ -46,7 +45,7 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 3
+    config.num_collectors = num_collectors = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -65,16 +64,20 @@ def get_config():
     config.network = network = get_actor
     config.args_network = args_network = ml_collections.ConfigDict()
     config.args_network.base = FeedForwardActor
-    config.args_network.torso = MLPTorso
+    config.args_network.torso = CNNTorso
     config.args_network.args_torso = ml_collections.ConfigDict()
     config.args_network.args_torso.activation = 'silu'
-    config.args_network.args_torso.layer_sizes = [256, 256]
+    config.args_network.args_torso.channel_first = False
+    config.args_network.args_torso.channel_sizes = [32, 64, 64]
+    config.args_network.args_torso.kernel_sizes = [64, 32, 16]
+    config.args_network.args_torso.strides = [4, 2, 1]
+    config.args_network.args_torso.hidden_sizes = [128, 128]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
     config.args_network.args_action_head.action_dim = num_actions
     config.args_network.args_action_head.epsilon = 0.01
-    config.args_network.input_layer = EmbeddingInput()
+    config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = optax.adam 
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
@@ -94,7 +97,7 @@ def get_config():
     config.args_buffer.sample_sequence_length = timesteps = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 10000
-    config.args_buffer.max_size = buffer_max_size = 100000  # in transitions
+    config.args_buffer.max_size = 100000  # in transitions
     config.args_buffer.observation_shape = observation_shape
 
     config.controller = Controller
@@ -126,14 +129,9 @@ def get_config():
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
     config.args_collector.report_period = 100  # per episodes sampled
-    config.args_collector.num_actions = num_actions
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.args_network = args_network
-    config.args_collector.warmup_steps = 10000
-    config.args_collector.epsilon_fn = None
-    config.args_collector.epsilon = 0.01
-    config.args_collector.epsilon_decay_period = int(buffer_max_size / 4 / num_collectors)
     config.args_collector.flax_state = flax_state
     config.args_collector.env = env
     config.args_collector.args_env = args_env

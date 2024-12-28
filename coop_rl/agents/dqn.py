@@ -29,46 +29,6 @@ from flax.training import train_state
 from coop_rl.workers.auxiliary import BufferKeeper
 
 
-@functools.partial(jax.jit, static_argnums=(0, 4, 5, 6, 7, 8, 10, 11))
-def select_action(
-    network_def,
-    params,
-    state,
-    rng,
-    num_actions,
-    eval_mode,
-    epsilon_eval,
-    epsilon_train,
-    epsilon_decay_period,
-    step,
-    warmup_steps,
-    epsilon_fn,
-):
-    epsilon = jnp.where(
-        eval_mode,
-        epsilon_eval,
-        epsilon_fn(
-            epsilon_decay_period,
-            step,
-            warmup_steps,
-            epsilon_train,
-        ),
-    )
-
-    state = jnp.expand_dims(state, axis=0)
-    rng, rng1, rng2 = jax.random.split(rng, num=3)
-    p = jax.random.uniform(rng1)
-    return (
-        rng,
-        jnp.where(
-            p <= epsilon,
-            jax.random.randint(rng2, (), 0, num_actions),
-            jnp.argmax(network_def.apply(params, state).q_values),
-        ),
-        epsilon,
-    )
-
-
 class TrainState(train_state.TrainState):
     key: jax.Array
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
@@ -78,7 +38,6 @@ class TrainState(train_state.TrainState):
 
 
 def create_train_state(rng, network, args_network, optimizer, args_optimizer, obs_shape):
-    """Creates initial `TrainState`."""
     state_rng, init_rng = jax.random.split(rng)
     model = network(**args_network)
     params = model.init(init_rng, jnp.ones((1, *obs_shape)))
