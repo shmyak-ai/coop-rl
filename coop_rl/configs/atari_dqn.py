@@ -24,8 +24,9 @@ from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnvAtari
 from coop_rl.networks.base import FeedForwardActor
 from coop_rl.networks.heads import DiscreteQNetworkHead
+from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import MLPTorso
-from coop_rl.utils import get_network
+from coop_rl.utils import get_actor
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 
@@ -61,7 +62,7 @@ def get_config():
     # config.args_state_recover.eps = eps
     # config.args_state_recover.checkpointdir = checkpointdir
 
-    config.network = network = get_network
+    config.network = network = get_actor
     config.args_network = args_network = ml_collections.ConfigDict()
     config.args_network.base = FeedForwardActor
     config.args_network.torso = MLPTorso
@@ -73,6 +74,7 @@ def get_config():
     config.args_network.args_action_head = ml_collections.ConfigDict()
     config.args_network.args_action_head.action_dim = num_actions
     config.args_network.args_action_head.epsilon = 0.01
+    config.args_network.input_layer = EmbeddingInput()
 
     config.optimizer = optimizer = optax.adam 
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()

@@ -30,5 +30,5 @@ def timeit(func):
     return wrapper
 
 
-def get_network(base, torso, args_torso, action_head, args_action_head):
-    return base(torso=torso(**args_torso), action_head=action_head(**args_action_head))
+def get_actor(base, torso, args_torso, action_head, args_action_head, input_layer):
+    return base(torso=torso(**args_torso), action_head=action_head(**args_action_head), input_layer=input_layer)

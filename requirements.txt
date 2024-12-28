@@ -8,7 +8,7 @@ ipykernel
 ipywidgets
 tensorflow
 tensorboard
-tensorflow_probability
+tensorflow_probability[tf]
 jax[cuda12]
 optax @ git+https://github.com/google-deepmind/optax.git
 chex

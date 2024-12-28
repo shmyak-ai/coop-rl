@@ -22,9 +22,7 @@ import jax
 import numpy as np
 import ray
 
-from coop_rl import networks
 from coop_rl.agents.dqn import select_action
-from coop_rl.utils import linearly_decaying_epsilon
 
 
 class DQNCollectorUniform:
@@ -39,7 +37,7 @@ class DQNCollectorUniform:
         network,
         args_network,
         warmup_steps=10000,
-        epsilon_fn=linearly_decaying_epsilon,
+        epsilon_fn,
         epsilon=0.01,
         epsilon_decay_period=250000,
         flax_state,
@@ -47,7 +45,7 @@ class DQNCollectorUniform:
         args_env,
         controller,
         trainer,
-        preprocess_fn=networks.identity_preprocess_fn,
+        preprocess_fn,
     ):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)

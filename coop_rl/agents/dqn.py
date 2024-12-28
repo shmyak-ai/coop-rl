@@ -15,7 +15,6 @@
 import functools
 import itertools
 import logging
-import math
 import os
 from typing import Any
 
@@ -27,7 +26,6 @@ from flax import core, struct
 from flax.metrics import tensorboard
 from flax.training import train_state
 
-from coop_rl import losses
 from coop_rl.workers.auxiliary import BufferKeeper
 
 
@@ -83,7 +81,7 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     """Creates initial `TrainState`."""
     state_rng, init_rng = jax.random.split(rng)
     model = network(**args_network)
-    params = model.init(init_rng, jnp.ones((1, *obs_shape)))["params"]
+    params = model.init(init_rng, jnp.ones((1, *obs_shape)))
     tx = optimizer(**args_optimizer)
     return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx)
 

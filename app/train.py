@@ -67,7 +67,7 @@ def main():
     # call jax stuff after ray init - after forking
     conf = configs[args.config].get_config()
     conf.observation_shape, conf.observation_dtype, conf.num_actions = conf.args_collector.env.check_env(
-        conf.env_name, conf.stack_size
+        conf.args_env.env_name, conf.args_env.stack_size
     )
 
     logger = logging.getLogger(__name__)
