@@ -12,37 +12,100 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
 import itertools
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 
+import chex
 import jax
 import jax.numpy as jnp
+import ml_collections
+import optax
 import orbax.checkpoint as ocp
 import ray
 from flax import core, struct
+from flax.core.frozen_dict import FrozenDict
+from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
 from flax.metrics import tensorboard
 from flax.training import train_state
+from typing_extensions import NamedTuple
 
+from coop_rl.base_types import (
+    ActorApply,
+)
+from coop_rl.buffers import TimeStep
+from coop_rl.loss import q_learning
+from coop_rl.multistep import batch_discounted_returns
 from coop_rl.workers.auxiliary import BufferKeeper
+
+
+class Transition(NamedTuple):
+    obs: chex.ArrayTree
+    action: chex.Array
+    reward: chex.Array
+    done: chex.Array
+    next_obs: chex.Array
+    info: dict
 
 
 class TrainState(train_state.TrainState):
     key: jax.Array
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    tau: int  # smoothing coefficient for target networks
 
-    def update_target_params(self):
-        return self.replace(target_params=self.params)
+    def apply_gradients(self, *, grads, **kwargs):
+        """Updates ``step``, ``params``, ``opt_state`` and ``**kwargs`` in return value.
+
+        Note that internally this function calls ``.tx.update()`` followed by a call
+        to ``optax.apply_updates()`` to update ``params`` and ``opt_state``.
+
+        Args:
+          grads: Gradients that have the same pytree structure as ``.params``.
+          **kwargs: Additional dataclass attributes that should be ``.replace()``-ed.
+
+        Returns:
+          An updated instance of ``self`` with ``step`` incremented by one, ``params``
+          and ``opt_state`` updated by applying ``grads``, and additional attributes
+          replaced as specified by ``kwargs``.
+        """
+        if OVERWRITE_WITH_GRADIENT in grads:
+            grads_with_opt = grads["params"]
+            params_with_opt = self.params["params"]
+        else:
+            grads_with_opt = grads
+            params_with_opt = self.params
+
+        # UPDATE Q PARAMS AND OPTIMISER STATE
+        updates, new_opt_state = self.tx.update(grads_with_opt, self.opt_state, params_with_opt)
+        new_params_with_opt = optax.apply_updates(params_with_opt, updates)
+        new_target_params = optax.incremental_update(new_params_with_opt, self.target_params, self.tau)
+
+        # As implied by the OWG name, the gradients are used directly to update the
+        # parameters.
+        if OVERWRITE_WITH_GRADIENT in grads:
+            new_params = {
+                "params": new_params_with_opt,
+                OVERWRITE_WITH_GRADIENT: grads[OVERWRITE_WITH_GRADIENT],
+            }
+        else:
+            new_params = new_params_with_opt
+        return self.replace(
+            step=self.step + 1,
+            params=new_params,
+            targer_params=new_target_params,
+            opt_state=new_opt_state,
+            **kwargs,
+        )
 
 
-def create_train_state(rng, network, args_network, optimizer, args_optimizer, obs_shape):
+def create_train_state(rng, network, args_network, optimizer, args_optimizer, obs_shape, tau):
     state_rng, init_rng = jax.random.split(rng)
     model = network(**args_network)
     params = model.init(init_rng, jnp.ones((1, *obs_shape)))
     tx = optimizer(**args_optimizer)
-    return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx)
+    return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau)
 
 
 def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, learning_rate, eps, checkpointdir):
@@ -55,79 +118,81 @@ def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, l
     return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))
 
 
-def _target_q(state, observations, rewards, terminals, cumulative_gamma):
-    """Compute the target Q-value."""
-    q_vals = jnp.squeeze(state.apply_fn({"params": state.target_params}, x=observations).q_values)
-    replay_next_qt_max = jnp.max(q_vals, 1)
-    # Calculate the Bellman target value.
-    #   Q_t = R_t + \gamma^N * Q'_t+1
-    # where,
-    #   Q'_t+1 = \argmax_a Q(S_t+1, a)
-    #          (or) 0 if S_t is a terminal state,
-    # and
-    #   N is the update horizon (by default, N=1).
-    return jax.lax.stop_gradient(rewards + cumulative_gamma * replay_next_qt_max * (1.0 - terminals))
+def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
+    def _update_step(train_state: TrainState, sample: TimeStep) -> tuple[TrainState, dict]:
+        def _q_loss_fn(
+            q_params: FrozenDict,
+            target_q_params: FrozenDict,
+            transitions: Transition,
+        ) -> tuple[jnp.ndarray, dict]:
+            q_tm1 = q_apply_fn(q_params, transitions.obs).preferences
+            q_t = q_apply_fn(target_q_params, transitions.next_obs).preferences
 
+            # Cast and clip rewards.
+            discount = 1.0 - transitions.done.astype(jnp.float32)
+            d_t = (discount * config.gamma).astype(jnp.float32)
+            r_t = jnp.clip(transitions.reward, -config.max_abs_reward, config.max_abs_reward).astype(jnp.float32)
+            a_tm1 = transitions.action
 
-@functools.partial(jax.jit, static_argnums=(6, 7))
-def _train(
-    state,
-    observations,
-    next_observations,
-    actions,
-    rewards,
-    terminals,
-    cumulative_gamma,
-    loss_type="mse",
-):
-    """Run the training step."""
+            # Compute Q-learning loss.
+            batch_loss = q_learning(
+                q_tm1,
+                a_tm1,
+                r_t,
+                d_t,
+                q_t,
+                config.huber_loss_parameter,
+            )
 
-    def loss_fn(params, target):
-        q_values = jnp.squeeze(state.apply_fn({"params": params}, x=observations).q_values)
-        replay_chosen_q = jax.vmap(lambda x, y: x[y])(q_values, actions)
-        if loss_type == "huber":
-            return jnp.mean(jax.vmap(losses.huber_loss)(target, replay_chosen_q))
-        return jnp.mean(jax.vmap(losses.mse_loss)(target, replay_chosen_q))
+            loss_info = {
+                "q_loss": batch_loss,
+            }
 
-    target = _target_q(state, next_observations, rewards, terminals, cumulative_gamma)
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grad = grad_fn(state.params, target)
-    state = state.apply_gradients(grads=grad)
-    return state, loss
+            return batch_loss, loss_info
 
+        # Extract the first and last observations.
+        breakpoint()
+        step_0_obs = jax.tree_util.tree_map(lambda x: x[:, 0], sample).obs
+        step_0_actions = sample.action[:, 0]
+        step_n_obs = jax.tree_util.tree_map(lambda x: x[:, -1], sample).obs
+        # check if any of the transitions are done - this will be used to decide
+        # if bootstrapping is needed
+        done = jnp.logical_or(sample.truncated == 1, sample.terminated == 1)
+        n_step_done = jnp.any(done, axis=-1)
+        # Calculate the n-step rewards and select the first one.
+        discounts = 1.0 - done.astype(jnp.float32)
+        n_step_reward = batch_discounted_returns(
+            sample.reward,
+            discounts * config.gamma,
+            jnp.zeros_like(discounts),
+        )[:, 0]
+        transitions = Transition(
+            obs=step_0_obs,
+            action=step_0_actions,
+            reward=n_step_reward,
+            done=n_step_done,
+            next_obs=step_n_obs,
+            info={},
+        )
 
-@functools.partial(jax.jit, static_argnums=(3,))
-def train(state, batched_timesteps, cumulative_discount_vector, loss_type):
-    length_batch, length_traj = batched_timesteps.obs.shape[:2]
-    mask_done = jnp.logical_or(batched_timesteps.truncated == 1, batched_timesteps.terminated == 1)
-    indices_done = jnp.argmax(mask_done, axis=1)
-    has_one = jnp.any(mask_done, axis=1)
-    indices_done = jnp.where(has_one, indices_done, length_traj - 1)
-    batch_indices = jnp.arange(length_batch)
+        # CALCULATE Q LOSS
+        q_grad_fn = jax.grad(_q_loss_fn, has_aux=True)
+        q_grads, q_loss_info = q_grad_fn(
+            train_state.params,
+            train_state.target_params,
+            transitions,
+        )
+        q_grads = jnp.mean(q_grads)
+        train_state = train_state.apply_gradients(grads=q_grads)
 
-    obs = batched_timesteps.obs[:, 0, ...]
-    next_obs = batched_timesteps.obs[batch_indices, indices_done]
-    actions = batched_timesteps.action[:, 0]
+        # PACK LOSS INFO
+        loss_info = {
+            **q_loss_info,
+        }
 
-    indices = jnp.arange(length_traj)
-    mask = indices[None, :] < indices_done[:, None]
-    masked_rewards = batched_timesteps.reward * mask
-    weighted_rewards = cumulative_discount_vector * masked_rewards
-    rewards = jnp.sum(weighted_rewards, axis=1)
+        return train_state, loss_info
 
-    terminals = batched_timesteps.terminated[batch_indices, indices_done].astype(jnp.float32)
-
-    state, loss = _train(
-        state,
-        obs,
-        next_obs,
-        actions,
-        rewards,
-        terminals,
-        cumulative_discount_vector[-1],
-        loss_type,
-    )
-    return state, loss
+    return _update_step
 
 
 class DQN(BufferKeeper):
@@ -139,14 +204,12 @@ class DQN(BufferKeeper):
         workdir,
         steps,
         training_iterations_per_step,
-        gamma,
-        update_horizon,
-        target_update_period,
         summary_writing_period,
         save_period,
         synchronization_period,
         observation_shape,
         flax_state,
+        dqn_params,
         buffer,
         args_buffer,
         network,
@@ -164,6 +227,7 @@ class DQN(BufferKeeper):
         self.steps = steps
         self.training_iterations_per_step = training_iterations_per_step
         self.batch_size = args_buffer.sample_batch_size
+        self.dqn_params = dqn_params
 
         self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
@@ -175,7 +239,7 @@ class DQN(BufferKeeper):
         if flax_state is None:
             self._rng, rng = jax.random.split(self._rng)
             self.flax_state = create_train_state(
-                rng, network, args_network, optimizer, args_optimizer, observation_shape
+                rng, network, args_network, optimizer, args_optimizer, observation_shape, dqn_params.tau,
             )
         else:
             self.flax_state = flax_state
@@ -185,14 +249,16 @@ class DQN(BufferKeeper):
         self.is_done = False
 
     def training(self):
+        update_step = get_update_step(self.flax_state.apply_fn, self.dqn_params)
         sampler = self.get_samples(self.training_iterations_per_step)
         transitions_processed = 0
         for step in itertools.count(start=1, step=1):
             samples = next(sampler)
             for sample in samples:
-                self.flax_state, loss = train(
-                    self.flax_state, sample["experience"], self._cumulative_discount_vector, self.loss_type
-                )
+                self.flax_state, loss = update_step(self.flax_state, sample["experience"])
+            # learner_state, (episode_info, loss_info) = jax.lax.scan(
+            #     batched_update_step, learner_state, None, config.arch.num_updates_per_eval
+            # )
             transitions_processed += self.batch_size
 
             if step == self.steps:
@@ -208,9 +274,6 @@ class DQN(BufferKeeper):
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
                 self.summary_writer.scalar("loss", loss, self.flax_state.step)
                 self.summary_writer.flush()
-
-            if step % self.target_update_period == 0:
-                self.flax_state = self.flax_state.update_target_params()
 
             if step % self.synchronization_period == 0:
                 ray.get(self.futures)

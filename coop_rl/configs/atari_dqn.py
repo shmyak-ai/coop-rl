@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""DQN with a Gym Cartpole environment configuration."""
-
 import ml_collections
 import numpy as np
 import optax
@@ -45,7 +43,7 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 1
+    config.num_collectors = num_collectors = 2
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -76,13 +74,13 @@ def get_config():
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
     config.args_network.args_action_head.action_dim = num_actions
-    config.args_network.args_action_head.epsilon = 0.01
+    config.args_network.args_action_head.epsilon = 0.1
     config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = optax.adam 
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
     config.args_optimizer.learning_rate = 6.25e-5
-    config.args_optimizer.eps = 1.5e-4
+    config.args_optimizer.eps = 1e-5
 
     config.env = env = HandlerEnvAtari
     config.args_env = args_env = ml_collections.ConfigDict()
@@ -93,12 +91,18 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
-    config.args_buffer.sample_batch_size = 500
-    config.args_buffer.sample_sequence_length = timesteps = 3  # DQN n-steps update
+    config.args_buffer.sample_batch_size = 100
+    config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
-    config.args_buffer.min_length = 10000
+    config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 100000  # in transitions
     config.args_buffer.observation_shape = observation_shape
+
+    config.dqn_params = dqn_params = ml_collections.ConfigDict()
+    # config.dqn_params.n_step = timesteps  # how many steps in the transition to use for the n-step return
+    config.dqn_params.tau = 0.005  # smoothing coefficient for target networks
+    config.dqn_params.gamma = 0.99  # discount factor
+    config.dqn_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
 
     config.controller = Controller
 
@@ -109,14 +113,12 @@ def get_config():
     config.args_trainer.workdir = workdir
     config.args_trainer.steps = 1000000
     config.args_trainer.training_iterations_per_step = 10  # to increase gpu load
-    config.args_trainer.gamma = 0.99
-    config.args_trainer.update_horizon = timesteps - 1
-    config.args_trainer.target_update_period = 200  # periods are in steps
     config.args_trainer.summary_writing_period = 20  # logging and reporting
     config.args_trainer.save_period = 2000  # orbax checkpointing
     config.args_trainer.synchronization_period = 1  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
     config.args_trainer.flax_state = flax_state
+    config.args_trainer.dqn_params = dqn_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.network = network
