@@ -23,11 +23,11 @@ from pathlib import Path
 
 import ray
 
-from coop_rl.configs import atari_dqn
+from coop_rl.configs import atari_dqn, classic_control_dqn
 
 configs = {
+    "classic_control": classic_control_dqn,
     "atari": atari_dqn,
-    "classic_control": None,
 }
 
 runtime_env_cpu = {
@@ -35,11 +35,13 @@ runtime_env_cpu = {
         "JAX_PLATFORMS": "cpu",
     }
 }
+
 runtime_env_debug = {
     "env_vars": {
         "RAY_DEBUG_POST_MORTEM": "1",
         "RAY_DEDUP_LOGS": "0",
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "JAX_DISABLE_JIT": "True",
     }
 }
 

@@ -25,6 +25,7 @@ import ml_collections
 import optax
 import orbax.checkpoint as ocp
 import ray
+from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 from flax import core, struct
 from flax.core.frozen_dict import FrozenDict
 from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
@@ -94,7 +95,7 @@ class TrainState(train_state.TrainState):
         return self.replace(
             step=self.step + 1,
             params=new_params,
-            targer_params=new_target_params,
+            target_params=new_target_params,
             opt_state=new_opt_state,
             **kwargs,
         )
@@ -119,7 +120,7 @@ def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, l
 
 
 def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
-    def _update_step(train_state: TrainState, sample: TimeStep) -> tuple[TrainState, dict]:
+    def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
         def _q_loss_fn(
             q_params: FrozenDict,
             target_q_params: FrozenDict,
@@ -150,8 +151,8 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
 
             return batch_loss, loss_info
 
+        sample: TimeStep = buffer_sample.experience
         # Extract the first and last observations.
-        breakpoint()
         step_0_obs = jax.tree_util.tree_map(lambda x: x[:, 0], sample).obs
         step_0_actions = sample.action[:, 0]
         step_n_obs = jax.tree_util.tree_map(lambda x: x[:, -1], sample).obs
@@ -182,7 +183,6 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             train_state.target_params,
             transitions,
         )
-        q_grads = jnp.mean(q_grads)
         train_state = train_state.apply_gradients(grads=q_grads)
 
         # PACK LOSS INFO
@@ -193,6 +193,15 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
         return train_state, loss_info
 
     return _update_step
+
+
+def get_update_epoch(update_step_fn: Callable) -> Callable:
+    @jax.jit
+    def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
+            for sample in samples:
+                train_state, loss_info = update_step_fn(train_state, sample)
+            return train_state, loss_info
+    return _update_epoch
 
 
 class DQN(BufferKeeper):
@@ -239,7 +248,13 @@ class DQN(BufferKeeper):
         if flax_state is None:
             self._rng, rng = jax.random.split(self._rng)
             self.flax_state = create_train_state(
-                rng, network, args_network, optimizer, args_optimizer, observation_shape, dqn_params.tau,
+                rng,
+                network,
+                args_network,
+                optimizer,
+                args_optimizer,
+                observation_shape,
+                dqn_params.tau,
             )
         else:
             self.flax_state = flax_state
@@ -249,16 +264,12 @@ class DQN(BufferKeeper):
         self.is_done = False
 
     def training(self):
-        update_step = get_update_step(self.flax_state.apply_fn, self.dqn_params)
-        sampler = self.get_samples(self.training_iterations_per_step)
+        update_epoch_fn = get_update_epoch(get_update_step(self.flax_state.apply_fn, self.dqn_params))
+        samples_generator = self.get_samples(self.training_iterations_per_step)
         transitions_processed = 0
         for step in itertools.count(start=1, step=1):
-            samples = next(sampler)
-            for sample in samples:
-                self.flax_state, loss = update_step(self.flax_state, sample["experience"])
-            # learner_state, (episode_info, loss_info) = jax.lax.scan(
-            #     batched_update_step, learner_state, None, config.arch.num_updates_per_eval
-            # )
+            samples = next(samples_generator)
+            self.flax_state, loss_info = update_epoch_fn(self.flax_state, samples)
             transitions_processed += self.batch_size
 
             if step == self.steps:
@@ -272,7 +283,7 @@ class DQN(BufferKeeper):
                 self.logger.info(f"Step: {step}.")
                 self.logger.debug(f"Weights store size: {store_size}.")
                 self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
-                self.summary_writer.scalar("loss", loss, self.flax_state.step)
+                self.summary_writer.scalar("loss", loss_info["q_loss"], self.flax_state.step)
                 self.summary_writer.flush()
 
             if step % self.synchronization_period == 0:

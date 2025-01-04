@@ -77,7 +77,10 @@ class DQNCollectorUniform:
             self.online_params.append(parameters)
 
         self.select_action = get_select_action_fn(model.apply)
-        self.collecting_steps = 0
+        self.episode_reward = {
+            "now": 0,
+            "last": 0,
+        }
 
     def run_rollout(self):
         traj_obs = []
@@ -100,9 +103,12 @@ class DQNCollectorUniform:
             traj_rewards.append(reward)
             traj_terminated.append(terminated)
             traj_truncated.append(truncated)
+            self.episode_reward["now"] += reward
 
             if terminated or truncated:
                 next_obs, _info = self.env.reset()
+                self.episode_reward["last"] = self.episode_reward["now"]
+                self.episode_reward["now"] = 0
 
             self.obs = next_obs
 
@@ -110,8 +116,7 @@ class DQNCollectorUniform:
 
     def collecting(self):
         self.obs, _ = self.env.reset()
-        episodes_rewards = []
-        for episodes_count in itertools.count(start=1, step=1):
+        for rollouts_count in itertools.count(start=1, step=1):
             traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
             traj_obs_np = np.array(traj_obs, dtype=np.float32)
             traj_actions_np = np.array(traj_actions, dtype=np.int32)
@@ -146,8 +151,6 @@ class DQNCollectorUniform:
                 self.online_params.append(parameters)
             self.futures_parameters = self.controller.get_parameters.remote()
 
-            episodes_rewards.append(sum(traj_rewards))
-            if episodes_count % self.report_period == 0:
-                self.logger.info(f"Mean episode reward: {sum(episodes_rewards) / len(episodes_rewards):.4f}.")
+            if rollouts_count % self.report_period == 0:
+                self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
                 self.logger.debug(f"Online params deque size: {len(self.online_params)}.")
-                episodes_rewards = []

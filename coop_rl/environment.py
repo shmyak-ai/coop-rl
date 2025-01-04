@@ -21,12 +21,12 @@ class HandlerEnv:
     def __init__(self, env_name, stack_size):
         self._env = HandlerEnv.make_env(env_name, stack_size)
 
-    def reset(self, seed):
-        observation, info = self._env.reset(seed=int(seed))
+    def reset(self, *args, seed=None, **kwargs):
+        observation, info = self._env.reset(*args, seed=seed, **kwargs)
         # call [:] to get a stacked array from gym
         return observation[:], info
 
-    def step(self, action):
+    def step(self, action, *args, **kwargs):
         observation, reward, terminated, truncated, info = self._env.step(action)
         return observation[:], reward, terminated, truncated, info
 
@@ -38,7 +38,7 @@ class HandlerEnv:
         return env
 
     @staticmethod
-    def check_env(env_name, stack_size):
+    def check_env(env_name, stack_size, *args, **kwargs):
         env = HandlerEnv.make_env(env_name, stack_size)
         return (
             env.observation_space.shape,
