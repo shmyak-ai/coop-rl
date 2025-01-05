@@ -43,7 +43,7 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 2
+    config.num_collectors = num_collectors = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -67,7 +67,7 @@ def get_config():
     config.args_network.args_torso.activation = 'silu'
     config.args_network.args_torso.channel_first = False
     config.args_network.args_torso.channel_sizes = [32, 64, 64]
-    config.args_network.args_torso.kernel_sizes = [64, 32, 16]
+    config.args_network.args_torso.kernel_sizes = [8, 4, 3]
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.hidden_sizes = [128, 128]
     config.args_network.args_torso.use_layer_norm = False
@@ -99,10 +99,10 @@ def get_config():
     config.args_buffer.observation_shape = observation_shape
 
     config.dqn_params = dqn_params = ml_collections.ConfigDict()
-    # config.dqn_params.n_step = timesteps  # how many steps in the transition to use for the n-step return
     config.dqn_params.tau = 0.005  # smoothing coefficient for target networks
     config.dqn_params.gamma = 0.99  # discount factor
     config.dqn_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
+    config.dqn_params.max_abs_reward = 1000.0
 
     config.controller = Controller
 
@@ -111,10 +111,10 @@ def get_config():
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
-    config.args_trainer.steps = 1000000
+    config.args_trainer.steps = 10000
     config.args_trainer.training_iterations_per_step = 10  # to increase gpu load
     config.args_trainer.summary_writing_period = 20  # logging and reporting
-    config.args_trainer.save_period = 2000  # orbax checkpointing
+    config.args_trainer.save_period = 1000  # orbax checkpointing
     config.args_trainer.synchronization_period = 1  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
     config.args_trainer.flax_state = flax_state
@@ -130,7 +130,7 @@ def get_config():
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
-    config.args_collector.report_period = 100  # per episodes sampled
+    config.args_collector.report_period = 100  # per rollouts sampled
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.args_network = args_network
