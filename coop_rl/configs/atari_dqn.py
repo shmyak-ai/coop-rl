@@ -17,7 +17,7 @@ import numpy as np
 import optax
 from ml_collections import config_dict
 
-from coop_rl.agents.dqn import DQN  # , restore_dqn_flax_state
+from coop_rl.agents.dqn import DQN, restore_dqn_flax_state
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnvAtari
 from coop_rl.networks.base import FeedForwardActor, get_actor
@@ -36,7 +36,7 @@ def get_config():
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
-    # checkpointdir = config_dict.FieldReference(None, field_type=str)
+    checkpointdir = config_dict.FieldReference(None, field_type=str)
     flax_state = config_dict.FieldReference(None, field_type=object)
 
     seed = 73
@@ -48,16 +48,6 @@ def get_config():
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
     config.workdir = workdir
-
-    # config.state_recover = restore_dqn_flax_state
-    # config.args_state_recover = ml_collections.ConfigDict()
-    # config.args_state_recover.num_actions = num_actions
-    # config.args_state_recover.network = network
-    # config.args_state_recover.optimizer = optimizer
-    # config.args_state_recover.observation_shape = observation_shape
-    # config.args_state_recover.learning_rate = learning_rate
-    # config.args_state_recover.eps = eps
-    # config.args_state_recover.checkpointdir = checkpointdir
 
     config.network = network = get_actor
     config.args_network = args_network = ml_collections.ConfigDict()
@@ -99,10 +89,20 @@ def get_config():
     config.args_buffer.observation_shape = observation_shape
 
     config.dqn_params = dqn_params = ml_collections.ConfigDict()
-    config.dqn_params.tau = 0.005  # smoothing coefficient for target networks
+    config.dqn_params.tau = tau = 0.005  # smoothing coefficient for target networks
     config.dqn_params.gamma = 0.99  # discount factor
     config.dqn_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
     config.dqn_params.max_abs_reward = 1000.0
+
+    config.state_recover = restore_dqn_flax_state
+    config.args_state_recover = ml_collections.ConfigDict()
+    config.args_state_recover.network = network
+    config.args_state_recover.args_network = args_network
+    config.args_state_recover.optimizer = optimizer 
+    config.args_state_recover.args_optimizer = args_optimizer 
+    config.args_state_recover.observation_shape = observation_shape
+    config.args_state_recover.tau = tau
+    config.args_state_recover.checkpointdir = checkpointdir
 
     config.controller = Controller
 

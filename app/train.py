@@ -86,10 +86,7 @@ def main():
 
     if args.orbax_checkpoint_dir is not None:
         conf.args_state_recover.checkpointdir = args.orbax_checkpoint_dir
-        conf.args_collector.flax_state = conf.state_recover(**conf.args_state_recover)
-        # update collector arguments if there is a state available
-        conf.args_collector.epsilon_decay_period = 1
-        conf.args_collector.warmup_steps = 1
+        conf.args_trainer.flax_state = conf.args_collector.flax_state = conf.state_recover(**conf.args_state_recover)
 
     # Transform to remote objects
     # with 0 gpus and a regular runtime jax will complain about gpu devices

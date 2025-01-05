@@ -109,14 +109,12 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau)
 
 
-def restore_dqn_flax_state(num_actions, network, optimizer, observation_shape, learning_rate, eps, checkpointdir):
+def restore_dqn_flax_state(network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir):
     orbax_checkpointer = ocp.StandardCheckpointer()
-    args_network = {"num_actions": num_actions}
-    args_optimizer = {"learning_rate": learning_rate, "eps": eps}
     rng = jax.random.PRNGKey(0)  # jax.random.key(0)
-    state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape)
+    state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape, tau)
     abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
-    return orbax_checkpointer.restore(checkpointdir, args=ocp.args.StandardRestore(abstract_my_tree))
+    return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
 def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
@@ -270,7 +268,7 @@ class DQN(BufferKeeper):
         for step in itertools.count(start=1, step=1):
             samples = next(samples_generator)
             self.flax_state, loss_info = update_epoch_fn(self.flax_state, samples)
-            transitions_processed += self.batch_size
+            transitions_processed += self.batch_size * self.training_iterations_per_step
 
             if step == self.steps:
                 self.is_done = True
