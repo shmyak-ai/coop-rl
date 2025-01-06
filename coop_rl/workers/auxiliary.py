@@ -18,6 +18,7 @@ import time
 from collections.abc import Generator
 from queue import Queue
 
+import jax
 import numpy as np
 
 
@@ -57,6 +58,7 @@ class BufferKeeper:
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
         self._samples = Queue(maxsize=3*training_iterations_per_step)
+        self.gpu_device = jax.devices("gpu")[0]
 
     def add_traj_seq(self, data):
         # a trick to start a ray thread, is it necessary?
@@ -109,7 +111,8 @@ class BufferKeeper:
 
             with self.buffer_lock:
                 sample = self.buffer.sample()
-            self._samples.put(sample)
+            sample_on_gpu = jax.device_put(sample, device=self.gpu_device)
+            self._samples.put(sample_on_gpu)
 
     def get_samples(self, batch_size: int = 10) -> Generator:
         while True:

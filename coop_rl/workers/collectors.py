@@ -145,8 +145,8 @@ class DQNCollectorUniform:
             parameters = ray.get(self.futures_parameters)
             if parameters is not None:
                 self.online_params.append(parameters)
+                self.logger.debug("Online params were updated.")
             self.futures_parameters = self.controller.get_parameters.remote()
 
             if rollouts_count % self.report_period == 0:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
-                self.logger.debug(f"Online params deque size: {len(self.online_params)}.")

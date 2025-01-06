@@ -29,7 +29,6 @@ from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 from flax import core, struct
 from flax.core.frozen_dict import FrozenDict
 from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
-from flax.metrics import tensorboard
 from flax.training import train_state
 from typing_extensions import NamedTuple
 
@@ -239,7 +238,6 @@ class DQN(BufferKeeper):
         self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
         self.save_period = save_period
-        self.summary_writer = tensorboard.SummaryWriter(os.path.join(workdir, "tensorboard/"))
         self.orbax_checkpointer = ocp.StandardCheckpointer()
 
         self._rng = jax.random.PRNGKey(trainer_seed)
@@ -278,11 +276,9 @@ class DQN(BufferKeeper):
 
             if step % self.summary_writing_period == 0:
                 store_size = ray.get(self.controller.store_size.remote())
-                self.logger.info(f"Step: {step}.")
                 self.logger.debug(f"Weights store size: {store_size}.")
-                self.logger.info(f"Transitions processed by the trainer: {transitions_processed}.")
-                self.summary_writer.scalar("loss", loss_info["q_loss"], self.flax_state.step)
-                self.summary_writer.flush()
+                self.logger.info(f"Training step: {self.flax_state.step}.")
+                self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
 
             if step % self.synchronization_period == 0:
                 ray.get(self.futures)
