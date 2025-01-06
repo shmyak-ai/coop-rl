@@ -65,16 +65,12 @@ class DQNCollectorUniform:
         self._rng = jax.random.PRNGKey(collectors_seed)
         # online params are to prevent dqn algs from freezing
         self.online_params = deque(maxlen=10)
-        if flax_state is None:
+        for _ in range(self.online_params.maxlen):
             self._rng, init_rng = jax.random.split(self._rng)
             self.online_params.append(model.init(init_rng, jnp.ones((1, *observation_shape))))
-        else:
+        if flax_state is not None:
             self.online_params.append(flax_state.params)
-
-        parameters = ray.get(self.controller.get_parameters.remote())
         self.futures_parameters = self.controller.get_parameters.remote()
-        if parameters is not None:
-            self.online_params.append(parameters)
 
         self.select_action = get_select_action_fn(model.apply)
         self.episode_reward = {
