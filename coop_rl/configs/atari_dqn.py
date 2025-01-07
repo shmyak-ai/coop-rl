@@ -112,10 +112,10 @@ def get_config():
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
     config.args_trainer.steps = 10000
-    config.args_trainer.training_iterations_per_step = 10  # to increase gpu load
-    config.args_trainer.summary_writing_period = 20  # logging and reporting
-    config.args_trainer.save_period = 1000  # orbax checkpointing
-    config.args_trainer.synchronization_period = 1  # send params to control actor
+    config.args_trainer.training_iterations_per_step = 1  # to increase gpu load ?
+    config.args_trainer.summary_writing_period = 100  # logging and reporting
+    config.args_trainer.save_period = 2000  # orbax checkpointing
+    config.args_trainer.synchronization_period = 10  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
     config.args_trainer.flax_state = flax_state
     config.args_trainer.dqn_params = dqn_params

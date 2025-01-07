@@ -275,8 +275,6 @@ class DQN(BufferKeeper):
                 break
 
             if step % self.summary_writing_period == 0:
-                store_size = ray.get(self.controller.store_size.remote())
-                self.logger.debug(f"Weights store size: {store_size}.")
                 self.logger.info(f"Training step: {self.flax_state.step}.")
                 self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
 

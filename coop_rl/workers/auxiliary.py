@@ -57,7 +57,7 @@ class BufferKeeper:
         self.add_batch_size = args_buffer.add_batch_size
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
-        self._samples = Queue(maxsize=3*training_iterations_per_step)
+        self._samples_on_gpu = Queue(maxsize=11*training_iterations_per_step)
         self.gpu_device = jax.devices("gpu")[0]
 
     def add_traj_seq(self, data):
@@ -105,24 +105,29 @@ class BufferKeeper:
                 time.sleep(1)
 
         while True:
-            if self.is_done:
-                self.logger.info("Done signal received; finishing buffer sampling.")
-                break
+            samples = []
+            for _ in range(15):
+                if self.is_done:
+                    self.logger.info("Done signal received; finishing buffer sampling.")
+                    return
 
-            with self.buffer_lock:
-                sample = self.buffer.sample()
-            sample_on_gpu = jax.device_put(sample, device=self.gpu_device)
-            self._samples.put(sample_on_gpu)
+                with self.buffer_lock:
+                    sample = self.buffer.sample()
+                samples.append(sample)
+            samples_on_gpu = jax.device_put(samples, device=self.gpu_device)
+            for sample_on_gpu in samples_on_gpu:
+                self._samples_on_gpu.put(sample_on_gpu)
 
     def get_samples(self, batch_size: int = 10) -> Generator:
         while True:
             batch = []
             while True:
-                if not self._samples.empty():
-                    batch.append(self._samples.get())
+                if not self._samples_on_gpu.empty():
+                    batch.append(self._samples_on_gpu.get())
                 else:
                     self.logger.info("Not enough data; sampling generator sleeps for a second.")
                     time.sleep(1)
                 if len(batch) == batch_size:
                     break
+            self.logger.debug(f"Samples queue size: {self._samples_on_gpu.qsize()}")
             yield batch
