@@ -281,6 +281,11 @@ class DQN(BufferKeeper):
             if step % self.summary_writing_period == 0:
                 self.logger.info(f"Training step: {self.flax_state.step}.")
                 self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
+                if self.logger.getEffectiveLevel() == logging.DEBUG:
+                    self.logger.debug(f"Samples queue size: {self._samples_on_gpu.qsize()}")
+                    with self.buffer_lock:
+                        self.logger.debug(f"Buffer current index: {self.buffer.state.current_index}")
+                        self.logger.debug(f"Buffer is full: {self.buffer.state.is_full}")
 
             if step % self.synchronization_period == 0:
                 ray.get(self.futures)

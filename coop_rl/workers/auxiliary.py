@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import collections
-import logging
 import threading
 import time
 from collections.abc import Generator
@@ -131,9 +130,4 @@ class BufferKeeper:
                     time.sleep(1)
                 if len(batch) == batch_size:
                     break
-            if self.logger.getEffectiveLevel() == logging.DEBUG:
-                self.logger.debug(f"Samples queue size: {self._samples_on_gpu.qsize()}")
-                with self.buffer_lock:
-                    self.logger.debug(f"Buffer current index: {self.buffer.state.current_index}")
-                    self.logger.debug(f"Buffer is full: {self.buffer.state.is_full}")
             yield batch
