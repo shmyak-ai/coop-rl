@@ -71,6 +71,7 @@ def main():
     conf.observation_shape, conf.observation_dtype, conf.num_actions = conf.args_collector.env.check_env(
         conf.args_env.env_name, conf.args_env.stack_size
     )
+    conf.args_state_recover.checkpointdir = args.orbax_checkpoint_dir
 
     logger = logging.getLogger(__name__)
     if args.debug_log:
@@ -83,10 +84,6 @@ def main():
     workdir = tempfile.mkdtemp(prefix=args.workdir)
     logger.info(f"Workdir is {workdir}.")
     conf.workdir = workdir
-
-    if args.orbax_checkpoint_dir is not None:
-        conf.args_state_recover.checkpointdir = args.orbax_checkpoint_dir
-        conf.args_trainer.flax_state = conf.args_collector.flax_state = conf.state_recover(**conf.args_state_recover)
 
     # Transform to remote objects
     # with 0 gpus and a regular runtime jax will complain about gpu devices

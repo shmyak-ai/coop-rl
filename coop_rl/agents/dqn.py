@@ -215,7 +215,8 @@ class DQN(BufferKeeper):
         save_period,
         synchronization_period,
         observation_shape,
-        flax_state,
+        state_recover,
+        args_state_recover,
         dqn_params,
         buffer,
         args_buffer,
@@ -244,7 +245,7 @@ class DQN(BufferKeeper):
         self.orbax_checkpointer = ocp.StandardCheckpointer()
 
         self._rng = jax.random.PRNGKey(trainer_seed)
-        if flax_state is None:
+        if args_state_recover.checkpointdir is None:
             self._rng, rng = jax.random.split(self._rng)
             self.flax_state = create_train_state(
                 rng,
@@ -256,7 +257,7 @@ class DQN(BufferKeeper):
                 dqn_params.tau,
             )
         else:
-            self.flax_state = flax_state
+            self.flax_state = state_recover(**args_state_recover)
 
         self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)

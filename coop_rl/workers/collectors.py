@@ -44,7 +44,8 @@ class DQNCollectorUniform:
         observation_shape,
         network,
         args_network,
-        flax_state,
+        state_recover,
+        args_state_recover,
         env,
         args_env,
         controller,
@@ -68,8 +69,10 @@ class DQNCollectorUniform:
         for _ in range(self.online_params.maxlen):
             self._rng, init_rng = jax.random.split(self._rng)
             self.online_params.append(model.init(init_rng, jnp.ones((1, *observation_shape))))
-        if flax_state is not None:
+        if args_state_recover.checkpointdir is not None:
+            flax_state = state_recover(**args_state_recover)
             self.online_params.append(flax_state.params)
+
         self.futures_parameters = self.controller.get_parameters.remote()
 
         self.select_action = get_select_action_fn(model.apply)

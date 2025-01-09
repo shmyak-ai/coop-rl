@@ -37,7 +37,6 @@ def get_config():
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
     checkpointdir = config_dict.FieldReference(None, field_type=str)
-    flax_state = config_dict.FieldReference(None, field_type=object)
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
@@ -95,8 +94,8 @@ def get_config():
     config.dqn_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
     config.dqn_params.max_abs_reward = 1000.0
 
-    config.state_recover = restore_dqn_flax_state
-    config.args_state_recover = ml_collections.ConfigDict()
+    config.state_recover = state_recover = restore_dqn_flax_state
+    config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
     config.args_state_recover.network = network
     config.args_state_recover.args_network = args_network
     config.args_state_recover.optimizer = optimizer 
@@ -118,7 +117,8 @@ def get_config():
     config.args_trainer.save_period = 2000  # orbax checkpointing
     config.args_trainer.synchronization_period = 10  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
-    config.args_trainer.flax_state = flax_state
+    config.args_trainer.state_recover = state_recover
+    config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.dqn_params = dqn_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
@@ -137,7 +137,8 @@ def get_config():
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.args_network = args_network
-    config.args_collector.flax_state = flax_state
+    config.args_collector.state_recover = state_recover
+    config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
 
