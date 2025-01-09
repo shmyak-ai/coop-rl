@@ -97,8 +97,9 @@ def main():
     # initialization
     # we cannot put remote refs back to conf and cannot pass jax objects
     controller = conf.controller.remote()
-    num_samplers = 6
-    trainer = conf.trainer.options(max_concurrency=3 + num_samplers).remote(**conf.args_trainer, controller=controller)
+    trainer = conf.trainer.options(max_concurrency=3 + conf.num_samplers).remote(
+        **conf.args_trainer, controller=controller
+    )
     collectors = []
     for _ in range(conf.num_collectors):
         conf.args_collector.collectors_seed += 1
@@ -108,7 +109,7 @@ def main():
     # remote calls
     trainer_futures = (
         [trainer.training.remote(), trainer.buffer_updating.remote()]
-        + [trainer.buffer_sampling.remote() for _ in range(num_samplers)]
+        + [trainer.buffer_sampling.remote() for _ in range(conf.num_samplers)]
         + [trainer.add_traj_seq.remote(1)]
     )
     collect_info_futures = [agent.collecting.remote() for agent in collectors]

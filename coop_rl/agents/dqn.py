@@ -195,9 +195,10 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
 def get_update_epoch(update_step_fn: Callable) -> Callable:
     @jax.jit
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
-            for sample in samples:
-                train_state, loss_info = update_step_fn(train_state, sample)
-            return train_state, loss_info
+        for sample in samples:
+            train_state, loss_info = update_step_fn(train_state, sample)
+        return train_state, loss_info
+
     return _update_epoch
 
 
@@ -222,9 +223,11 @@ class DQN(BufferKeeper):
         args_network,
         optimizer,
         args_optimizer,
+        num_samples_on_gpu_cache,
+        num_samples_to_gpu,
         controller,
     ):
-        super().__init__(buffer, args_buffer, training_iterations_per_step)
+        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu)
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)

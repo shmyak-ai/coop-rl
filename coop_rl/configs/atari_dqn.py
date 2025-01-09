@@ -43,7 +43,8 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 10
+    config.num_collectors = num_collectors = 5
+    config.num_samplers = 5
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -111,7 +112,7 @@ def get_config():
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
-    config.args_trainer.steps = 10000
+    config.args_trainer.steps = 1000000
     config.args_trainer.training_iterations_per_step = 1  # to increase gpu load ?
     config.args_trainer.summary_writing_period = 100  # logging and reporting
     config.args_trainer.save_period = 2000  # orbax checkpointing
@@ -125,6 +126,8 @@ def get_config():
     config.args_trainer.args_network = args_network
     config.args_trainer.optimizer = optimizer 
     config.args_trainer.args_optimizer = args_optimizer 
+    config.args_trainer.num_samples_on_gpu_cache = 75 
+    config.args_trainer.num_samples_to_gpu = 15
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()

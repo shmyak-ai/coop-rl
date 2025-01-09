@@ -52,14 +52,15 @@ class Controller:
 
 
 class BufferKeeper:
-    def __init__(self, buffer, args_buffer, training_iterations_per_step):
+    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu):
         self.buffer = buffer(**args_buffer)
         self.traj_store = {}
         self.add_batch_size = args_buffer.add_batch_size
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
-        self._samples_on_gpu = Queue(maxsize=11*training_iterations_per_step)
+        self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
         self.gpu_device = jax.devices("gpu")[0]
+        self.num_samples_to_gpu = num_samples_to_gpu
 
     def add_traj_seq(self, data):
         # a trick to start a ray thread, is it necessary?
@@ -107,7 +108,7 @@ class BufferKeeper:
 
         while True:
             samples = []
-            for _ in range(15):
+            for _ in range(self.num_samples_to_gpu):
                 if self.is_done:
                     self.logger.info("Done signal received; finishing buffer sampling.")
                     return
