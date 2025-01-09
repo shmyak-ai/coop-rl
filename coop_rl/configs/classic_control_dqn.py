@@ -42,7 +42,7 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 3
+    config.num_collectors = num_collectors = 5
     config.num_samplers = 5
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -107,10 +107,10 @@ def get_config():
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
-    config.args_trainer.steps = 10000
+    config.args_trainer.steps = 100000
     config.args_trainer.training_iterations_per_step = 1  # to increase gpu load
-    config.args_trainer.summary_writing_period = 100  # logging and reporting
-    config.args_trainer.save_period = 2000  # orbax checkpointing
+    config.args_trainer.summary_writing_period = 1000  # logging and reporting
+    config.args_trainer.save_period = 10000  # orbax checkpointing
     config.args_trainer.synchronization_period = 100  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
     config.args_trainer.state_recover = state_recover

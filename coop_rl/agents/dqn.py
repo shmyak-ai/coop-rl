@@ -149,16 +149,24 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             return batch_loss, loss_info
 
         sample: TimeStep = buffer_sample.experience
+
+        # Get indices of the last observation
+        length_batch, length_traj = sample.obs.shape[:2]
+        mask_done = jnp.logical_or(sample.truncated == 1, sample.terminated == 1)
+        indices_done = jnp.argmax(mask_done, axis=1)
+        has_one = jnp.any(mask_done, axis=1)
+        indices_done = jnp.where(has_one, indices_done, length_traj - 1)
+        batch_indices = jnp.arange(length_batch)
+
         # Extract the first and last observations.
         step_0_obs = jax.tree_util.tree_map(lambda x: x[:, 0], sample).obs
         step_0_actions = sample.action[:, 0]
-        step_n_obs = jax.tree_util.tree_map(lambda x: x[:, -1], sample).obs
+        step_n_obs = jax.tree_util.tree_map(lambda x: x[batch_indices, indices_done], sample).obs
         # check if any of the transitions are done - this will be used to decide
         # if bootstrapping is needed
-        done = jnp.logical_or(sample.truncated == 1, sample.terminated == 1)
-        n_step_done = jnp.any(done, axis=-1)
+        n_step_done = jnp.any(sample.terminated == 1, axis=-1)
         # Calculate the n-step rewards and select the first one.
-        discounts = 1.0 - done.astype(jnp.float32)
+        discounts = 1.0 - mask_done.astype(jnp.float32)
         n_step_reward = batch_discounted_returns(
             sample.reward,
             discounts * config.gamma,
