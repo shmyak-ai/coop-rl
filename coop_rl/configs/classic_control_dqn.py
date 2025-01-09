@@ -17,7 +17,7 @@ import numpy as np
 import optax
 from ml_collections import config_dict
 
-from coop_rl.agents.dqn import DQN  # , restore_dqn_flax_state
+from coop_rl.agents.dqn import DQN, restore_dqn_flax_state
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnv
 from coop_rl.networks.base import FeedForwardActor, get_actor
@@ -36,13 +36,14 @@ def get_config():
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
     num_actions = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
-    flax_state = config_dict.FieldReference(None, field_type=object)
+    checkpointdir = config_dict.FieldReference(None, field_type=str)
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
     config.num_collectors = num_collectors = 3
+    config.num_samplers = 5
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -84,10 +85,20 @@ def get_config():
     config.args_buffer.observation_shape = observation_shape
 
     config.dqn_params = dqn_params = ml_collections.ConfigDict()
-    config.dqn_params.tau = 0.005  # smoothing coefficient for target networks
+    config.dqn_params.tau = tau = 0.005  # smoothing coefficient for target networks
     config.dqn_params.gamma = 0.99  # discount factor
     config.dqn_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
     config.dqn_params.max_abs_reward = 1000.0
+
+    config.state_recover = state_recover = restore_dqn_flax_state
+    config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
+    config.args_state_recover.network = network
+    config.args_state_recover.args_network = args_network
+    config.args_state_recover.optimizer = optimizer 
+    config.args_state_recover.args_optimizer = args_optimizer 
+    config.args_state_recover.observation_shape = observation_shape
+    config.args_state_recover.tau = tau
+    config.args_state_recover.checkpointdir = checkpointdir
 
     config.controller = Controller
 
@@ -97,12 +108,13 @@ def get_config():
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
     config.args_trainer.steps = 10000
-    config.args_trainer.training_iterations_per_step = 10  # to increase gpu load
+    config.args_trainer.training_iterations_per_step = 1  # to increase gpu load
     config.args_trainer.summary_writing_period = 100  # logging and reporting
-    config.args_trainer.save_period = 1000  # orbax checkpointing
-    config.args_trainer.synchronization_period = 1  # send params to control actor
+    config.args_trainer.save_period = 2000  # orbax checkpointing
+    config.args_trainer.synchronization_period = 100  # send params to control actor
     config.args_trainer.observation_shape = observation_shape
-    config.args_trainer.flax_state = flax_state
+    config.args_trainer.state_recover = state_recover
+    config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.dqn_params = dqn_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
@@ -110,6 +122,8 @@ def get_config():
     config.args_trainer.args_network = args_network
     config.args_trainer.optimizer = optimizer 
     config.args_trainer.args_optimizer = args_optimizer 
+    config.args_trainer.num_samples_on_gpu_cache = 75 
+    config.args_trainer.num_samples_to_gpu = 15
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
@@ -119,7 +133,8 @@ def get_config():
     config.args_collector.observation_shape = observation_shape
     config.args_collector.network = network
     config.args_collector.args_network = args_network
-    config.args_collector.flax_state = flax_state
+    config.args_collector.state_recover = state_recover
+    config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
 
