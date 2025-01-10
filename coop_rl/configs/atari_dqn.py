@@ -42,8 +42,8 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 5
-    config.num_samplers = 5
+    config.num_collectors = num_collectors = 2
+    config.num_samplers = 8
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -81,7 +81,7 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
-    config.args_buffer.sample_batch_size = 100
+    config.args_buffer.sample_batch_size = 32
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
@@ -126,8 +126,8 @@ def get_config():
     config.args_trainer.args_network = args_network
     config.args_trainer.optimizer = optimizer 
     config.args_trainer.args_optimizer = args_optimizer 
-    config.args_trainer.num_samples_on_gpu_cache = 75 
-    config.args_trainer.num_samples_to_gpu = 15
+    config.args_trainer.num_samples_on_gpu_cache = 30 
+    config.args_trainer.num_samples_to_gpu = 40
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()

@@ -39,6 +39,7 @@ runtime_env_cpu = {
 runtime_env_gpu = {
     "env_vars": {
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "RAY_DEDUP_LOGS": "0",
     }
 }
 
