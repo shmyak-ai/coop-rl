@@ -36,6 +36,12 @@ runtime_env_cpu = {
     }
 }
 
+runtime_env_gpu = {
+    "env_vars": {
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+    }
+}
+
 runtime_env_debug = {
     "env_vars": {
         "RAY_DEBUG_POST_MORTEM": "1",
@@ -88,8 +94,10 @@ def main():
     # Transform to remote objects
     # with 0 gpus and a regular runtime jax will complain about gpu devices
     conf.controller = ray.remote(num_cpus=0, num_gpus=0, runtime_env=runtime_env_cpu)(conf.controller)
-    conf.trainer = ray.remote(num_cpus=1, num_gpus=1)(conf.trainer)
-    conf.collector = ray.remote(num_cpus=1, num_gpus=0, runtime_env=runtime_env_cpu)(conf.collector)
+    conf.trainer = ray.remote(num_cpus=1, num_gpus=0.5, runtime_env=runtime_env_gpu)(conf.trainer)
+    conf.collector = ray.remote(num_cpus=1, num_gpus=0.5 / conf.num_collectors, runtime_env=runtime_env_gpu)(
+        conf.collector
+    )
 
     # initialization
     # we cannot put remote refs back to conf and cannot pass jax objects
