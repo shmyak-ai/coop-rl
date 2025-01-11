@@ -57,6 +57,7 @@ class BufferKeeper:
         self.add_batch_size = args_buffer.add_batch_size
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
+        self.device_lock = threading.Lock()
         self.semaphore = threading.Semaphore(4)
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
         self.gpu_device = jax.devices("gpu")[0]
@@ -116,7 +117,8 @@ class BufferKeeper:
                 with self.buffer_lock:
                     sample = self.buffer.sample()
                 samples.append(sample)
-            samples_on_gpu = jax.device_put(samples, device=self.gpu_device)
+            with self.device_lock:
+                samples_on_gpu = jax.device_put(samples, device=self.gpu_device)
             with self.semaphore:
                 for sample_on_gpu in samples_on_gpu:
                     self._samples_on_gpu.put(sample_on_gpu)
