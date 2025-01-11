@@ -30,6 +30,14 @@ OptStates: TypeAlias = Any
 HiddenStates: TypeAlias = Any
 
 
+class AtariTimeStepDtypes(NamedTuple):
+    obs: str = "float32"
+    action: str = "int8"
+    reward: str = "int8"
+    terminated: str = "int8"
+    truncated: str = "int8"
+
+
 class Observation(NamedTuple):
     """The observation that the agent sees.
     agent_view: the agent's view of the environment.
@@ -199,10 +207,6 @@ CriticApply = Callable[[FrozenDict, Observation], Value]
 DistributionCriticApply = Callable[[FrozenDict, Observation], Any]
 ContinuousQApply = Callable[[FrozenDict, Observation, Action], Value]
 
-RecActorApply = Callable[
-    [FrozenDict, HiddenState, RNNObservation], tuple[HiddenState, Any]
-]
-RecActFn = Callable[
-    [FrozenDict, HiddenState, RNNObservation, chex.PRNGKey], tuple[HiddenState, chex.Array]
-]
+RecActorApply = Callable[[FrozenDict, HiddenState, RNNObservation], tuple[HiddenState, Any]]
+RecActFn = Callable[[FrozenDict, HiddenState, RNNObservation, chex.PRNGKey], tuple[HiddenState, chex.Array]]
 RecCriticApply = Callable[[FrozenDict, HiddenState, RNNObservation], tuple[HiddenState, Value]]

@@ -48,6 +48,7 @@ class DQNCollectorUniform:
         args_state_recover,
         env,
         args_env,
+        time_step_dtypes,
         controller,
         trainer,
     ):
@@ -60,6 +61,8 @@ class DQNCollectorUniform:
 
         self.env = env(**args_env)
         model = network(**args_network)
+
+        self.dtypes = time_step_dtypes
 
         self.collector_seed = collectors_seed
         random.seed(collectors_seed)
@@ -94,7 +97,7 @@ class DQNCollectorUniform:
                 random.choice(self.online_params),
                 self.obs,
             )
-            action_np = np.asarray(action_jnp, dtype=np.int32).squeeze()
+            action_np = np.asarray(action_jnp, dtype=self.dtypes.action).squeeze()
             next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
 
             traj_obs.append(self.obs)
@@ -117,11 +120,11 @@ class DQNCollectorUniform:
         self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
             traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
-            traj_obs_np = np.array(traj_obs, dtype=np.float32)
-            traj_actions_np = np.array(traj_actions, dtype=np.int32)
-            traj_rewards_np = np.array(traj_rewards, dtype=np.float32)
-            traj_terminated_np = np.array(traj_terminated, dtype=np.int32)
-            traj_truncated_np = np.array(traj_truncated, dtype=np.int32)
+            traj_obs_np = np.array(traj_obs, dtype=self.dtypes.obs)
+            traj_actions_np = np.array(traj_actions, dtype=self.dtypes.action)
+            traj_rewards_np = np.array(traj_rewards, dtype=self.dtypes.reward)
+            traj_terminated_np = np.array(traj_terminated, dtype=self.dtypes.terminated)
+            traj_truncated_np = np.array(traj_truncated, dtype=self.dtypes.truncated)
 
             while True:
                 training_done = ray.get(self.controller.is_done.remote())

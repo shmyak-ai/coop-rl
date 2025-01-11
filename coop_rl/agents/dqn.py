@@ -168,7 +168,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
         # Calculate the n-step rewards and select the first one.
         discounts = 1.0 - mask_done.astype(jnp.float32)
         n_step_reward = batch_discounted_returns(
-            sample.reward,
+            sample.reward.astype(jnp.float32),
             discounts * config.gamma,
             jnp.zeros_like(discounts),
         )[:, 0]

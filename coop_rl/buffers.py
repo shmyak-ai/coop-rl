@@ -56,7 +56,9 @@ class BufferTrajectory:
         min_length,
         max_size,
         observation_shape,
+        time_step_dtypes,
     ):
+        self.dtypes = time_step_dtypes
         self.cpu = jax.devices("cpu")[0]
         with jax.default_device(self.cpu):
             self.buffer = fbx.make_trajectory_buffer(
@@ -74,11 +76,11 @@ class BufferTrajectory:
                 can_sample=jax.jit(self.buffer.can_sample),
             )
             fake_timestep = TimeStep(
-                obs=jnp.ones(observation_shape, dtype="float32"),
-                action=jnp.array(1.0, dtype="int32"),
-                reward=jnp.array(1.0, dtype="float32"),
-                terminated=jnp.array(1.0, dtype="int32"),
-                truncated=jnp.array(1.0, dtype="int32"),
+                obs=jnp.ones(observation_shape, dtype=self.dtypes.obs),
+                action=jnp.ones((), dtype=self.dtypes.action),
+                reward=jnp.ones((), dtype=self.dtypes.reward),
+                terminated=jnp.ones((), dtype=self.dtypes.terminated),
+                truncated=jnp.ones((), dtype=self.dtypes.truncated),
             )
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
@@ -86,11 +88,11 @@ class BufferTrajectory:
     def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
         with jax.default_device(self.cpu):
             traj_batch_seq = TimeStep(
-                obs=jnp.array(traj_obs, dtype="float32"),
-                action=jnp.array(traj_actions, dtype="int32"),
-                reward=jnp.array(traj_rewards, dtype="float32"),
-                terminated=jnp.array(traj_terminated, dtype="int32"),
-                truncated=jnp.array(traj_truncated, dtype="int32"),
+                obs=jnp.array(traj_obs, dtype=self.dtypes.obs),
+                action=jnp.array(traj_actions, dtype=self.dtypes.action),
+                reward=jnp.array(traj_rewards, dtype=self.dtypes.reward),
+                terminated=jnp.array(traj_terminated, dtype=self.dtypes.terminated),
+                truncated=jnp.array(traj_truncated, dtype=self.dtypes.truncated),
             )
             self.state = self.buffer.add(self.state, traj_batch_seq)
 

@@ -18,6 +18,7 @@ import optax
 from ml_collections import config_dict
 
 from coop_rl.agents.dqn import DQN, restore_dqn_flax_state
+from coop_rl.base_types import AtariTimeStepDtypes
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnvAtari
 from coop_rl.networks.base import FeedForwardActor, get_actor
@@ -87,6 +88,7 @@ def get_config():
     config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 100000  # in transitions
     config.args_buffer.observation_shape = observation_shape
+    config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
     config.dqn_params = dqn_params = ml_collections.ConfigDict()
     config.dqn_params.tau = tau = 0.005  # smoothing coefficient for target networks
@@ -141,5 +143,6 @@ def get_config():
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
+    config.args_collector.time_step_dtypes = time_step_dtypes
 
     return config
