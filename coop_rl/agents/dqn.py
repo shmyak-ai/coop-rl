@@ -12,9 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import itertools
-import logging
-import os
 from collections.abc import Callable
 from typing import Any
 
@@ -24,7 +21,6 @@ import jax.numpy as jnp
 import ml_collections
 import optax
 import orbax.checkpoint as ocp
-import ray
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 from flax import core, struct
 from flax.core.frozen_dict import FrozenDict
@@ -38,7 +34,6 @@ from coop_rl.base_types import (
 from coop_rl.buffers import TimeStep
 from coop_rl.loss import q_learning
 from coop_rl.multistep import batch_discounted_returns
-from coop_rl.workers.auxiliary import BufferKeeper
 
 
 class Transition(NamedTuple):
@@ -108,10 +103,13 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau)
 
 
-def restore_dqn_flax_state(network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir):
-    orbax_checkpointer = ocp.StandardCheckpointer()
-    rng = jax.random.PRNGKey(0)  # jax.random.key(0)
+def restore_dqn_flax_state(
+    rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
+):
     state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape, tau)
+    if checkpointdir is None:
+        return state
+    orbax_checkpointer = ocp.StandardCheckpointer()
     abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
@@ -208,98 +206,3 @@ def get_update_epoch(update_step_fn: Callable) -> Callable:
         return train_state, loss_info
 
     return _update_epoch
-
-
-class DQN(BufferKeeper):
-    def __init__(
-        self,
-        *,
-        trainer_seed,
-        log_level,
-        workdir,
-        steps,
-        training_iterations_per_step,
-        summary_writing_period,
-        save_period,
-        synchronization_period,
-        observation_shape,
-        state_recover,
-        args_state_recover,
-        dqn_params,
-        buffer,
-        args_buffer,
-        network,
-        args_network,
-        optimizer,
-        args_optimizer,
-        num_samples_on_gpu_cache,
-        num_samples_to_gpu,
-        controller,
-    ):
-        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu)
-
-        self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(log_level)
-        self.workdir = workdir
-
-        self.steps = steps
-        self.training_iterations_per_step = training_iterations_per_step
-        self.batch_size = args_buffer.sample_batch_size
-        self.dqn_params = dqn_params
-
-        self.synchronization_period = synchronization_period
-        self.summary_writing_period = summary_writing_period
-        self.save_period = save_period
-        self.orbax_checkpointer = ocp.StandardCheckpointer()
-
-        self._rng = jax.random.PRNGKey(trainer_seed)
-        if args_state_recover.checkpointdir is None:
-            self._rng, rng = jax.random.split(self._rng)
-            self.flax_state = create_train_state(
-                rng,
-                network,
-                args_network,
-                optimizer,
-                args_optimizer,
-                observation_shape,
-                dqn_params.tau,
-            )
-        else:
-            self.flax_state = state_recover(**args_state_recover)
-
-        self.controller = controller
-        self.futures = self.controller.set_parameters.remote(self.flax_state.params)
-        self.is_done = False
-
-    def training(self):
-        update_epoch_fn = get_update_epoch(get_update_step(self.flax_state.apply_fn, self.dqn_params))
-        samples_generator = self.get_samples(self.training_iterations_per_step)
-        transitions_processed = 0
-        for step in itertools.count(start=1, step=1):
-            samples = next(samples_generator)
-            self.flax_state, loss_info = update_epoch_fn(self.flax_state, samples)
-            transitions_processed += self.batch_size * self.training_iterations_per_step
-
-            if step == self.steps:
-                self.is_done = True
-                ray.get(self.controller.set_done.remote())
-                self.logger.info(f"Final training step {step} reached; finishing.")
-                break
-
-            if step % self.summary_writing_period == 0:
-                self.logger.info(f"Training step: {self.flax_state.step}.")
-                self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
-                if self.logger.getEffectiveLevel() == logging.DEBUG:
-                    self.logger.debug(f"Samples queue size: {self._samples_on_gpu.qsize()}")
-                    with self.buffer_lock:
-                        self.logger.debug(f"Buffer current index: {self.buffer.state.current_index}")
-                        self.logger.debug(f"Buffer is full: {self.buffer.state.is_full}")
-
-            if step % self.synchronization_period == 0:
-                ray.get(self.futures)
-                self.futures = self.controller.set_parameters.remote(self.flax_state.params)
-
-            if step % self.save_period == 0:
-                orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
-                self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
-                self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")

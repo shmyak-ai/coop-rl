@@ -17,7 +17,8 @@ import numpy as np
 import optax
 from ml_collections import config_dict
 
-from coop_rl.agents.dqn import DQN, restore_dqn_flax_state
+from coop_rl.agents.dqn import get_update_epoch, get_update_step, restore_dqn_flax_state
+from coop_rl.base_types import ClassicControlTimeStepDtypes
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnv
 from coop_rl.networks.base import FeedForwardActor, get_actor
@@ -26,6 +27,7 @@ from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import MLPTorso
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
+from coop_rl.workers.trainers import Trainer
 
 
 def get_config():
@@ -83,12 +85,13 @@ def get_config():
     config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 100000  # in transitions
     config.args_buffer.observation_shape = observation_shape
+    config.args_buffer.time_step_dtypes = time_step_dtypes = ClassicControlTimeStepDtypes()
 
-    config.dqn_params = dqn_params = ml_collections.ConfigDict()
-    config.dqn_params.tau = tau = 0.005  # smoothing coefficient for target networks
-    config.dqn_params.gamma = 0.99  # discount factor
-    config.dqn_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
-    config.dqn_params.max_abs_reward = 1000.0
+    config.agent_params = agent_params = ml_collections.ConfigDict()
+    config.agent_params.tau = tau = 0.005  # smoothing coefficient for target networks
+    config.agent_params.gamma = 0.99  # discount factor
+    config.agent_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
+    config.agent_params.max_abs_reward = 1000.0
 
     config.state_recover = state_recover = restore_dqn_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
@@ -102,7 +105,7 @@ def get_config():
 
     config.controller = Controller
 
-    config.trainer = DQN
+    config.trainer = Trainer
     config.args_trainer = ml_collections.ConfigDict()
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
@@ -112,16 +115,13 @@ def get_config():
     config.args_trainer.summary_writing_period = 1000  # logging and reporting
     config.args_trainer.save_period = 10000  # orbax checkpointing
     config.args_trainer.synchronization_period = 100  # send params to control actor
-    config.args_trainer.observation_shape = observation_shape
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
-    config.args_trainer.dqn_params = dqn_params
+    config.args_trainer.get_update_step = get_update_step
+    config.args_trainer.get_update_epoch = get_update_epoch
+    config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.network = network
-    config.args_trainer.args_network = args_network
-    config.args_trainer.optimizer = optimizer 
-    config.args_trainer.args_optimizer = args_optimizer 
     config.args_trainer.num_samples_on_gpu_cache = 75 
     config.args_trainer.num_samples_to_gpu = 15
 
@@ -137,5 +137,6 @@ def get_config():
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
+    config.args_collector.time_step_dtypes = time_step_dtypes
 
     return config

@@ -73,7 +73,8 @@ class DQNCollectorUniform:
             self._rng, init_rng = jax.random.split(self._rng)
             self.online_params.append(model.init(init_rng, jnp.ones((1, *observation_shape))))
         if args_state_recover.checkpointdir is not None:
-            flax_state = state_recover(**args_state_recover)
+            self._rng, rng = jax.random.split(self._rng)
+            flax_state = state_recover(rng, **args_state_recover)
             self.online_params.append(flax_state.params)
 
         self.futures_parameters = self.controller.get_parameters.remote()

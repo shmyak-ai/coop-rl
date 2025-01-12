@@ -38,6 +38,14 @@ class AtariTimeStepDtypes(NamedTuple):
     truncated: str = "int8"
 
 
+class ClassicControlTimeStepDtypes(NamedTuple):
+    obs: str = "float32"
+    action: str = "int8"
+    reward: str = "int8"
+    terminated: str = "int8"
+    truncated: str = "int8"
+
+
 class Observation(NamedTuple):
     """The observation that the agent sees.
     agent_view: the agent's view of the environment.
