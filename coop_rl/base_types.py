@@ -31,7 +31,7 @@ HiddenStates: TypeAlias = Any
 
 
 class AtariTimeStepDtypes(NamedTuple):
-    obs: str = "float32"
+    obs: str = "float16"
     action: str = "int8"
     reward: str = "int8"
     terminated: str = "int8"

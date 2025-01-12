@@ -43,7 +43,7 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 2
+    config.num_collectors = num_collectors = 5
     config.num_samplers = 8
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -86,7 +86,7 @@ def get_config():
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
-    config.args_buffer.max_size = 100000  # in transitions
+    config.args_buffer.max_size = 200000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
