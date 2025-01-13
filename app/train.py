@@ -23,11 +23,12 @@ from pathlib import Path
 
 import ray
 
-from coop_rl.configs import atari_dqn, classic_control_dqn
+from coop_rl.configs import atari_dqn, atari_mdqn, classic_control_dqn
 
 configs = {
-    "classic_control": classic_control_dqn,
-    "atari": atari_dqn,
+    "classic_control_dqn": classic_control_dqn,
+    "atari_dqn": atari_dqn,
+    "atari_mdqn": atari_mdqn,
 }
 
 runtime_env_cpu = {
@@ -57,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
     parser.add_argument("--debug-ray", action="store_true", help="Ray debug environment activation.")
     parser.add_argument("--debug-log", action="store_true", help="Enable debug logs.")
-    parser.add_argument("--config", required=True, type=str, choices=("classic_control", "atari"))
+    parser.add_argument("--config", required=True, type=str, choices=tuple(configs.keys()))
     parser.add_argument(
         "--workdir",
         type=str,
