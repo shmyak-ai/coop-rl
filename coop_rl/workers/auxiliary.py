@@ -51,14 +51,14 @@ class Controller:
 
 
 class BufferKeeper:
-    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu):
+    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor):
         self.buffer = buffer(**args_buffer)
         self.traj_store = {}
         self.add_batch_size = args_buffer.add_batch_size
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
         self.device_lock = threading.Lock()
-        self.semaphore = threading.Semaphore(4)
+        self.semaphore = threading.Semaphore(num_semaphor)
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
         self.gpu_device = jax.devices("gpu")[0]
         self.num_samples_to_gpu = num_samples_to_gpu

@@ -56,23 +56,23 @@ def get_config():
     config.args_network.base = FeedForwardActor
     config.args_network.torso = CNNTorso
     config.args_network.args_torso = ml_collections.ConfigDict()
-    config.args_network.args_torso.activation = 'silu'
+    config.args_network.args_torso.activation = 'relu'
     config.args_network.args_torso.channel_first = False
     config.args_network.args_torso.channel_sizes = [32, 64, 64]
     config.args_network.args_torso.kernel_sizes = [8, 4, 3]
     config.args_network.args_torso.strides = [4, 2, 1]
-    config.args_network.args_torso.hidden_sizes = [128, 128]
+    config.args_network.args_torso.hidden_sizes = [528]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
     config.args_network.args_action_head.action_dim = num_actions
-    config.args_network.args_action_head.epsilon = 0.1
+    config.args_network.args_action_head.epsilon = 0.01
     config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = optax.adam 
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
-    config.args_optimizer.learning_rate = 6.25e-5
-    config.args_optimizer.eps = 1e-5
+    config.args_optimizer.learning_rate = 5e-5
+    config.args_optimizer.eps = 1e-8
 
     config.env = env = HandlerEnvAtari
     config.args_env = args_env = ml_collections.ConfigDict()
@@ -87,16 +87,16 @@ def get_config():
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
-    config.args_buffer.max_size = 200000  # in transitions
+    config.args_buffer.max_size = 500000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
     config.agent_params = agent_params = ml_collections.ConfigDict()
-    config.agent_params.tau = tau = 0.005  # smoothing coefficient for target networks
+    config.agent_params.tau = tau = 0.0005  # smoothing coefficient for target networks
     config.agent_params.gamma = 0.99  # discount factor
     config.agent_params.entropy_temperature = 0.03  # tau parameter
     config.agent_params.munchausen_coefficient = 0.9  # alpha parameter
-    config.agent_params.clip_value_min = -1e3
+    config.agent_params.clip_value_min = -1.0
     config.agent_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
     config.agent_params.max_abs_reward = 1000.0
 
@@ -131,6 +131,7 @@ def get_config():
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.num_samples_on_gpu_cache = 30 
     config.args_trainer.num_samples_to_gpu = 50
+    config.args_trainer.num_semaphor = 4
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()

@@ -44,9 +44,10 @@ class Trainer(BufferKeeper):
         args_buffer,
         num_samples_on_gpu_cache,
         num_samples_to_gpu,
+        num_semaphor,
         controller,
     ):
-        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu)
+        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor)
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
