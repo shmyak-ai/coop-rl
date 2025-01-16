@@ -128,6 +128,7 @@ def get_config():
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.num_samples_on_gpu_cache = 30 
     config.args_trainer.num_samples_to_gpu = 50
+    config.args_trainer.num_semaphor = 4
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
