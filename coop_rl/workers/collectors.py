@@ -19,19 +19,8 @@ import time
 from collections import deque
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import ray
-
-
-def get_select_action_fn(apply_fn):
-    @jax.jit
-    def select_action(key, params, observation):
-        key, policy_key = jax.random.split(key)
-        actor_policy = apply_fn(params, jnp.expand_dims(observation, axis=0))
-        return key, actor_policy.sample(seed=policy_key)
-
-    return select_action
 
 
 class DQNCollectorUniform:
@@ -41,13 +30,11 @@ class DQNCollectorUniform:
         collectors_seed,
         log_level,
         report_period,
-        observation_shape,
-        network,
-        args_network,
         state_recover,
         args_state_recover,
         env,
         args_env,
+        get_select_action_fn,
         time_step_dtypes,
         controller,
         trainer,
@@ -60,26 +47,22 @@ class DQNCollectorUniform:
         self.trainer = trainer
 
         self.env = env(**args_env)
-        model = network(**args_network)
 
         self.dtypes = time_step_dtypes
 
         self.collector_seed = collectors_seed
         random.seed(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
+        self._rng, rng = jax.random.split(self._rng)
+        flax_state = state_recover(rng, **args_state_recover)
+
         # online params are to prevent dqn algs from freezing
         self.online_params = deque(maxlen=10)
-        for _ in range(self.online_params.maxlen):
-            self._rng, init_rng = jax.random.split(self._rng)
-            self.online_params.append(model.init(init_rng, jnp.ones((1, *observation_shape))))
-        if args_state_recover.checkpointdir is not None:
-            self._rng, rng = jax.random.split(self._rng)
-            flax_state = state_recover(rng, **args_state_recover)
-            self.online_params.append(flax_state.params)
+        self.online_params.append(flax_state.params)
 
         self.futures_parameters = self.controller.get_parameters.remote()
 
-        self.select_action = get_select_action_fn(model.apply)
+        self.select_action = get_select_action_fn(flax_state.apply_fn)
         self.episode_reward = {
             "now": 0,
             "last": 0,

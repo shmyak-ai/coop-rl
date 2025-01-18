@@ -32,7 +32,7 @@ from coop_rl.base_types import (
     ActorApply,
 )
 from coop_rl.buffers import TimeStep
-from coop_rl.loss import munchausen_q_learning
+from coop_rl.loss import categorical_double_q_learning
 from coop_rl.multistep import batch_discounted_returns
 
 
@@ -94,11 +94,16 @@ class TrainState(train_state.TrainState):
             **kwargs,
         )
 
+    def get_key(self):
+        in_key, out_key = jax.random.split(self.key)
+        return self.replace(key=in_key), out_key
+
 
 def create_train_state(rng, network, args_network, optimizer, args_optimizer, obs_shape, tau):
-    state_rng, init_rng = jax.random.split(rng)
+    state_rng, init_rng, noise_rng = jax.random.split(rng, num=3)
+    rngs = {"params": init_rng, "noise": noise_rng}
     model = network(**args_network)
-    params = model.init(init_rng, jnp.ones((1, *obs_shape)))
+    params = model.init(rngs, jnp.ones((1, *obs_shape)))
     tx = optimizer(**args_optimizer)
     return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau)
 
@@ -117,23 +122,30 @@ def restore_dqn_flax_state(
 def get_select_action_fn(apply_fn):
     @jax.jit
     def select_action(key, params, observation):
-        key, policy_key = jax.random.split(key)
-        actor_policy = apply_fn(params, jnp.expand_dims(observation, axis=0))
+        key, noise_key, policy_key = jax.random.split(key, num=3)
+        actor_policy, q_logits, atoms = apply_fn(params, jnp.expand_dims(observation, axis=0), rngs={"noise": noise_key})
         return key, actor_policy.sample(seed=policy_key)
 
     return select_action
 
 
 def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
+    @jax.jit
     def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
         def _q_loss_fn(
             q_params: FrozenDict,
             target_q_params: FrozenDict,
             transitions: Transition,
-        ) -> tuple[jnp.ndarray, dict]:
-            q_tm1 = q_apply_fn(q_params, transitions.obs).preferences
-            q_tm1_target = q_apply_fn(target_q_params, transitions.obs).preferences
-            q_t_target = q_apply_fn(target_q_params, transitions.next_obs).preferences
+            transition_probs: chex.Array,
+            noise_key: chex.PRNGKey,
+            importance_sampling_exponent: float,
+        ) -> jnp.ndarray:
+            noise_key_tm1, noise_key_t, noise_key_select = jax.random.split(noise_key, num=3)
+
+            _, q_logits_tm1, q_atoms_tm1 = q_apply_fn(q_params, transitions.obs, rngs={"noise": noise_key_tm1})
+            _, q_logits_t, q_atoms_t = q_apply_fn(target_q_params, transitions.next_obs, rngs={"noise": noise_key_t})
+            q_t_selector_dist, _, _ = q_apply_fn(q_params, transitions.next_obs, rngs={"noise": noise_key_select})
+            q_t_selector = q_t_selector_dist.preferences
 
             # Cast and clip rewards.
             discount = 1.0 - transitions.done.astype(jnp.float32)
@@ -141,25 +153,25 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             r_t = jnp.clip(transitions.reward, -config.max_abs_reward, config.max_abs_reward).astype(jnp.float32)
             a_tm1 = transitions.action
 
-            # Compute Q-learning loss.
-            batch_loss = munchausen_q_learning(
-                q_tm1,
-                q_tm1_target,
-                a_tm1,
-                r_t,
-                d_t,
-                q_t_target,
-                config.entropy_temperature,
-                config.munchausen_coefficient,
-                config.clip_value_min,
-                config.huber_loss_parameter,
+            batch_q_error = categorical_double_q_learning(
+                q_logits_tm1, q_atoms_tm1, a_tm1, r_t, d_t, q_logits_t, q_atoms_t, q_t_selector
             )
 
+            # Importance weighting.
+            importance_weights = (1.0 / transition_probs).astype(jnp.float32)
+            importance_weights **= importance_sampling_exponent
+            importance_weights /= jnp.max(importance_weights)
+
+            # Reweight.
+            q_loss = jnp.mean(importance_weights * batch_q_error)
+            new_priorities = batch_q_error
+
             loss_info = {
-                "q_loss": batch_loss,
+                "q_loss": q_loss,
+                "priorities": new_priorities,
             }
 
-            return batch_loss, loss_info
+            return q_loss, loss_info
 
         sample: TimeStep = buffer_sample.experience
 
@@ -194,12 +206,18 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             info={},
         )
 
+        importance_sampling_exponent = config.importance_weight_scheduler_fn(train_state.step)
+        train_state, noise_key = train_state.get_key()
+
         # CALCULATE Q LOSS
         q_grad_fn = jax.grad(_q_loss_fn, has_aux=True)
         q_grads, q_loss_info = q_grad_fn(
             train_state.params,
             train_state.target_params,
             transitions,
+            buffer_sample.priorities,
+            noise_key,
+            importance_sampling_exponent,
         )
         train_state = train_state.apply_gradients(grads=q_grads)
 
@@ -213,11 +231,12 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
     return _update_step
 
 
-def get_update_epoch(update_step_fn: Callable) -> Callable:
-    @jax.jit
+def get_update_epoch(update_step_fn: Callable, buffer_lock, buffer) -> Callable:
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
         for sample in samples:
             train_state, loss_info = update_step_fn(train_state, sample)
+            with buffer_lock:
+                buffer.set_priorities(sample.indices, loss_info["priorities"])
         return train_state, loss_info
 
     return _update_epoch

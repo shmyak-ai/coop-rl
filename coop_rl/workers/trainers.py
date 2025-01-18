@@ -65,7 +65,9 @@ class Trainer(BufferKeeper):
         self._rng = jax.random.PRNGKey(trainer_seed)
         self._rng, rng = jax.random.split(self._rng)
         self.flax_state = state_recover(rng, **args_state_recover)
-        self.update_epoch_fn = get_update_epoch(get_update_step(self.flax_state.apply_fn, agent_params))
+        self.update_epoch_fn = get_update_epoch(
+            get_update_step(self.flax_state.apply_fn, agent_params), self.buffer_lock, self.buffer
+        )
 
         self.controller = controller
         self.futures = self.controller.set_parameters.remote(self.flax_state.params)

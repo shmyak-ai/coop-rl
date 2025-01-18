@@ -23,12 +23,13 @@ from pathlib import Path
 
 import ray
 
-from coop_rl.configs import atari_dqn, atari_mdqn, classic_control_dqn
+from coop_rl.configs import atari_dqn, atari_mdqn, atari_rainbow, classic_control_dqn
 
 configs = {
     "classic_control_dqn": classic_control_dqn,
     "atari_dqn": atari_dqn,
     "atari_mdqn": atari_mdqn,
+    "atari_rainbow": atari_rainbow,
 }
 
 runtime_env_cpu = {

@@ -114,6 +114,16 @@ def restore_dqn_flax_state(
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
+def get_select_action_fn(apply_fn):
+    @jax.jit
+    def select_action(key, params, observation):
+        key, policy_key = jax.random.split(key)
+        actor_policy = apply_fn(params, jnp.expand_dims(observation, axis=0))
+        return key, actor_policy.sample(seed=policy_key)
+
+    return select_action
+
+
 def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
     def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
         def _q_loss_fn(

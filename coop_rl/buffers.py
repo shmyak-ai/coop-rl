@@ -104,3 +104,75 @@ class BufferTrajectory:
 
     def can_sample(self):
         return self.buffer.can_sample(self.state)
+
+
+class BufferPrioritised:
+    def __init__(
+        self,
+        buffer_seed,
+        add_batch_size,
+        sample_batch_size,
+        sample_sequence_length,
+        period,
+        min_length,
+        max_size,
+        priority_exponent,
+        observation_shape,
+        time_step_dtypes,
+    ):
+        self.dtypes = time_step_dtypes
+        self.cpu = jax.devices("cpu")[0]
+        with jax.default_device(self.cpu):
+            self.buffer = fbx.make_prioritised_trajectory_buffer(
+                add_batch_size=add_batch_size,
+                sample_batch_size=sample_batch_size,
+                sample_sequence_length=sample_sequence_length,
+                period=period,
+                min_length_time_axis=min_length,
+                max_size=max_size,
+                priority_exponent=priority_exponent,
+                device="cpu",
+            )
+            self.buffer = self.buffer.replace(
+                init=jax.jit(self.buffer.init),
+                add=jax.jit(self.buffer.add, donate_argnums=0),
+                sample=jax.jit(self.buffer.sample),
+                can_sample=jax.jit(self.buffer.can_sample),
+                set_priorities=jax.jit(self.buffer.set_priorities, donate_argnums=0),
+            )
+            fake_timestep = TimeStep(
+                obs=jnp.ones(observation_shape, dtype=self.dtypes.obs),
+                action=jnp.ones((), dtype=self.dtypes.action),
+                reward=jnp.ones((), dtype=self.dtypes.reward),
+                terminated=jnp.ones((), dtype=self.dtypes.terminated),
+                truncated=jnp.ones((), dtype=self.dtypes.truncated),
+            )
+            self.state = self.buffer.init(fake_timestep)
+            self.rng_key = jax.random.PRNGKey(buffer_seed)
+
+    def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
+        with jax.default_device(self.cpu):
+            traj_batch_seq = TimeStep(
+                obs=jnp.array(traj_obs, dtype=self.dtypes.obs),
+                action=jnp.array(traj_actions, dtype=self.dtypes.action),
+                reward=jnp.array(traj_rewards, dtype=self.dtypes.reward),
+                terminated=jnp.array(traj_terminated, dtype=self.dtypes.terminated),
+                truncated=jnp.array(traj_truncated, dtype=self.dtypes.truncated),
+            )
+            self.state = self.buffer.add(self.state, traj_batch_seq)
+
+    def sample(self):
+        with jax.default_device(self.cpu):
+            self.rng_key, rng_key = jax.random.split(self.rng_key)
+            batch = self.buffer.sample(self.state, rng_key)
+        return batch
+
+    def can_sample(self):
+        return self.buffer.can_sample(self.state)
+
+    def set_priorities(self, sample_indices, updated_priorities):
+        self.state = self.buffer.set_priorities(
+            self.state, 
+            jax.device_put(sample_indices, device=self.cpu),
+            jax.device_put(updated_priorities, device=self.cpu),
+        )
