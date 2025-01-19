@@ -14,6 +14,48 @@
 
 import functools
 import time
+from collections.abc import Callable
+
+import optax
+
+
+def make_learning_rate_schedule(init_lr: float, num_updates: int, num_epochs: int, num_minibatches: int) -> Callable:
+    """
+    We use a simple linear learning rate scheduler based on the suggestions from a blog on PPO
+    implementation details which can be viewed at http://tinyurl.com/mr3chs4p
+    relevant arguments to the system config and then parsing them accordingly here.
+    """
+
+    def linear_scedule(count: int) -> float:
+        frac: float = 1.0 - (count // (num_epochs * num_minibatches)) / num_updates
+        return init_lr * frac
+
+    return linear_scedule
+
+
+def make_learning_rate(
+    *,
+    init_lr: float,
+    decay_learning_rates: bool,
+    num_updates: int | None = None,
+    num_epochs: int | None = None,
+    num_minibatches: int | None = None,
+) -> float | Callable:
+    if num_minibatches is None:
+        num_minibatches = 1
+
+    if decay_learning_rates:
+        return make_learning_rate_schedule(init_lr, num_updates, num_epochs, num_minibatches)
+    else:
+        return init_lr
+
+
+def make_optimizer(*, max_grad_norm: float, **kwargs):
+    lr = make_learning_rate(**kwargs)
+    return optax.chain(
+        optax.clip_by_global_norm(max_grad_norm),
+        optax.adam(lr, eps=1e-5),
+    )
 
 
 def timeit(func):

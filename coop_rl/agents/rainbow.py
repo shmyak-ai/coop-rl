@@ -123,7 +123,9 @@ def get_select_action_fn(apply_fn):
     @jax.jit
     def select_action(key, params, observation):
         key, noise_key, policy_key = jax.random.split(key, num=3)
-        actor_policy, q_logits, atoms = apply_fn(params, jnp.expand_dims(observation, axis=0), rngs={"noise": noise_key})
+        actor_policy, q_logits, atoms = apply_fn(
+            params, jnp.expand_dims(observation, axis=0), rngs={"noise": noise_key}
+        )
         return key, actor_policy.sample(seed=policy_key)
 
     return select_action

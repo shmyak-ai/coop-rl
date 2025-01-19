@@ -25,6 +25,7 @@ from coop_rl.networks.base import FeedForwardActor, get_actor
 from coop_rl.networks.dueling import NoisyDistributionalDuelingQNetwork
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
+from coop_rl.utils import make_optimizer
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 from coop_rl.workers.trainers import Trainer
@@ -61,7 +62,7 @@ def get_config():
     config.args_network.args_torso.channel_sizes = [32, 64, 64]
     config.args_network.args_torso.kernel_sizes = [8, 4, 3]
     config.args_network.args_torso.strides = [4, 2, 1]
-    config.args_network.args_torso.activation = 'relu'
+    config.args_network.args_torso.activation = "relu"
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.args_torso.channel_first = False
     config.args_network.args_torso.hidden_sizes = [512]
@@ -74,14 +75,15 @@ def get_config():
     config.args_network.args_action_head.epsilon = 0.01
     config.args_network.args_action_head.layer_sizes = [512]
     config.args_network.args_action_head.sigma_zero = 0.25  # init value for noisy variance terms
-    config.args_network.args_action_head.activation = 'relu'
+    config.args_network.args_action_head.activation = "relu"
     config.args_network.args_action_head.use_layer_norm = False
     config.args_network.input_layer = EmbeddingInput
 
-    config.optimizer = optimizer = optax.adam 
+    config.optimizer = optimizer = make_optimizer
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
-    config.args_optimizer.learning_rate = 5e-5
-    config.args_optimizer.eps = 1e-8
+    config.args_optimizer.init_lr = 6.25e-5
+    config.args_optimizer.decay_learning_rates = False
+    config.args_optimizer.max_grad_norm = 0.5
 
     config.env = env = HandlerEnvAtari
     config.args_env = args_env = ml_collections.ConfigDict()
@@ -105,7 +107,7 @@ def get_config():
     config.agent_params.gamma = 0.99  # discount factor
     config.agent_params.max_abs_reward = 1000.0
     config.agent_params.importance_weight_scheduler_fn = optax.linear_schedule(
-        init_value=0.4,
+        init_value=0.4,  # importance sampling exponent
         end_value=1.0,
         transition_steps=steps * training_iterations_per_step,
         transition_begin=0,
@@ -115,10 +117,10 @@ def get_config():
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
     config.args_state_recover.network = network
     config.args_state_recover.args_network = args_network
-    config.args_state_recover.optimizer = optimizer 
-    config.args_state_recover.args_optimizer = args_optimizer 
+    config.args_state_recover.optimizer = optimizer
+    config.args_state_recover.args_optimizer = args_optimizer
     config.args_state_recover.observation_shape = observation_shape
-    config.args_state_recover.tau = 0.0005  # smoothing coefficient for target networks
+    config.args_state_recover.tau = 0.005  # smoothing coefficient for target networks
 
     config.args_state_recover.checkpointdir = checkpointdir
 
@@ -141,7 +143,7 @@ def get_config():
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 30 
+    config.args_trainer.num_samples_on_gpu_cache = 30
     config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 4
 
