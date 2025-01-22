@@ -43,12 +43,12 @@ def get_config():
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
-    steps = 1000000
+    steps = 3000000
     training_iterations_per_step = 1
 
     config.log_level = log_level
     config.num_collectors = num_collectors = 5
-    config.num_samplers = 8
+    config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -98,8 +98,8 @@ def get_config():
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
-    config.args_buffer.max_size = 300000  # in transitions
-    config.args_buffer.priority_exponent = 0.5
+    config.args_buffer.max_size = 400000  # in transitions
+    config.args_buffer.priority_exponent = 0.3
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
@@ -107,8 +107,8 @@ def get_config():
     config.agent_params.gamma = 0.99  # discount factor
     config.agent_params.max_abs_reward = 1000.0
     config.agent_params.importance_weight_scheduler_fn = optax.linear_schedule(
-        init_value=0.4,  # importance sampling exponent
-        end_value=1.0,
+        init_value=0.5,  # importance sampling exponent
+        end_value=0.5,
         transition_steps=steps * training_iterations_per_step,
         transition_begin=0,
     )
@@ -143,9 +143,9 @@ def get_config():
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 30
+    config.args_trainer.num_samples_on_gpu_cache = 100
     config.args_trainer.num_samples_to_gpu = 50
-    config.args_trainer.num_semaphor = 4
+    config.args_trainer.num_semaphor = 1
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()

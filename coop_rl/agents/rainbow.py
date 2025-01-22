@@ -160,13 +160,13 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             )
 
             # Importance weighting.
-            importance_weights = (1.0 / transition_probs).astype(jnp.float32)
+            importance_weights = (1.0 / (transition_probs + 1e-10)).astype(jnp.float32)
             importance_weights **= importance_sampling_exponent
             importance_weights /= jnp.max(importance_weights)
 
             # Reweight.
             q_loss = jnp.mean(importance_weights * batch_q_error)
-            new_priorities = batch_q_error
+            new_priorities = jnp.sqrt(batch_q_error + 1e-10)
 
             loss_info = {
                 "q_loss": q_loss,
