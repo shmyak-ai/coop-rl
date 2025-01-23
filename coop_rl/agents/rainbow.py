@@ -224,11 +224,12 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
         train_state = train_state.apply_gradients(grads=q_grads)
 
         # PACK LOSS INFO
-        loss_info = {
+        info = {
             **q_loss_info,
+            "importance_sampling_exponent": importance_sampling_exponent,
         }
 
-        return train_state, loss_info
+        return train_state, info
 
     return _update_step
 
@@ -236,9 +237,9 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
 def get_update_epoch(update_step_fn: Callable, buffer_lock, buffer) -> Callable:
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
         for sample in samples:
-            train_state, loss_info = update_step_fn(train_state, sample)
+            train_state, info = update_step_fn(train_state, sample)
             with buffer_lock:
-                buffer.set_priorities(sample.indices, loss_info["priorities"])
-        return train_state, loss_info
+                buffer.set_priorities(sample.indices, info["priorities"])
+        return train_state, info
 
     return _update_epoch

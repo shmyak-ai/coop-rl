@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import ml_collections
+import neptune
 import numpy as np
 import optax
 from ml_collections import config_dict
@@ -45,6 +46,12 @@ def get_config():
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
     steps = 3000000
     training_iterations_per_step = 1
+
+    config.neptune_run = neptune_run = neptune.init_run
+    config.args_neptune_run = args_neptune_run = ml_collections.ConfigDict()
+    config.args_neptune_run.project="sha/coop-rl"
+    config.args_neptune_run.name="rainbow"
+    config.args_neptune_run.monitoring_namespace="monitoring"
 
     config.log_level = log_level
     config.num_collectors = num_collectors = 5
@@ -99,7 +106,7 @@ def get_config():
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
     config.args_buffer.max_size = 400000  # in transitions
-    config.args_buffer.priority_exponent = 0.3
+    config.args_buffer.priority_exponent = 0.0
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
@@ -143,6 +150,8 @@ def get_config():
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
+    config.args_trainer.neptune_run = neptune_run
+    config.args_trainer.args_neptune_run = args_neptune_run
     config.args_trainer.num_samples_on_gpu_cache = 100
     config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 1

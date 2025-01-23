@@ -42,6 +42,8 @@ class Trainer(BufferKeeper):
         agent_params,
         buffer,
         args_buffer,
+        neptune_run,
+        args_neptune_run,
         num_samples_on_gpu_cache,
         num_samples_to_gpu,
         num_semaphor,
@@ -52,6 +54,7 @@ class Trainer(BufferKeeper):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
         self.workdir = workdir
+        self.neptune_run = neptune_run(**args_neptune_run)
 
         self.steps = steps
         self.training_iterations_per_step = training_iterations_per_step
@@ -78,7 +81,7 @@ class Trainer(BufferKeeper):
         transitions_processed = 0
         for step in itertools.count(start=1, step=1):
             samples = next(samples_generator)
-            self.flax_state, loss_info = self.update_epoch_fn(self.flax_state, samples)
+            self.flax_state, info = self.update_epoch_fn(self.flax_state, samples)
             transitions_processed += self.batch_size * self.training_iterations_per_step
 
             if step == self.steps:
@@ -104,3 +107,6 @@ class Trainer(BufferKeeper):
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+
+            self.neptune_run["step"].append(self.flax_state.step)
+            self.neptune_run["importance_sampling_exponent"].append(info["importance_sampling_exponent"])
