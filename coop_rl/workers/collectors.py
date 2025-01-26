@@ -34,6 +34,8 @@ class DQNCollectorUniform:
         args_state_recover,
         env,
         args_env,
+        neptune_run,
+        args_neptune_run,
         get_select_action_fn,
         time_step_dtypes,
         controller,
@@ -47,6 +49,10 @@ class DQNCollectorUniform:
         self.trainer = trainer
 
         self.env = env(**args_env)
+
+        args_neptune_run["monitoring_namespace"] = f"monitoring/collector_{collectors_seed}"
+        self.neptune_run = neptune_run(**args_neptune_run)
+        self.collector_ns = self.neptune_run[f"collector_{collectors_seed}"]
 
         self.dtypes = time_step_dtypes
 
@@ -95,6 +101,7 @@ class DQNCollectorUniform:
                 next_obs, _info = self.env.reset()
                 self.episode_reward["last"] = self.episode_reward["now"]
                 self.episode_reward["now"] = 0
+                self.collector_ns["episode_reward"].append(self.episode_reward["last"])
 
             self.obs = next_obs
 
@@ -135,7 +142,7 @@ class DQNCollectorUniform:
             parameters = ray.get(self.futures_parameters)
             if parameters is not None:
                 self.online_params.append(parameters)
-                self.logger.debug("Online params were updated.")
+                self.collector_ns["parameters_updated_on_rollout_count"].append(rollouts_count)
             self.futures_parameters = self.controller.get_parameters.remote()
 
             if rollouts_count % self.report_period == 0:

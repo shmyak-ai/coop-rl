@@ -169,7 +169,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             new_priorities = jnp.sqrt(batch_q_error + 1e-10)
 
             loss_info = {
-                "q_loss": q_loss,
+                "loss": q_loss,
                 "priorities": new_priorities,
             }
 

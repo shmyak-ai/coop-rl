@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import time
+
 import ml_collections
 import neptune
 import numpy as np
@@ -49,9 +52,10 @@ def get_config():
 
     config.neptune_run = neptune_run = neptune.init_run
     config.args_neptune_run = args_neptune_run = ml_collections.ConfigDict()
-    config.args_neptune_run.project="sha/coop-rl"
-    config.args_neptune_run.name="rainbow"
-    config.args_neptune_run.monitoring_namespace="monitoring"
+    config.args_neptune_run.custom_run_id = hashlib.md5(str(time.time()).encode()).hexdigest()
+    config.args_neptune_run.project = "sha/coop-rl"
+    config.args_neptune_run.name = "rainbow"
+    config.args_neptune_run.monitoring_namespace = "monitoring"
 
     config.log_level = log_level
     config.num_collectors = num_collectors = 5
@@ -105,8 +109,8 @@ def get_config():
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
-    config.args_buffer.max_size = 400000  # in transitions
-    config.args_buffer.priority_exponent = 0.0
+    config.args_buffer.max_size = 300000  # in transitions
+    config.args_buffer.priority_exponent = 0.5
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
@@ -115,7 +119,7 @@ def get_config():
     config.agent_params.max_abs_reward = 1000.0
     config.agent_params.importance_weight_scheduler_fn = optax.linear_schedule(
         init_value=0.5,  # importance sampling exponent
-        end_value=0.5,
+        end_value=1.0,
         transition_steps=steps * training_iterations_per_step,
         transition_begin=0,
     )
@@ -165,6 +169,8 @@ def get_config():
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
+    config.args_collector.neptune_run = neptune_run
+    config.args_collector.args_neptune_run = args_neptune_run
     config.args_collector.get_select_action_fn = get_select_action_fn
     config.args_collector.time_step_dtypes = time_step_dtypes
 

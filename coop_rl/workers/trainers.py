@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import itertools
 import logging
 import os
 
 import jax
+import numpy as np
 import orbax.checkpoint as ocp
 import ray
+from flashbax.buffers.sum_tree import get_tree_index
 
 from coop_rl.workers.auxiliary import BufferKeeper
 
@@ -59,6 +62,7 @@ class Trainer(BufferKeeper):
         self.steps = steps
         self.training_iterations_per_step = training_iterations_per_step
         self.batch_size = args_buffer.sample_batch_size
+        self.buffer_size = args_buffer.max_size
 
         self.synchronization_period = synchronization_period
         self.summary_writing_period = summary_writing_period
@@ -93,11 +97,7 @@ class Trainer(BufferKeeper):
             if step % self.summary_writing_period == 0:
                 self.logger.info(f"Training step: {self.flax_state.step}.")
                 self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
-                if self.logger.getEffectiveLevel() == logging.DEBUG:
-                    self.logger.debug(f"Samples queue size: {self._samples_on_gpu.qsize()}")
-                    with self.buffer_lock:
-                        self.logger.debug(f"Buffer current index: {self.buffer.state.current_index}")
-                        self.logger.debug(f"Buffer is full: {self.buffer.state.is_full}")
+                self.neptune_log(info, transitions_processed, samples)
 
             if step % self.synchronization_period == 0:
                 ray.get(self.futures)
@@ -108,5 +108,27 @@ class Trainer(BufferKeeper):
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
 
-            self.neptune_run["step"].append(self.flax_state.step)
+    def neptune_log(self, info, transitions_processed, samples):
+
+        self.neptune_run["step"].append(self.flax_state.step)
+        self.neptune_run["loss"].append(info["loss"])
+        self.neptune_run["transitions_sampled_from_restart"].append(transitions_processed)
+        with self.buffer_lock:
+            self.neptune_run["buffer_current_index"].append(self.buffer.state.current_index)
+            start_index = get_tree_index(self.buffer.state.priority_state.tree_depth, 0)
+            all_priorities = jax.device_get(
+                self.buffer.state.priority_state.nodes[start_index : start_index + self.buffer_size]
+            )
+
+        with contextlib.suppress(KeyError):
             self.neptune_run["importance_sampling_exponent"].append(info["importance_sampling_exponent"])
+
+        sample_cpu = jax.device_get(samples)[-1]
+        priorities_str = np.array2string(sample_cpu.priorities, precision=2, separator=",", suppress_small=True)
+        self.neptune_run["sample_priorities"].append(priorities_str)
+
+        hist, bin_edges = np.histogram(all_priorities, bins=10)
+        hist_str = np.array2string(hist, precision=2, separator=",", suppress_small=True)
+        bin_edges_str = np.array2string(bin_edges, precision=2, separator=",", suppress_small=True)
+        self.neptune_run["buffer_priorities_hist"].append(hist_str)
+        self.neptune_run["buffer_priorities_bin_edges"].append(bin_edges_str)
