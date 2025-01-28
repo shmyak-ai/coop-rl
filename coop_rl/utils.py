@@ -16,6 +16,8 @@ import functools
 import time
 from collections.abc import Callable
 
+import jax
+import jax.numpy as jnp
 import optax
 
 
@@ -70,3 +72,36 @@ def timeit(func):
         return result
 
     return wrapper
+
+
+#  callbacks slow down a program significantly
+def print_if_nonfinite(x):
+    is_finite = jnp.isfinite(x).all()
+
+    def true_fn(x):
+        pass
+
+    def false_fn(x):
+        jax.debug.print("Non finite values detected: {x}", x=x)
+
+    jax.lax.cond(is_finite, true_fn, false_fn, x)
+
+
+def _raise_if_negative(x):
+    if jax.numpy.less(x, 0).any():
+        raise ValueError("Negative value detected.")
+
+
+@jax.jit
+def error_if_negative(x):
+    jax.debug.callback(_raise_if_negative, x)
+
+
+def _raise_if_nonfinite(x):
+    if not jnp.isfinite(x).all():
+        raise ValueError("Not finite value detected.")
+
+
+@jax.jit
+def error_if_nonfinite(x):
+    jax.debug.callback(_raise_if_nonfinite, x)

@@ -3,6 +3,7 @@
 #
 
 import chex
+import distrax
 import jax
 import jax.numpy as jnp
 import rlax
@@ -98,7 +99,7 @@ def categorical_double_q_learning(
     target = jax.vmap(rlax.categorical_l2_project)(target_z, p_target_z, q_atoms_tm1)
     # Compute loss (i.e. temporal difference error).
     logit_qa_tm1 = q_logits_tm1[batch_indices, a_tm1]
-    td_error = tfd.Categorical(probs=target).cross_entropy(tfd.Categorical(logits=logit_qa_tm1))
+    td_error = distrax.Categorical(probs=target).cross_entropy(distrax.Categorical(logits=logit_qa_tm1))
 
     return td_error
 

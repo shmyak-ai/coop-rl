@@ -58,6 +58,7 @@ class Trainer(BufferKeeper):
         self.logger.setLevel(log_level)
         self.workdir = workdir
         self.neptune_run = neptune_run(**args_neptune_run)
+        self.neptune_run["workdir"] = workdir
 
         self.steps = steps
         self.training_iterations_per_step = training_iterations_per_step

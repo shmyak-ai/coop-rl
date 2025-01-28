@@ -110,7 +110,7 @@ def get_config():
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
     config.args_buffer.max_size = 300000  # in transitions
-    config.args_buffer.priority_exponent = 0.5
+    config.args_buffer.priority_exponent = 0.6
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 

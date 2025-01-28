@@ -28,6 +28,7 @@ from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
 from flax.training import train_state
 from typing_extensions import NamedTuple
 
+# from jax.experimental import checkify
 from coop_rl.base_types import (
     ActorApply,
 )
@@ -231,12 +232,18 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
 
         return train_state, info
 
+    # _checked_update_step = checkify.checkify(
+    #     _update_step, errors=checkify.float_checks
+    # )
+    # return _checked_update_step
     return _update_step
 
 
 def get_update_epoch(update_step_fn: Callable, buffer_lock, buffer) -> Callable:
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
         for sample in samples:
+            # err, (train_state, info) = update_step_fn(train_state, sample)
+            # err.throw()
             train_state, info = update_step_fn(train_state, sample)
             with buffer_lock:
                 buffer.set_priorities(sample.indices, info["priorities"])
