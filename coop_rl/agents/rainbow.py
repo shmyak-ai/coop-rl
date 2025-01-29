@@ -159,6 +159,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             batch_q_error = categorical_double_q_learning(
                 q_logits_tm1, q_atoms_tm1, a_tm1, r_t, d_t, q_logits_t, q_atoms_t, q_t_selector
             )
+            batch_q_error = jnp.maximum(batch_q_error, 0)
 
             # Importance weighting.
             importance_weights = (1.0 / (transition_probs + 1e-10)).astype(jnp.float32)
@@ -167,7 +168,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
 
             # Reweight.
             q_loss = jnp.mean(importance_weights * batch_q_error)
-            new_priorities = jnp.sqrt(batch_q_error + 1e-10)
+            new_priorities = jnp.sqrt(batch_q_error) + 1e-5
 
             loss_info = {
                 "loss": q_loss,
