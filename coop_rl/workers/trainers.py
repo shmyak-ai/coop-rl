@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import itertools
 import logging
 import os
@@ -108,28 +107,29 @@ class Trainer(BufferKeeper):
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
-
-    def neptune_log(self, info, transitions_processed, samples):
-
-        self.neptune_run["step"].append(self.flax_state.step)
-        self.neptune_run["loss"].append(info["loss"])
-        self.neptune_run["transitions_sampled_from_restart"].append(transitions_processed)
+    
+    def priority_buffer_log(self, info, samples):
         with self.buffer_lock:
-            self.neptune_run["buffer_current_index"].append(self.buffer.state.current_index)
             start_index = get_tree_index(self.buffer.state.priority_state.tree_depth, 0)
             all_priorities = jax.device_get(
                 self.buffer.state.priority_state.nodes[start_index : start_index + self.buffer_size]
             )
-
-        with contextlib.suppress(KeyError):
-            self.neptune_run["importance_sampling_exponent"].append(info["importance_sampling_exponent"])
-
-        sample_cpu = jax.device_get(samples)[-1]
-        priorities_str = np.array2string(sample_cpu.priorities, precision=2, separator=",", suppress_small=True)
-        self.neptune_run["sample_priorities"].append(priorities_str)
-
         hist, bin_edges = np.histogram(all_priorities, bins=10)
         hist_str = np.array2string(hist, precision=2, separator=",", suppress_small=True)
         bin_edges_str = np.array2string(bin_edges, precision=2, separator=",", suppress_small=True)
         self.neptune_run["buffer_priorities_hist"].append(hist_str)
         self.neptune_run["buffer_priorities_bin_edges"].append(bin_edges_str)
+        self.neptune_run["importance_sampling_exponent"].append(info["importance_sampling_exponent"])
+        sample_cpu = jax.device_get(samples)[-1]
+        priorities_str = np.array2string(sample_cpu.priorities, precision=2, separator=",", suppress_small=True)
+        self.neptune_run["sample_priorities"].append(priorities_str)
+
+    def neptune_log(self, info, transitions_processed, samples):
+        self.neptune_run["step"].append(self.flax_state.step)
+        self.neptune_run["loss"].append(info["loss"])
+        self.neptune_run["transitions_sampled_from_restart"].append(transitions_processed)
+        with self.buffer_lock:
+            self.neptune_run["buffer_current_index"].append(self.buffer.state.current_index)
+        
+        if "importance_sampling_exponent" in info:
+            self.priority_buffer_log(info, samples)

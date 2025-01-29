@@ -132,7 +132,6 @@ def get_config():
     config.args_state_recover.args_optimizer = args_optimizer
     config.args_state_recover.observation_shape = observation_shape
     config.args_state_recover.tau = 0.005  # smoothing coefficient for target networks
-
     config.args_state_recover.checkpointdir = checkpointdir
 
     config.controller = Controller

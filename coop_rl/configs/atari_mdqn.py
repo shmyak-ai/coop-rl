@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import time
+
 import ml_collections
+import neptune
 import numpy as np
-import optax
 from ml_collections import config_dict
 
-from coop_rl.agents.mdqn import get_update_epoch, get_update_step, restore_dqn_flax_state
+from coop_rl.agents.mdqn import get_select_action_fn, get_update_epoch, get_update_step, restore_dqn_flax_state
 from coop_rl.base_types import AtariTimeStepDtypes
 from coop_rl.buffers import BufferTrajectory
 from coop_rl.environment import HandlerEnvAtari
@@ -25,6 +28,7 @@ from coop_rl.networks.base import FeedForwardActor, get_actor
 from coop_rl.networks.heads import DiscreteQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
+from coop_rl.utils import make_optimizer
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 from coop_rl.workers.trainers import Trainer
@@ -42,10 +46,19 @@ def get_config():
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
+    steps = 3000000
+    training_iterations_per_step = 1
+
+    config.neptune_run = neptune_run = neptune.init_run
+    config.args_neptune_run = args_neptune_run = ml_collections.ConfigDict()
+    config.args_neptune_run.custom_run_id = hashlib.md5(str(time.time()).encode()).hexdigest()
+    config.args_neptune_run.project = "sha/coop-rl"
+    config.args_neptune_run.name = "mdqn"
+    config.args_neptune_run.monitoring_namespace = "monitoring"
 
     config.log_level = log_level
     config.num_collectors = num_collectors = 5
-    config.num_samplers = 8
+    config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.num_actions = num_actions
@@ -69,10 +82,11 @@ def get_config():
     config.args_network.args_action_head.epsilon = 0.01
     config.args_network.input_layer = EmbeddingInput
 
-    config.optimizer = optimizer = optax.adam 
+    config.optimizer = optimizer = make_optimizer
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
-    config.args_optimizer.learning_rate = 5e-5
-    config.args_optimizer.eps = 1e-8
+    config.args_optimizer.init_lr = 6.25e-5
+    config.args_optimizer.decay_learning_rates = False
+    config.args_optimizer.max_grad_norm = 0.5
 
     config.env = env = HandlerEnvAtari
     config.args_env = args_env = ml_collections.ConfigDict()
@@ -87,7 +101,7 @@ def get_config():
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
-    config.args_buffer.max_size = 500000  # in transitions
+    config.args_buffer.max_size = 300000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
@@ -117,8 +131,8 @@ def get_config():
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
-    config.args_trainer.steps = 10000000
-    config.args_trainer.training_iterations_per_step = 1  # to increase gpu load ?
+    config.args_trainer.steps = steps
+    config.args_trainer.training_iterations_per_step = training_iterations_per_step
     config.args_trainer.summary_writing_period = 100  # logging and reporting
     config.args_trainer.save_period = 10000  # orbax checkpointing
     config.args_trainer.synchronization_period = 100  # send params to control actor
@@ -129,22 +143,24 @@ def get_config():
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 30 
-    config.args_trainer.num_samples_to_gpu = 50
-    config.args_trainer.num_semaphor = 4
+    config.args_trainer.neptune_run = neptune_run
+    config.args_trainer.args_neptune_run = args_neptune_run
+    config.args_trainer.num_samples_on_gpu_cache = 600 
+    config.args_trainer.num_samples_to_gpu = 300
+    config.args_trainer.num_semaphor = 1
 
     config.collector = DQNCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
     config.args_collector.report_period = 100  # per rollouts sampled
-    config.args_collector.observation_shape = observation_shape
-    config.args_collector.network = network
-    config.args_collector.args_network = args_network
     config.args_collector.state_recover = state_recover
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
+    config.args_collector.neptune_run = neptune_run
+    config.args_collector.args_neptune_run = args_neptune_run
+    config.args_collector.get_select_action_fn = get_select_action_fn
     config.args_collector.time_step_dtypes = time_step_dtypes
 
     return config

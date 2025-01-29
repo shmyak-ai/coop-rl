@@ -156,7 +156,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             )
 
             loss_info = {
-                "q_loss": batch_loss,
+                "loss": batch_loss,
             }
 
             return batch_loss, loss_info
@@ -213,7 +213,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
     return _update_step
 
 
-def get_update_epoch(update_step_fn: Callable) -> Callable:
+def get_update_epoch(update_step_fn: Callable, *args, **kwargs) -> Callable:
     @jax.jit
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
         for sample in samples:
