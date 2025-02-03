@@ -20,3 +20,4 @@ rlax
 clu
 ml-collections
 ray[default]
+neptune
