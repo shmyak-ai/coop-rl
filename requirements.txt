@@ -21,3 +21,5 @@ clu
 ml-collections
 ray[default]
 neptune
+elements>=3.19.1
+einops

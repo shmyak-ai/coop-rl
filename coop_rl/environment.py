@@ -4,6 +4,8 @@ from gymnasium import ObservationWrapper
 from gymnasium.spaces import Box
 from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
 
+from coop_rl.dreamer.envs.atari import Atari
+
 
 class FirstDimToLast(ObservationWrapper):
     def __init__(self, env):
@@ -93,3 +95,38 @@ class HandlerEnvAtari:
 
     def close(self):
         self._env.close()
+
+
+class HandlerEnvDreamerAtari:
+    def __init__(self, *, dreamer_config):
+        self._env = HandlerEnvDreamerAtari.make_env(dreamer_config)
+
+    def reset(self, *args, seed=None, **kwargs):
+        observation, info = self._env._reset(*args, seed=seed, **kwargs)
+        # call [:] to get a stacked array from gym
+        return observation[:], info
+
+    def step(self, action, *args, **kwargs):
+        observation, reward, terminated, truncated, info = self._env.step(action)
+        return observation[:], reward, terminated, truncated, info
+
+    @staticmethod
+    def make_env(config):
+        suite, task = config.task.split('_', 1)
+        kwargs = config.env.get(suite, {})
+        kwargs.update({})
+        env = Atari(task, **kwargs)
+        return env
+
+    @staticmethod
+    def check_env(*, dreamer_config):
+        env = HandlerEnvDreamerAtari.make_env(dreamer_config)
+        obs_space = {k: v for k, v in env.obs_space.items() if not k.startswith('log/')}
+        act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
+        env.close()
+
+        return (
+            obs_space,
+            None,
+            act_space,
+        )

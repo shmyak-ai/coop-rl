@@ -51,6 +51,7 @@ class Trainer(BufferKeeper):
         num_semaphor,
         controller,
     ):
+        breakpoint()
         super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor)
 
         self.logger = logging.getLogger(__name__)
