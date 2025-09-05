@@ -30,12 +30,32 @@ OptStates: TypeAlias = Any
 HiddenStates: TypeAlias = Any
 
 
+@chex.dataclass(frozen=True)
+class TimeStep:
+    obs: chex.Array
+    action: chex.Array
+    reward: chex.Array
+    terminated: chex.Array
+    truncated: chex.Array
+
+
+@chex.dataclass(frozen=True)
+class TimeStepDreamer:
+    image: chex.Array
+    reward: chex.Array
+    is_first: chex.Array
+    is_last: chex.Array
+    is_terminal: chex.Array
+    action: chex.Array
+    dyn_deter: chex.Array
+    dyn_stoch: chex.Array
+
+
 class AtariTimeStepDtypes(NamedTuple):
-    obs: str = "float16"
+    obs: str = "float32"
     action: str = "int8"
-    reward: str = "int8"
-    terminated: str = "int8"
-    truncated: str = "int8"
+    reward: str = "int32"
+    bool: str = "int8"
 
 
 class ClassicControlTimeStepDtypes(NamedTuple):

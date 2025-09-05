@@ -12,19 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import chex
 import flashbax as fbx
 import jax
 import jax.numpy as jnp
 
-
-@chex.dataclass(frozen=True)
-class TimeStep:
-    obs: chex.Array
-    action: chex.Array
-    reward: chex.Array
-    terminated: chex.Array
-    truncated: chex.Array
+from coop_rl.base_types import TimeStep, TimeStepDreamer
 
 
 class BufferFlat:
@@ -93,6 +85,73 @@ class BufferTrajectory:
                 reward=jnp.array(traj_rewards, dtype=self.dtypes.reward),
                 terminated=jnp.array(traj_terminated, dtype=self.dtypes.terminated),
                 truncated=jnp.array(traj_truncated, dtype=self.dtypes.truncated),
+            )
+            self.state = self.buffer.add(self.state, traj_batch_seq)
+
+    def sample(self):
+        self.rng_key, rng_key = jax.random.split(self.rng_key)
+        with jax.default_device(self.cpu):
+            batch = self.buffer.sample(self.state, rng_key)
+        return batch
+
+    def can_sample(self):
+        return self.buffer.can_sample(self.state)
+
+
+class BufferTrajectoryDreamer:
+    def __init__(
+        self,
+        buffer_seed,
+        add_batch_size,
+        sample_batch_size,
+        sample_sequence_length,
+        period,
+        min_length,
+        max_size,
+        observation_shape,
+        time_step_dtypes,
+    ):
+        self.dtypes = time_step_dtypes
+        self.cpu = jax.devices("cpu")[0]
+        with jax.default_device(self.cpu):
+            self.buffer = fbx.make_trajectory_buffer(
+                add_batch_size=add_batch_size,
+                sample_batch_size=sample_batch_size,
+                sample_sequence_length=sample_sequence_length,
+                period=period,
+                min_length_time_axis=min_length,
+                max_size=max_size,
+            )
+            self.buffer = self.buffer.replace(
+                init=jax.jit(self.buffer.init),
+                add=jax.jit(self.buffer.add, donate_argnums=0),
+                sample=jax.jit(self.buffer.sample),
+                can_sample=jax.jit(self.buffer.can_sample),
+            )
+            fake_timestep = TimeStepDreamer(
+                image=jnp.ones(observation_shape["image"].shape, dtype=self.dtypes.obs),
+                reward=jnp.ones(observation_shape["reward"].shape, dtype=self.dtypes.reward),
+                is_first=jnp.ones(observation_shape["is_first"].shape, dtype=self.dtypes.bool),
+                is_last=jnp.ones(observation_shape["is_last"].shape, dtype=self.dtypes.bool),
+                is_terminal=jnp.ones(observation_shape["is_terminal"].shape, dtype=self.dtypes.bool),
+                action=jnp.ones((), dtype=self.dtypes.action),
+                dyn_deter=jnp.ones((), dtype=self.dtypes.obs),
+                dyn_stoch=jnp.ones((), dtype=self.dtypes.obs),
+            )
+            self.state = self.buffer.init(fake_timestep)
+            self.rng_key = jax.random.PRNGKey(buffer_seed)
+
+    def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
+        with jax.default_device(self.cpu):
+            traj_batch_seq = TimeStepDreamer(
+                image=jnp.array(traj_obs["image"], dtype=self.dtypes.obs),
+                reward=jnp.array(traj_obs["reward"], dtype=self.dtypes.obs),
+                is_first=jnp.array(traj_obs["is_first"], dtype=self.dtypes.obs),
+                is_last=jnp.array(traj_obs["is_last"], dtype=self.dtypes.obs),
+                is_terminal=jnp.array(traj_obs["is_terminal"], dtype=self.dtypes.obs),
+                action=jnp.array((), dtype=self.dtypes.action),
+                dyn_deter=jnp.array((), dtype=self.dtypes.terminated),
+                dyn_stoch=jnp.array((), dtype=self.dtypes.truncated),
             )
             self.state = self.buffer.add(self.state, traj_batch_seq)
 

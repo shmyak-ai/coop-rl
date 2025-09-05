@@ -303,8 +303,8 @@ class Decoder(nj.Module):
       x = self.sub('mlp', nn.MLP, self.layers, self.units, **kw)(inp)
       x = x.reshape((*bshape, *x.shape[1:]))
       kw = dict(**self.kw, outscale=self.outscale)
-      outs = self.sub('vec', heads.DictHead, spaces, outputs, **kw)(x)
-      recons.update(outs)
+      outputs2 = self.sub('vec', heads.DictHead, spaces, outputs, **kw)(x)
+      recons.update(outputs2)
 
     if self.imgkeys:
       factor = 2 ** (len(self.depths) - int(bool(self.outer)))

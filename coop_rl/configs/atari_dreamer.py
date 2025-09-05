@@ -15,18 +15,16 @@
 import hashlib
 import time
 from pathlib import Path
-from typing import Any
 
 import elements
 import ml_collections
 import neptune
-import numpy as np
 import ruamel.yaml as yaml
 from ml_collections import config_dict
 
 from coop_rl.agents.dreamer import get_select_action_fn, get_update_epoch, get_update_step, restore_dreamer_flax_state
 from coop_rl.base_types import AtariTimeStepDtypes
-from coop_rl.buffers import BufferPrioritised
+from coop_rl.buffers import BufferTrajectoryDreamer
 from coop_rl.environment import HandlerEnvDreamerAtari
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
@@ -34,24 +32,39 @@ from coop_rl.workers.trainers import Trainer
 
 DREAMER_CONFIG_PATH = Path(__file__).resolve().parent / "dreamer.yaml"
 DREAMER_ARGV = [
-        "--configs",
-        "debug",
-        "--logdir",
-        "/home/sia/dreamer_results/debug",
-        "--task",
-        "atari_pong",
-    ]
+    "--configs",
+    "debug",
+    "--logdir",
+    "/home/sia/dreamer_results/debug",
+    "--task",
+    "atari_pong",
+]
+
 
 def get_dreamer_config():
     configs = elements.Path(DREAMER_CONFIG_PATH).read()
-    configs = yaml.YAML(typ='safe').load(configs)
-    parsed, other = elements.Flags(configs=['defaults']).parse_known(DREAMER_ARGV)
-    config = elements.Config(configs['defaults'])
+    configs = yaml.YAML(typ="safe").load(configs)
+    parsed, other = elements.Flags(configs=["defaults"]).parse_known(DREAMER_ARGV)
+    config = elements.Config(configs["defaults"])
     for name in parsed.configs:
         config = config.update(configs[name])
     config = elements.Flags(config).parse(other)
     config = config.update(logdir=(config.logdir.format(timestamp=elements.timestamp())))
-    return config
+    return elements.Config(
+        **config.agent,
+        logdir=config.logdir,
+        seed=config.seed,
+        jax=config.jax,
+        batch_size=config.batch_size,
+        batch_length=config.batch_length,
+        replay_context=config.replay_context,
+        report_length=config.report_length,
+        replica=config.replica,
+        replicas=config.replicas,
+        task=config.task,
+        env=config.env,
+    )
+
 
 def get_config():
     config = ml_collections.ConfigDict()
@@ -62,6 +75,7 @@ def get_config():
     actions_shape = config_dict.FieldReference(None, field_type=dict)
     workdir = config_dict.FieldReference(None, field_type=str)
     checkpointdir = config_dict.FieldReference(None, field_type=str)
+    dreamer_config = config_dict.FieldReference(None, field_type=elements.config.Config)
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
@@ -72,7 +86,7 @@ def get_config():
     config.args_neptune_run = args_neptune_run = ml_collections.ConfigDict()
     config.args_neptune_run.custom_run_id = hashlib.md5(str(time.time()).encode()).hexdigest()
     config.args_neptune_run.project = "sha/coop-rl"
-    config.args_neptune_run.name = "rainbow"
+    config.args_neptune_run.name = "dreamer"
     config.args_neptune_run.monitoring_namespace = "monitoring"
 
     config.log_level = log_level
@@ -82,31 +96,31 @@ def get_config():
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
     config.workdir = workdir
-    config.dreamer_config = dreamer_config = get_dreamer_config()
+    config.dreamer_config = dreamer_config
+    config.dreamer_config = get_dreamer_config()  # only to prevent type change of elements.config.Config
 
     config.env = env = HandlerEnvDreamerAtari
     config.args_env = args_env = ml_collections.ConfigDict()
     config.args_env.dreamer_config = dreamer_config
 
-    config.state_recover = state_recover = restore_dreamer_flax_state
-    config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
-    config.args_state_recover.config = dreamer_config
-    config.args_state_recover.observation_shape = observation_shape
-    config.args_state_recover.actions_shape = actions_shape
-    config.args_state_recover.checkpointdir = checkpointdir
-
-    config.buffer = buffer = BufferPrioritised
+    config.buffer = buffer = BufferTrajectoryDreamer
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
     config.args_buffer.sample_batch_size = 32
-    config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
+    config.args_buffer.sample_sequence_length = 3
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
     config.args_buffer.max_size = 300000  # in transitions
-    config.args_buffer.priority_exponent = 0.6
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
+
+    config.state_recover = state_recover = restore_dreamer_flax_state
+    config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
+    config.args_state_recover.dreamer_config = dreamer_config
+    config.args_state_recover.observation_shape = observation_shape
+    config.args_state_recover.actions_shape = actions_shape
+    config.args_state_recover.checkpointdir = checkpointdir
 
     config.agent_params = agent_params = ml_collections.ConfigDict()
 

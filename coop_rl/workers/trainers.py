@@ -51,7 +51,6 @@ class Trainer(BufferKeeper):
         num_semaphor,
         controller,
     ):
-        breakpoint()
         super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor)
 
         self.logger = logging.getLogger(__name__)
@@ -72,6 +71,7 @@ class Trainer(BufferKeeper):
 
         self._rng = jax.random.PRNGKey(trainer_seed)
         self._rng, rng = jax.random.split(self._rng)
+        breakpoint()
         self.flax_state = state_recover(rng, **args_state_recover)
         self.update_epoch_fn = get_update_epoch(
             get_update_step(self.flax_state.apply_fn, agent_params), self.buffer_lock, self.buffer
