@@ -27,7 +27,6 @@ import orbax.checkpoint as ocp
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 from flax import core, struct
 from flax.core.frozen_dict import FrozenDict
-from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
 from typing_extensions import NamedTuple
 
 from coop_rl import dreamer
@@ -585,7 +584,7 @@ class TrainState(struct.PyTreeNode):
       carry: Dreamer's carry
     """
 
-    agent: Any
+    agent: Agent
     key: jax.Array
     step: int | jax.Array
     policy_fn: Callable = struct.field(pytree_node=False)
@@ -656,14 +655,16 @@ def restore_dreamer_flax_state(rng, dreamer_config, observation_shape, actions_s
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
-def get_select_action_fn(apply_fn):
-    @jax.jit
-    def select_action(key, params, observation):
-        key, noise_key, policy_key = jax.random.split(key, num=3)
-        actor_policy, q_logits, atoms = apply_fn(
-            params, jnp.expand_dims(observation, axis=0), rngs={"noise": noise_key}
-        )
-        return key, actor_policy.sample(seed=policy_key)
+def get_select_action_fn(flax_state: TrainState):
+    pattern = re.compile(flax_state.agent.policy_keys)
+    policy_keys = [k for k in flax_state.params if pattern.search(k)]
+
+    def select_action(flax_state: TrainState, observation: chex.ArrayTree):
+        policy_params = {k: flax_state.params[k].copy() for k in policy_keys}
+        flax_state, seed = flax_state.get_key()
+        carry, acts, outs = flax_state.policy_fn(policy_params, seed, flax_state.carry, observation)
+        flax_state = flax_state.update_state(flax_state.params, carry)
+        return acts
 
     return select_action
 
