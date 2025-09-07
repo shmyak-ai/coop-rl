@@ -122,7 +122,7 @@ def get_config():
     config.args_state_recover.actions_shape = actions_shape
     config.args_state_recover.checkpointdir = checkpointdir
 
-    config.agent_params = agent_params = ml_collections.ConfigDict()
+    config.agent_params = agent_params = None
 
     config.controller = Controller
 
