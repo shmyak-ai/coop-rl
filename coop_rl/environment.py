@@ -4,6 +4,7 @@ from gymnasium import ObservationWrapper
 from gymnasium.spaces import Box
 from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
 
+from coop_rl.agents.dreamer import Agent
 from coop_rl.dreamer.envs.atari import Atari
 
 
@@ -124,6 +125,8 @@ class HandlerEnvDreamerAtari:
         obs_space = {k: v for k, v in env.obs_space.items() if not k.startswith('log/')}
         act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
         env.close()
+        ext_space = Agent(obs_space, act_space, dreamer_config).ext_space
+        obs_space = dict(**obs_space, **ext_space)
 
         return (
             obs_space,
