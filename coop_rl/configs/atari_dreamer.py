@@ -23,7 +23,6 @@ import ruamel.yaml as yaml
 from ml_collections import config_dict
 
 from coop_rl.agents.dreamer import get_select_action_fn, get_update_epoch, get_update_step, restore_dreamer_flax_state
-from coop_rl.base_types import AtariTimeStepDtypes
 from coop_rl.buffers import BufferTrajectoryDreamer
 from coop_rl.environment import HandlerEnvDreamerAtari
 from coop_rl.workers.auxiliary import Controller
@@ -115,7 +114,6 @@ def get_config():
     config.args_buffer.max_size = 300000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.actions_shape = actions_shape
-    config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
     config.state_recover = state_recover = restore_dreamer_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
@@ -163,6 +161,5 @@ def get_config():
     config.args_collector.neptune_run = neptune_run
     config.args_collector.args_neptune_run = args_neptune_run
     config.args_collector.get_select_action_fn = get_select_action_fn
-    config.args_collector.time_step_dtypes = time_step_dtypes
 
     return config

@@ -42,13 +42,15 @@ class TimeStep:
 @chex.dataclass(frozen=True)
 class TimeStepDreamer:
     image: chex.Array
-    reward: chex.Array
     is_first: chex.Array
     is_last: chex.Array
     is_terminal: chex.Array
-    action: chex.Array
+    reward: chex.Array
+    consec: chex.Array
+    stepid: chex.Array
     dyn_deter: chex.Array
     dyn_stoch: chex.Array
+    action: chex.Array
 
 
 class AtariTimeStepDtypes(NamedTuple):
