@@ -29,7 +29,7 @@ from flax import core, struct
 from typing_extensions import NamedTuple
 
 from coop_rl import dreamer
-from coop_rl.buffers import TimeStep
+from coop_rl.base_types import TimeStepDreamer
 from coop_rl.dreamer import nets as nn
 from coop_rl.dreamer import ninjax as nj
 from coop_rl.dreamer import rssm
@@ -666,7 +666,7 @@ def get_select_action_fn(flax_state: TrainState):
 def get_update_step(apply_fn: None = None, config: ml_collections.ConfigDict | None = None) -> Callable:
     @jax.jit
     def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
-        data: TimeStep = buffer_sample.experience
+        data: TimeStepDreamer = buffer_sample.experience
         train_state, seed = train_state.get_key()
         params, carry, outs, mets = train_state.train_fn(train_state.params, seed, train_state.carry, data)
         train_state = train_state.update_state(params, carry)

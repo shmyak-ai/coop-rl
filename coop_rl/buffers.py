@@ -16,6 +16,7 @@ import flashbax as fbx
 import jax
 import jax.numpy as jnp
 
+from coop_rl.agents.dreamer import Agent
 from coop_rl.base_types import TimeStep, TimeStepDreamer
 
 
@@ -101,6 +102,7 @@ class BufferTrajectory:
 class BufferTrajectoryDreamer:
     def __init__(
         self,
+        dreamer_config,
         buffer_seed,
         add_batch_size,
         sample_batch_size,
@@ -109,8 +111,12 @@ class BufferTrajectoryDreamer:
         min_length,
         max_size,
         observation_shape,
+        actions_shape,
         time_step_dtypes,
     ):
+        breakpoint()
+        ext_space = Agent(observation_shape, actions_shape, dreamer_config).ext_space
+
         self.dtypes = time_step_dtypes
         self.cpu = jax.devices("cpu")[0]
         with jax.default_device(self.cpu):

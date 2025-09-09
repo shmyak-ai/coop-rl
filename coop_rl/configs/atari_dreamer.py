@@ -105,6 +105,7 @@ def get_config():
 
     config.buffer = buffer = BufferTrajectoryDreamer
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
+    config.args_buffer.dreamer_config = dreamer_config
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
     config.args_buffer.sample_batch_size = 32
@@ -113,6 +114,7 @@ def get_config():
     config.args_buffer.min_length = 100
     config.args_buffer.max_size = 300000  # in transitions
     config.args_buffer.observation_shape = observation_shape
+    config.args_buffer.actions_shape = actions_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
 
     config.state_recover = state_recover = restore_dreamer_flax_state
