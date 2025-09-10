@@ -631,7 +631,7 @@ def create_train_state(rng, config, obs_space, act_space):
     C = config.replay_context
     data = zeros(spaces, (B, T + C))
     params = nj.init(agent.train)(params, carry, data, seed=0)
-    _, carry = nj.pure(agent.init_policy)(params, config.batch_size)
+    # _, carry = nj.pure(agent.init_policy)(params, config.batch_size)
     policy_fn = jax.jit(nj.pure(agent.policy))
     train_fn = jax.jit(nj.pure(agent.train), donate_argnums=0)
     flax_state = TrainState.create(
@@ -656,7 +656,7 @@ def get_select_action_fn(flax_state: TrainState):
     def select_action(flax_state: TrainState, observation: chex.ArrayTree):
         policy_params = {k: flax_state.params[k].copy() for k in policy_keys}
         flax_state, seed = flax_state.get_key()
-        carry, acts, outs = flax_state.apply_fn(policy_params, flax_state.carry, observation, seed=seed)
+        _, (carry, acts, outs) = flax_state.apply_fn(policy_params, flax_state.carry, observation, seed=seed)
         flax_state = flax_state.update_state(flax_state.params, carry)
         return acts
 
