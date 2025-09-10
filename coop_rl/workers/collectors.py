@@ -147,3 +147,119 @@ class DQNCollectorUniform:
 
             if rollouts_count % self.report_period == 0:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
+
+
+class DreamerCollectorUniform:
+    def __init__(
+        self,
+        *,
+        collectors_seed,
+        log_level,
+        report_period,
+        state_recover,
+        args_state_recover,
+        env,
+        args_env,
+        neptune_run,
+        args_neptune_run,
+        get_select_action_fn,
+        controller,
+        trainer,
+    ):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
+        self.report_period = report_period
+
+        self.controller = controller
+        self.trainer = trainer
+
+        self.env = env(**args_env)
+
+        args_neptune_run["monitoring_namespace"] = f"monitoring/collector_{collectors_seed}"
+        self.neptune_run = neptune_run(**args_neptune_run)
+        self.collector_ns = self.neptune_run[f"collector_{collectors_seed}"]
+
+        self.collector_seed = collectors_seed
+        random.seed(collectors_seed)
+        breakpoint()
+        self.flax_state = state_recover(jax.random.PRNGKey(collectors_seed), **args_state_recover)
+
+        self.futures_parameters = self.controller.get_parameters.remote()
+        self.select_action = get_select_action_fn(self.flax_state)
+        self.action = {k: np.zeros((1,) + v.shape, v.dtype) for k, v in self.env._env.act_space.items()}
+        self.action['reset'] = np.ones(1, bool)
+        self.episode_reward = {
+            "now": 0,
+            "last": 0,
+        }
+
+    def run_rollout(self):
+        traj_obs = []
+        traj_actions = []
+        traj_rewards = []
+        traj_terminated = []
+        traj_truncated = []
+
+        for _ in range(100):
+            action = {k: v[0] for k, v in self.action.items()}
+            obs = self.env.step(action)
+            obs = {k: np.stack([obs[k],]) for k in obs}
+            obs = {k: v for k, v in obs.items() if not k.startswith('log/')}
+            action_jnp = self.select_action(self.flax_state, obs)
+
+            traj_obs.append(self.obs)
+            traj_actions.append(action_np)
+            traj_rewards.append(reward)
+            traj_terminated.append(terminated)
+            traj_truncated.append(truncated)
+            self.episode_reward["now"] += reward
+
+            if terminated or truncated:
+                next_obs, _info = self.env.reset()
+                self.episode_reward["last"] = self.episode_reward["now"]
+                self.episode_reward["now"] = 0
+                self.collector_ns["episode_reward"].append(self.episode_reward["last"])
+
+            self.obs = next_obs
+
+        return traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated
+
+    def collecting(self):
+        for rollouts_count in itertools.count(start=1, step=1):
+            traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
+            traj_obs_np = np.array(traj_obs, dtype=self.dtypes.obs)
+            traj_actions_np = np.array(traj_actions, dtype=self.dtypes.action)
+            traj_rewards_np = np.array(traj_rewards, dtype=self.dtypes.reward)
+            traj_terminated_np = np.array(traj_terminated, dtype=self.dtypes.terminated)
+            traj_truncated_np = np.array(traj_truncated, dtype=self.dtypes.truncated)
+
+            while True:
+                training_done = ray.get(self.controller.is_done.remote())
+                if training_done:
+                    self.logger.info("Done signal received; finishing.")
+                    return
+
+                adding_traj_done = ray.get(
+                    self.trainer.add_traj_seq.remote(
+                        (
+                            self.collector_seed,
+                            traj_obs_np,
+                            traj_actions_np,
+                            traj_rewards_np,
+                            traj_terminated_np,
+                            traj_truncated_np,
+                        )
+                    )
+                )
+                if adding_traj_done:
+                    break
+                time.sleep(0.1)
+
+            parameters = ray.get(self.futures_parameters)
+            if parameters is not None:
+                self.online_params.append(parameters)
+                self.collector_ns["parameters_updated_on_rollout_count"].append(rollouts_count)
+            self.futures_parameters = self.controller.get_parameters.remote()
+
+            if rollouts_count % self.report_period == 0:
+                self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")

@@ -242,6 +242,7 @@ class Linear(nj.Module):
     ensure_dtypes(x)
     size = math.prod(self.units)
     shape = (x.shape[-1], size)
+    foo = self.value('kernel', self._scaled_winit, shape).astype(x.dtype)
     x = x @ self.value('kernel', self._scaled_winit, shape).astype(x.dtype)
     if self.bias:
       x += self.value('bias', init(self.binit), size).astype(x.dtype)

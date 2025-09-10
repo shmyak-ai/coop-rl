@@ -4,7 +4,20 @@ from gymnasium import ObservationWrapper
 from gymnasium.spaces import Box
 from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
 
+import coop_rl.dreamer.wrappers as wrappers
 from coop_rl.dreamer.envs.atari import Atari
+
+
+def wrap_env(env):
+    for name, space in env.act_space.items():
+        if not space.discrete:
+            env = wrappers.NormalizeAction(env, name)
+    env = wrappers.UnifyDtypes(env)
+    env = wrappers.CheckSpaces(env)
+    for name, space in env.act_space.items():
+        if not space.discrete:
+            env = wrappers.ClipAction(env, name)
+    return env
 
 
 class FirstDimToLast(ObservationWrapper):
@@ -101,28 +114,25 @@ class HandlerEnvDreamerAtari:
     def __init__(self, *, dreamer_config):
         self._env = HandlerEnvDreamerAtari.make_env(dreamer_config)
 
-    def reset(self, *args, seed=None, **kwargs):
-        observation, info = self._env._reset(*args, seed=seed, **kwargs)
-        # call [:] to get a stacked array from gym
-        return observation[:], info
+    def reset(self, *args, **kwargs):
+        return None
 
     def step(self, action, *args, **kwargs):
-        observation, reward, terminated, truncated, info = self._env.step(action)
-        return observation[:], reward, terminated, truncated, info
+        return self._env.step(action)
 
     @staticmethod
     def make_env(config):
-        suite, task = config.task.split('_', 1)
+        suite, task = config.task.split("_", 1)
         kwargs = config.env.get(suite, {})
         kwargs.update({})
         env = Atari(task, **kwargs)
-        return env
+        return wrap_env(env)
 
     @staticmethod
     def check_env(*, dreamer_config):
         env = HandlerEnvDreamerAtari.make_env(dreamer_config)
-        obs_space = {k: v for k, v in env.obs_space.items() if not k.startswith('log/')}
-        act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
+        obs_space = {k: v for k, v in env.obs_space.items() if not k.startswith("log/")}
+        act_space = {k: v for k, v in env.act_space.items() if k != "reset"}
         env.close()
 
         return (

@@ -26,7 +26,7 @@ from coop_rl.agents.dreamer import get_select_action_fn, get_update_epoch, get_u
 from coop_rl.buffers import BufferTrajectoryDreamer
 from coop_rl.environment import HandlerEnvDreamerAtari
 from coop_rl.workers.auxiliary import Controller
-from coop_rl.workers.collectors import DQNCollectorUniform
+from coop_rl.workers.collectors import DreamerCollectorUniform
 from coop_rl.workers.trainers import Trainer
 
 DREAMER_CONFIG_PATH = Path(__file__).resolve().parent / "dreamer.yaml"
@@ -89,7 +89,7 @@ def get_config():
     config.args_neptune_run.monitoring_namespace = "monitoring"
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 5
+    config.num_collectors = num_collectors = 1
     config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -149,7 +149,7 @@ def get_config():
     config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 1
 
-    config.collector = DQNCollectorUniform
+    config.collector = DreamerCollectorUniform
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level

@@ -130,7 +130,6 @@ class BufferTrajectoryDreamer:
                 sample=jax.jit(self.buffer.sample),
                 can_sample=jax.jit(self.buffer.can_sample),
             )
-            breakpoint()
             self.dummy_timestep = TimeStepDreamer(
                 image=jnp.ones(observation_shape["image"].shape, dtype=observation_shape["image"].dtype),
                 is_first=jnp.ones(observation_shape["is_first"].shape, dtype=observation_shape["is_first"].dtype),

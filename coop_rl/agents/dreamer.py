@@ -625,8 +625,8 @@ def create_train_state(rng, config, obs_space, act_space):
     ext_space = agent.ext_space  # Extra inputs to train and report.
     spaces = dict(**obs_space, **act_space, **ext_space)
     params = {}
-    _, carry = nj.pure(agent.init_policy)(params, 1)
     B = 1  # config.batch_size
+    _, carry = nj.pure(agent.init_policy)(params, B)
     T = config.batch_length
     C = config.replay_context
     data = zeros(spaces, (B, T + C))
@@ -656,7 +656,7 @@ def get_select_action_fn(flax_state: TrainState):
     def select_action(flax_state: TrainState, observation: chex.ArrayTree):
         policy_params = {k: flax_state.params[k].copy() for k in policy_keys}
         flax_state, seed = flax_state.get_key()
-        carry, acts, outs = flax_state.apply_fn(policy_params, seed, flax_state.carry, observation)
+        carry, acts, outs = flax_state.apply_fn(policy_params, flax_state.carry, observation, seed=seed)
         flax_state = flax_state.update_state(flax_state.params, carry)
         return acts
 
