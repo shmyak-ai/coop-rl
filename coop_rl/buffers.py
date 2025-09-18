@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 from coop_rl.agents.dreamer import Agent
-from coop_rl.base_types import TimeStep, TimeStepDreamer
+from coop_rl.base_types import TimeStep
 
 
 class BufferFlat:
@@ -130,36 +130,26 @@ class BufferTrajectoryDreamer:
                 sample=jax.jit(self.buffer.sample),
                 can_sample=jax.jit(self.buffer.can_sample),
             )
-            self.dummy_timestep = TimeStepDreamer(
-                image=jnp.ones(observation_shape["image"].shape, dtype=observation_shape["image"].dtype),
-                is_first=jnp.ones(observation_shape["is_first"].shape, dtype=observation_shape["is_first"].dtype),
-                is_last=jnp.ones(observation_shape["is_last"].shape, dtype=observation_shape["is_last"].dtype),
-                is_terminal=jnp.ones(
+            self.dummy_timestep = {
+                "image": jnp.ones(observation_shape["image"].shape, dtype=observation_shape["image"].dtype),
+                "is_first": jnp.ones(observation_shape["is_first"].shape, dtype=observation_shape["is_first"].dtype),
+                "is_last": jnp.ones(observation_shape["is_last"].shape, dtype=observation_shape["is_last"].dtype),
+                "is_terminal": jnp.ones(
                     observation_shape["is_terminal"].shape, dtype=observation_shape["is_terminal"].dtype
                 ),
-                reward=jnp.ones(observation_shape["reward"].shape, dtype=observation_shape["reward"].dtype),
-                consec=jnp.ones(ext_space["consec"].shape, dtype=ext_space["consec"].dtype),
-                stepid=jnp.ones(ext_space["stepid"].shape, dtype=ext_space["stepid"].dtype),
-                dyn_deter=jnp.ones(ext_space["dyn/deter"].shape, dtype=ext_space["dyn/deter"].dtype),
-                dyn_stoch=jnp.ones(ext_space["dyn/stoch"].shape, dtype=ext_space["dyn/stoch"].dtype),
-                action=jnp.ones(actions_shape["action"].shape, dtype=actions_shape["action"].dtype),
-            )
+                "reward": jnp.ones(observation_shape["reward"].shape, dtype=observation_shape["reward"].dtype),
+                "consec": jnp.ones(ext_space["consec"].shape, dtype=ext_space["consec"].dtype),
+                "stepid": jnp.ones(ext_space["stepid"].shape, dtype=ext_space["stepid"].dtype),
+                "dyn/deter": jnp.ones(ext_space["dyn/deter"].shape, dtype=ext_space["dyn/deter"].dtype),
+                "dyn/stoch": jnp.ones(ext_space["dyn/stoch"].shape, dtype=ext_space["dyn/stoch"].dtype),
+                "action": jnp.ones(actions_shape["action"].shape, dtype=actions_shape["action"].dtype),
+            }
             self.state = self.buffer.init(self.dummy_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
 
-    def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
+    def add(self, batch_sequence):
         with jax.default_device(self.cpu):
-            traj_batch_seq = TimeStepDreamer(
-                image=jnp.array(traj_obs["image"], dtype=self.dtypes.obs),
-                reward=jnp.array(traj_obs["reward"], dtype=self.dtypes.obs),
-                is_first=jnp.array(traj_obs["is_first"], dtype=self.dtypes.obs),
-                is_last=jnp.array(traj_obs["is_last"], dtype=self.dtypes.obs),
-                is_terminal=jnp.array(traj_obs["is_terminal"], dtype=self.dtypes.obs),
-                action=jnp.array((), dtype=self.dtypes.action),
-                dyn_deter=jnp.array((), dtype=self.dtypes.terminated),
-                dyn_stoch=jnp.array((), dtype=self.dtypes.truncated),
-            )
-            self.state = self.buffer.add(self.state, traj_batch_seq)
+            self.state = self.buffer.add(self.state, batch_sequence)
 
     def sample(self):
         self.rng_key, rng_key = jax.random.split(self.rng_key)

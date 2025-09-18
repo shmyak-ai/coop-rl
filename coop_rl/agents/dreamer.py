@@ -38,6 +38,13 @@ f32 = jnp.float32
 i32 = jnp.int32
 
 
+def take_outs(outs):
+    outs = jax.tree.map(lambda x: x.__array__(), outs)
+    outs = jax.tree.map(
+        lambda x: np.float32(x) if x.dtype == jnp.bfloat16 else x, outs)
+    return outs
+
+
 def sg(xs, skip=False):
     return xs if skip else jax.lax.stop_gradient(xs)
 
@@ -586,7 +593,7 @@ class TrainState(struct.PyTreeNode):
     params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     carry: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    def update_state(self, *, params, carry, **kwargs):
+    def update_state(self, params, carry, **kwargs):
         return self.replace(
             step=self.step + 1,
             params=params,
@@ -658,7 +665,9 @@ def get_select_action_fn(flax_state: TrainState):
         flax_state, seed = flax_state.get_key()
         _, (carry, acts, outs) = flax_state.apply_fn(policy_params, flax_state.carry, observation, seed=seed)
         flax_state = flax_state.update_state(flax_state.params, carry)
-        return acts
+        acts, outs = take_outs((acts, outs))
+        _ = outs.pop('finite', {})
+        return acts, outs
 
     return select_action
 
