@@ -68,7 +68,7 @@ class BufferKeeper:
         if data == 1:
             return
         # save data from a collector
-        collector_seed, *_data = data
+        collector_seed, _data = data
         with self.store_lock:
             # for collectors synchronization, put only if there is no data already
             if self.traj_store.get(collector_seed) is not None:
@@ -92,11 +92,9 @@ class BufferKeeper:
             with self.store_lock:
                 self.traj_store = {}
 
-            transposed = list(zip(*trajectories, strict=True))
-            merged = [np.stack(arrays, axis=0) for arrays in transposed]
-
+            batched = {k: np.stack([x[k] for x in trajectories]) for k in trajectories[0]}
             with self.buffer_lock:
-                self.buffer.add(*merged)
+                self.buffer.add(batched)
 
     def buffer_sampling(self):
         while True:

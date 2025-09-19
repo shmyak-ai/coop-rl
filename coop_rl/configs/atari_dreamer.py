@@ -89,7 +89,7 @@ def get_config():
     config.args_neptune_run.monitoring_namespace = "monitoring"
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 1
+    config.num_collectors = num_collectors = 3
     config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype

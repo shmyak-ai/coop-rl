@@ -204,13 +204,14 @@ class DreamerCollectorUniform:
             self.action, outs = self.select_action(self.flax_state, obs)
             self.action = {**self.action, 'reset': obs['is_last'].copy()}
 
+            step_id = np.expand_dims(np.frombuffer(bytes(uuid) + index.to_bytes(4, 'big'), np.uint8), axis=0)
             trajectory.append({
                 "image": obs["image"],
                 "is_first": obs["is_first"],
                 "is_last": obs["is_last"],
                 "is_terminal": obs["is_terminal"],
                 "reward": obs["reward"],
-                "stepid": np.frombuffer(bytes(uuid) + index.to_bytes(4, 'big'), np.uint8),
+                "stepid": step_id,
                 "dyn/deter": outs["dyn/deter"],
                 "dyn/stoch": outs["dyn/stoch"],
                 "action": self.action["action"],
@@ -222,10 +223,9 @@ class DreamerCollectorUniform:
                 self.episode_reward["now"] = 0
                 self.collector_ns["episode_reward"].append(self.episode_reward["last"])
 
-        return trajectory
+        return {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
 
     def collecting(self):
-        breakpoint()
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
 
