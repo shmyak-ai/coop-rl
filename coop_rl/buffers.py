@@ -139,6 +139,7 @@ class BufferTrajectoryDreamer:
                 ),
                 "reward": jnp.ones(observation_shape["reward"].shape, dtype=observation_shape["reward"].dtype),
                 "stepid": jnp.ones(ext_space["stepid"].shape, dtype=ext_space["stepid"].dtype),
+                "consec": jnp.ones(ext_space["consec"].shape, dtype=ext_space["consec"].dtype),
                 "dyn/deter": jnp.ones(ext_space["dyn/deter"].shape, dtype=ext_space["dyn/deter"].dtype),
                 "dyn/stoch": jnp.ones(ext_space["dyn/stoch"].shape, dtype=ext_space["dyn/stoch"].dtype),
                 "action": jnp.ones(actions_shape["action"].shape, dtype=actions_shape["action"].dtype),

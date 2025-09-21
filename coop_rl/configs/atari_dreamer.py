@@ -107,8 +107,8 @@ def get_config():
     config.args_buffer.dreamer_config = dreamer_config
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
-    config.args_buffer.sample_batch_size = 32
-    config.args_buffer.sample_sequence_length = 3
+    config.args_buffer.sample_batch_size = config.dreamer_config.batch_size
+    config.args_buffer.sample_sequence_length = config.dreamer_config.batch_length
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
     config.args_buffer.max_size = 300000  # in transitions

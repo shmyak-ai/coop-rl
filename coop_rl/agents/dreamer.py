@@ -40,8 +40,7 @@ i32 = jnp.int32
 
 def take_outs(outs):
     outs = jax.tree.map(lambda x: x.__array__(), outs)
-    outs = jax.tree.map(
-        lambda x: np.float32(x) if x.dtype == jnp.bfloat16 else x, outs)
+    outs = jax.tree.map(lambda x: np.float32(x) if x.dtype == jnp.bfloat16 else x, outs)
     return outs
 
 
@@ -583,21 +582,24 @@ class TrainState(struct.PyTreeNode):
       train_fn: Dreamer nj pure training method
       params: The parameters to be updated by ``tx`` and used by ``apply_fn``.
       carry: Dreamer's carry
+      carry_train: Dreamer's train carry
     """
 
     agent: Agent
     key: jax.Array
     step: int | jax.Array
+    policy_fn: Callable = struct.field(pytree_node=False)
     apply_fn: Callable = struct.field(pytree_node=False)
-    train_fn: Callable = struct.field(pytree_node=False)
     params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     carry: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
+    carry_train: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
 
-    def update_state(self, params, carry, **kwargs):
+    def update_state(self, params, carry, carry_train, **kwargs):
         return self.replace(
             step=self.step + 1,
             params=params,
             carry=carry,
+            carry_train=carry_train,
             **kwargs,
         )
 
@@ -606,16 +608,17 @@ class TrainState(struct.PyTreeNode):
         return self.replace(key=in_key), out_key
 
     @classmethod
-    def create(cls, *, agent, key, apply_fn, train_fn, params, carry, **kwargs):
+    def create(cls, *, agent, key, policy_fn, apply_fn, params, carry, carry_train, **kwargs):
         """Creates a new instance with ``step=0``."""
         return cls(
             agent=agent,
             key=key,
             step=0,
+            policy_fn=policy_fn,
             apply_fn=apply_fn,
-            train_fn=train_fn,
             params=params,
             carry=carry,
+            carry_train=carry_train,
             **kwargs,
         )
 
@@ -638,11 +641,17 @@ def create_train_state(rng, config, obs_space, act_space):
     C = config.replay_context
     data = zeros(spaces, (B, T + C))
     params = nj.init(agent.train)(params, carry, data, seed=0)
-    # _, carry = nj.pure(agent.init_policy)(params, config.batch_size)
+    _, carry_train = nj.pure(agent.init_train)(params, config.batch_size)
     policy_fn = jax.jit(nj.pure(agent.policy))
     train_fn = jax.jit(nj.pure(agent.train), donate_argnums=0)
     flax_state = TrainState.create(
-        agent=agent, key=rng, apply_fn=policy_fn, train_fn=train_fn, params=params, carry=carry
+        agent=agent,
+        key=rng,
+        policy_fn=policy_fn,
+        apply_fn=train_fn,
+        params=params,
+        carry=carry,
+        carry_train=carry_train,
     )
     return flax_state
 
@@ -663,10 +672,10 @@ def get_select_action_fn(flax_state: TrainState):
     def select_action(flax_state: TrainState, observation: chex.ArrayTree):
         policy_params = {k: flax_state.params[k].copy() for k in policy_keys}
         flax_state, seed = flax_state.get_key()
-        _, (carry, acts, outs) = flax_state.apply_fn(policy_params, flax_state.carry, observation, seed=seed)
-        flax_state = flax_state.update_state(flax_state.params, carry)
+        _, (carry, acts, outs) = flax_state.policy_fn(policy_params, flax_state.carry, observation, seed=seed)
+        flax_state = flax_state.update_state(flax_state.params, carry, flax_state.carry_train)
         acts, outs = take_outs((acts, outs))
-        _ = outs.pop('finite', {})
+        _ = outs.pop("finite", {})
         return acts, outs
 
     return select_action
@@ -675,10 +684,12 @@ def get_select_action_fn(flax_state: TrainState):
 def get_update_step(apply_fn: None = None, config: ml_collections.ConfigDict | None = None) -> Callable:
     @jax.jit
     def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
-        data: TimeStepDreamer = buffer_sample.experience
+        data = buffer_sample.experience
         train_state, seed = train_state.get_key()
-        params, carry, outs, mets = train_state.train_fn(train_state.params, seed, train_state.carry, data)
-        train_state = train_state.update_state(params, carry)
+        params, (carry_train, outs, mets) = train_state.apply_fn(
+            train_state.params, train_state.carry_train, data, seed=seed
+        )
+        train_state = train_state.update_state(params, train_state.carry, carry_train)
         return train_state, mets
 
     # _checked_update_step = checkify.checkify(

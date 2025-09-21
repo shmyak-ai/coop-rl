@@ -187,7 +187,7 @@ class DreamerCollectorUniform:
         self.futures_parameters = self.controller.get_parameters.remote()
         self.select_action = get_select_action_fn(self.flax_state)
         self.action = {k: np.zeros((1,) + v.shape, v.dtype) for k, v in self.env._env.act_space.items()}
-        self.action['reset'] = np.ones(1, bool)
+        self.action["reset"] = np.ones(1, bool)
         self.episode_reward = {
             "now": 0,
             "last": 0,
@@ -199,23 +199,32 @@ class DreamerCollectorUniform:
         for index in range(100):
             action = {k: v[0] for k, v in self.action.items()}
             obs = self.env.step(action)
-            obs = {k: np.stack([obs[k],]) for k in obs}
-            obs = {k: v for k, v in obs.items() if not k.startswith('log/')}
+            obs = {
+                k: np.stack(
+                    [
+                        obs[k],
+                    ]
+                )
+                for k in obs
+            }
+            obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
             self.action, outs = self.select_action(self.flax_state, obs)
-            self.action = {**self.action, 'reset': obs['is_last'].copy()}
+            self.action = {**self.action, "reset": obs["is_last"].copy()}
 
-            step_id = np.expand_dims(np.frombuffer(bytes(uuid) + index.to_bytes(4, 'big'), np.uint8), axis=0)
-            trajectory.append({
-                "image": obs["image"],
-                "is_first": obs["is_first"],
-                "is_last": obs["is_last"],
-                "is_terminal": obs["is_terminal"],
-                "reward": obs["reward"],
-                "stepid": step_id,
-                "dyn/deter": outs["dyn/deter"],
-                "dyn/stoch": outs["dyn/stoch"],
-                "action": self.action["action"],
-            })
+            step_id = np.expand_dims(np.frombuffer(bytes(uuid) + index.to_bytes(4, "big"), np.uint8), axis=0)
+            trajectory.append(
+                {
+                    "image": obs["image"],
+                    "is_first": obs["is_first"],
+                    "is_last": obs["is_last"],
+                    "is_terminal": obs["is_terminal"],
+                    "reward": obs["reward"],
+                    "stepid": step_id,
+                    "dyn/deter": outs["dyn/deter"],
+                    "dyn/stoch": outs["dyn/stoch"],
+                    "action": self.action["action"],
+                }
+            )
             self.episode_reward["now"] += obs["reward"]
 
             if obs["is_terminal"] or obs["is_last"]:
@@ -223,7 +232,9 @@ class DreamerCollectorUniform:
                 self.episode_reward["now"] = 0
                 self.collector_ns["episode_reward"].append(self.episode_reward["last"])
 
-        return {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
+        trajectory = {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
+        trajectory["consec"] = np.full(trajectory['is_first'].shape, 0, np.int32)
+        return trajectory
 
     def collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
@@ -249,7 +260,9 @@ class DreamerCollectorUniform:
 
             parameters = ray.get(self.futures_parameters)
             if parameters is not None:
-                self.online_params.append(parameters)
+                self.flax_state = self.flax_state.update_state(
+                    parameters, self.flax_state.carry, self.flax_state.carry_train
+                )
                 self.collector_ns["parameters_updated_on_rollout_count"].append(rollouts_count)
             self.futures_parameters = self.controller.get_parameters.remote()
 
