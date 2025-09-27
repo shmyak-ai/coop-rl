@@ -52,7 +52,7 @@ runtime_env_debug = {
         "RAY_DEBUG_POST_MORTEM": "1",
         "RAY_DEDUP_LOGS": "0",
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
-        "JAX_DISABLE_JIT": "True",
+        "JAX_DISABLE_JIT": "False",
     }
 }
 

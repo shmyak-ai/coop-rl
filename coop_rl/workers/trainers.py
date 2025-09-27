@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import itertools
 import logging
 import os
@@ -105,7 +106,7 @@ class Trainer(BufferKeeper):
 
             if step % self.save_period == 0:
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
-                self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
+                # self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
     
     def priority_buffer_log(self, info, samples):
@@ -126,7 +127,8 @@ class Trainer(BufferKeeper):
 
     def neptune_log(self, info, transitions_processed, samples):
         self.neptune_run["step"].append(self.flax_state.step)
-        self.neptune_run["loss"].append(info["loss"])
+        with contextlib.suppress(KeyError):
+            self.neptune_run["loss"].append(info["loss"])
         self.neptune_run["transitions_sampled_from_restart"].append(transitions_processed)
         with self.buffer_lock:
             self.neptune_run["buffer_current_index"].append(self.buffer.state.current_index)

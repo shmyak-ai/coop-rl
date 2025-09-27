@@ -225,9 +225,9 @@ class DreamerCollectorUniform:
                     "action": self.action["action"],
                 }
             )
-            self.episode_reward["now"] += obs["reward"]
+            self.episode_reward["now"] += obs["reward"][0]
 
-            if obs["is_terminal"] or obs["is_last"]:
+            if obs["is_terminal"][0] or obs["is_last"][0]:
                 self.episode_reward["last"] = self.episode_reward["now"]
                 self.episode_reward["now"] = 0
                 self.collector_ns["episode_reward"].append(self.episode_reward["last"])
