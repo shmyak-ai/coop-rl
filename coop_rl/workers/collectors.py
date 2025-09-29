@@ -208,7 +208,7 @@ class DreamerCollectorUniform:
                 for k in obs
             }
             obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
-            self.action, outs = self.select_action(self.flax_state, obs)
+            self.flax_state, self.action, outs = self.select_action(self.flax_state, obs)
             self.action = {**self.action, "reset": obs["is_last"].copy()}
 
             step_id = np.expand_dims(np.frombuffer(bytes(uuid) + index.to_bytes(4, "big"), np.uint8), axis=0)

@@ -675,7 +675,7 @@ def get_select_action_fn(flax_state: TrainState):
         flax_state = flax_state.update_state(flax_state.params, carry, flax_state.carry_train)
         acts, outs = take_outs((acts, outs))
         _ = outs.pop("finite", {})
-        return acts, outs
+        return flax_state, acts, outs
 
     return select_action
 

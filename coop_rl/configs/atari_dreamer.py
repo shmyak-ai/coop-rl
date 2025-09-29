@@ -32,9 +32,9 @@ from coop_rl.workers.trainers import Trainer
 DREAMER_CONFIG_PATH = Path(__file__).resolve().parent / "dreamer.yaml"
 DREAMER_ARGV = [
     "--configs",
-    "debug",
+    "size1m",
     "--logdir",
-    "/home/sia/dreamer_results/debug",
+    "/home/sia/dreamer_results/atari",
     "--task",
     "atari_pong",
 ]
