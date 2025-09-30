@@ -23,13 +23,14 @@ from pathlib import Path
 
 import ray
 
-from coop_rl.configs import atari_dqn, atari_dreamer, atari_mdqn, atari_rainbow, classic_control_dqn
+# from coop_rl.configs import atari_dqn, atari_dreamer, atari_mdqn, atari_rainbow, classic_control_dqn
+from coop_rl.configs import atari_dreamer  # , atari_mdqn, atari_rainbow, classic_control_dqn
 
 configs = {
-    "classic_control_dqn": classic_control_dqn,
-    "atari_dqn": atari_dqn,
-    "atari_mdqn": atari_mdqn,
-    "atari_rainbow": atari_rainbow,
+#     "classic_control_dqn": classic_control_dqn,
+#     "atari_dqn": atari_dqn,
+#     "atari_mdqn": atari_mdqn,
+#     "atari_rainbow": atari_rainbow,
     "atari_dreamer": atari_dreamer,
 }
 
@@ -52,7 +53,7 @@ runtime_env_debug = {
         "RAY_DEBUG_POST_MORTEM": "1",
         "RAY_DEDUP_LOGS": "0",
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
-        "JAX_DISABLE_JIT": "False",
+        "JAX_DISABLE_JIT": "true",
     }
 }
 

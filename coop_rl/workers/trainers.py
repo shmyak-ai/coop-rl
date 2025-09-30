@@ -16,6 +16,10 @@ import contextlib
 import itertools
 import logging
 import os
+import threading
+import time
+from collections.abc import Generator
+from queue import Queue
 
 import jax
 import numpy as np
@@ -23,7 +27,90 @@ import orbax.checkpoint as ocp
 import ray
 from flashbax.buffers.sum_tree import get_tree_index
 
-from coop_rl.workers.auxiliary import BufferKeeper
+
+class BufferKeeper:
+    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor):
+        self.buffer = buffer(**args_buffer)
+        self.traj_store = {}
+        self.add_batch_size = args_buffer.add_batch_size
+        self.buffer_lock = threading.Lock()
+        self.store_lock = threading.Lock()
+        self.device_lock = threading.Lock()
+        self.semaphore = threading.Semaphore(num_semaphor)
+        self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
+        self.gpu_device = jax.devices("gpu")[0]
+        self.num_samples_to_gpu = num_samples_to_gpu
+
+    def add_traj_seq(self, data):
+        # a trick to start a ray thread, is it necessary?
+        if data == 1:
+            return
+        # save data from a collector
+        collector_seed, _data = data
+        with self.store_lock:
+            # for collectors synchronization, put only if there is no data already
+            if self.traj_store.get(collector_seed) is not None:
+                return False
+            self.traj_store[collector_seed] = _data
+            return True
+
+    def buffer_updating(self):
+        while True:
+            if self.is_done:
+                self.logger.info("Done signal received; finishing buffer updating.")
+                break
+
+            with self.store_lock:
+                trajectories = [self.traj_store[key] for key in self.traj_store if self.traj_store[key]]
+
+            if len(trajectories) != self.add_batch_size:
+                time.sleep(0.1)
+                continue
+
+            with self.store_lock:
+                self.traj_store = {}
+
+            batched = {k: np.stack([x[k] for x in trajectories]) for k in trajectories[0]}
+            with self.buffer_lock:
+                self.buffer.add(batched)
+
+    def buffer_sampling(self):
+        while True:
+            with self.buffer_lock:
+                can_sample = self.buffer.can_sample()
+            if can_sample:
+                break
+            else:
+                time.sleep(1)
+
+        while True:
+            samples = []
+            for _ in range(self.num_samples_to_gpu):
+                if self.is_done:
+                    self.logger.info("Done signal received; finishing buffer sampling.")
+                    return
+
+                with self.buffer_lock:
+                    sample = self.buffer.sample()
+                samples.append(sample)
+            with self.device_lock:
+                samples_on_gpu = jax.device_put(samples, device=self.gpu_device)
+            with self.semaphore:
+                for sample_on_gpu in samples_on_gpu:
+                    self._samples_on_gpu.put(sample_on_gpu)
+
+    def get_samples(self, batch_size: int = 10) -> Generator:
+        while True:
+            batch = []
+            while True:
+                if not self._samples_on_gpu.empty():
+                    batch.append(self._samples_on_gpu.get())
+                else:
+                    self.logger.info("Not enough data; sampling generator sleeps for a second.")
+                    time.sleep(1)
+                if len(batch) == batch_size:
+                    break
+            yield batch
 
 
 class Trainer(BufferKeeper):
@@ -78,7 +165,7 @@ class Trainer(BufferKeeper):
         )
 
         self.controller = controller
-        self.futures = self.controller.set_parameters.remote(self.flax_state.params)
+        self.futures = self.controller.set_parameters.remote(jax.device_get(self.flax_state.params))
         self.is_done = False
 
     def training(self):
@@ -102,7 +189,7 @@ class Trainer(BufferKeeper):
 
             if step % self.synchronization_period == 0:
                 ray.get(self.futures)
-                self.futures = self.controller.set_parameters.remote(self.flax_state.params)
+                self.futures = self.controller.set_parameters.remote(jax.device_get(self.flax_state.params))
 
             if step % self.save_period == 0:
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")

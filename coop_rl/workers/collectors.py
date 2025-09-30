@@ -192,6 +192,7 @@ class DreamerCollectorUniform:
             "now": 0,
             "last": 0,
         }
+        self.gpu_device = jax.devices("gpu")[0]
 
     def run_rollout(self):
         trajectory = []
@@ -233,7 +234,7 @@ class DreamerCollectorUniform:
                 self.collector_ns["episode_reward"].append(self.episode_reward["last"])
 
         trajectory = {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
-        trajectory["consec"] = np.full(trajectory['is_first'].shape, 0, np.int32)
+        trajectory["consec"] = np.full(trajectory["is_first"].shape, 0, np.int32)
         return trajectory
 
     def collecting(self):
@@ -261,7 +262,9 @@ class DreamerCollectorUniform:
             parameters = ray.get(self.futures_parameters)
             if parameters is not None:
                 self.flax_state = self.flax_state.update_state(
-                    parameters, self.flax_state.carry, self.flax_state.carry_train
+                    jax.device_put(parameters, device=self.gpu_device),
+                    self.flax_state.carry,
+                    self.flax_state.carry_train,
                 )
                 self.collector_ns["parameters_updated_on_rollout_count"].append(rollouts_count)
             self.futures_parameters = self.controller.get_parameters.remote()
