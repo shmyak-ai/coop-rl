@@ -193,11 +193,12 @@ class DreamerCollectorUniform:
             "last": 0,
         }
         self.gpu_device = jax.devices("gpu")[0]
+        self.rollout_length = 1000
 
     def run_rollout(self):
         trajectory = []
         uuid = elements.UUID()
-        for index in range(100):
+        for index in range(self.rollout_length):
             action = {k: v[0] for k, v in self.action.items()}
             obs = self.env.step(action)
             obs = {
@@ -240,6 +241,7 @@ class DreamerCollectorUniform:
     def collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
+            self.collector_ns["steps_processed"].append(rollouts_count * self.rollout_length)
 
             while True:
                 training_done = ray.get(self.controller.is_done.remote())

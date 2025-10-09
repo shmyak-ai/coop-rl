@@ -111,7 +111,7 @@ def get_config():
     config.args_buffer.sample_sequence_length = config.dreamer_config.batch_length
     config.args_buffer.period = 1
     config.args_buffer.min_length = 100
-    config.args_buffer.max_size = 300000  # in transitions
+    config.args_buffer.max_size = 1000000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.actions_shape = actions_shape
 

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
 import itertools
 import logging
 import os
@@ -55,6 +54,7 @@ class BufferKeeper:
             return True
 
     def buffer_updating(self):
+        update_count = 0
         while True:
             if self.is_done:
                 self.logger.info("Done signal received; finishing buffer updating.")
@@ -73,6 +73,8 @@ class BufferKeeper:
             batched = {k: np.stack([x[k] for x in trajectories]) for k in trajectories[0]}
             with self.buffer_lock:
                 self.buffer.add(batched)
+            update_count += 1
+            self.neptune_run["buffer_update_count"].append(update_count)
 
     def buffer_sampling(self):
         while True:
@@ -100,6 +102,7 @@ class BufferKeeper:
                     self._samples_on_gpu.put(sample_on_gpu)
 
     def get_samples(self, batch_size: int = 10) -> Generator:
+        sample_count = 0
         while True:
             batch = []
             while True:
@@ -110,6 +113,8 @@ class BufferKeeper:
                     time.sleep(1)
                 if len(batch) == batch_size:
                     break
+            sample_count += 1
+            self.neptune_run["buffer_sample_count"].append(sample_count)
             yield batch
 
 
@@ -150,6 +155,7 @@ class Trainer(BufferKeeper):
         self.steps = steps
         self.training_iterations_per_step = training_iterations_per_step
         self.batch_size = args_buffer.sample_batch_size
+        self.batch_length = args_buffer.sample_sequence_length
         self.buffer_size = args_buffer.max_size
 
         self.synchronization_period = synchronization_period
@@ -174,7 +180,7 @@ class Trainer(BufferKeeper):
         for step in itertools.count(start=1, step=1):
             samples = next(samples_generator)
             self.flax_state, info = self.update_epoch_fn(self.flax_state, samples)
-            transitions_processed += self.batch_size * self.training_iterations_per_step
+            transitions_processed += self.batch_size * self.batch_length * self.training_iterations_per_step
 
             if step == self.steps:
                 self.is_done = True
@@ -214,11 +220,12 @@ class Trainer(BufferKeeper):
 
     def neptune_log(self, info, transitions_processed, samples):
         self.neptune_run["step"].append(self.flax_state.step)
-        with contextlib.suppress(KeyError):
-            self.neptune_run["loss"].append(info["loss"])
         self.neptune_run["transitions_sampled_from_restart"].append(transitions_processed)
         with self.buffer_lock:
             self.neptune_run["buffer_current_index"].append(self.buffer.state.current_index)
+
+        for key in info:
+            self.neptune_run[key].append(info[key])
         
         if "importance_sampling_exponent" in info:
             self.priority_buffer_log(info, samples)
