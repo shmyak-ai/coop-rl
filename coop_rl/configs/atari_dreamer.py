@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import hashlib
-import time
 from pathlib import Path
 
 import elements
 import ml_collections
-import neptune
 import ruamel.yaml as yaml
 from ml_collections import config_dict
 
@@ -81,13 +78,6 @@ def get_config():
     steps = 3000000
     training_iterations_per_step = 1
 
-    config.neptune_run = neptune_run = neptune.init_run
-    config.args_neptune_run = args_neptune_run = ml_collections.ConfigDict()
-    config.args_neptune_run.custom_run_id = hashlib.md5(str(time.time()).encode()).hexdigest()
-    config.args_neptune_run.project = "sha/coop-rl"
-    config.args_neptune_run.name = "dreamer"
-    config.args_neptune_run.monitoring_namespace = "monitoring"
-
     config.log_level = log_level
     config.num_collectors = num_collectors = 3
     config.num_samplers = 1
@@ -143,8 +133,6 @@ def get_config():
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.neptune_run = neptune_run
-    config.args_trainer.args_neptune_run = args_neptune_run
     config.args_trainer.num_samples_on_gpu_cache = 100
     config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 1
@@ -158,8 +146,6 @@ def get_config():
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
-    config.args_collector.neptune_run = neptune_run
-    config.args_collector.args_neptune_run = args_neptune_run
     config.args_collector.get_select_action_fn = get_select_action_fn
 
     return config

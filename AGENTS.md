@@ -23,6 +23,10 @@ Before implementing:
 **Minimum code that solves the problem. Nothing speculative.**
 
 - No features beyond what was asked.
+- Do not implement behavior that was not explicitly requested.
+- Do not replace or remove an existing subsystem unless that exact replacement/removal was explicitly requested.
+- If an additional change seems necessary, ask for user approval before implementing it.
+- If requirements are ambiguous, ask a clarifying question before coding.
 - No abstractions for single-use code.
 - No "flexibility" or "configurability" that wasn't requested.
 - No error handling for impossible scenarios.

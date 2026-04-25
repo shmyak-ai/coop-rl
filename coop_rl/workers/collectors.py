@@ -35,8 +35,6 @@ class DQNCollectorUniform:
         args_state_recover,
         env,
         args_env,
-        neptune_run,
-        args_neptune_run,
         get_select_action_fn,
         time_step_dtypes,
         controller,
@@ -50,10 +48,6 @@ class DQNCollectorUniform:
         self.trainer = trainer
 
         self.env = env(**args_env)
-
-        args_neptune_run["monitoring_namespace"] = f"monitoring/collector_{collectors_seed}"
-        self.neptune_run = neptune_run(**args_neptune_run)
-        self.collector_ns = self.neptune_run[f"collector_{collectors_seed}"]
 
         self.dtypes = time_step_dtypes
 
@@ -102,7 +96,6 @@ class DQNCollectorUniform:
                 next_obs, _info = self.env.reset()
                 self.episode_reward["last"] = self.episode_reward["now"]
                 self.episode_reward["now"] = 0
-                self.collector_ns["episode_reward"].append(self.episode_reward["last"])
 
             self.obs = next_obs
 
@@ -143,7 +136,6 @@ class DQNCollectorUniform:
             parameters = ray.get(self.futures_parameters)
             if parameters is not None:
                 self.online_params.append(parameters)
-                self.collector_ns["parameters_updated_on_rollout_count"].append(rollouts_count)
             self.futures_parameters = self.controller.get_parameters.remote()
 
             if rollouts_count % self.report_period == 0:
@@ -161,8 +153,6 @@ class DreamerCollectorUniform:
         args_state_recover,
         env,
         args_env,
-        neptune_run,
-        args_neptune_run,
         get_select_action_fn,
         controller,
         trainer,
@@ -175,10 +165,6 @@ class DreamerCollectorUniform:
         self.trainer = trainer
 
         self.env = env(**args_env)
-
-        args_neptune_run["monitoring_namespace"] = f"monitoring/collector_{collectors_seed}"
-        self.neptune_run = neptune_run(**args_neptune_run)
-        self.collector_ns = self.neptune_run[f"collector_{collectors_seed}"]
 
         self.collector_seed = collectors_seed
         random.seed(collectors_seed)
@@ -232,7 +218,6 @@ class DreamerCollectorUniform:
             if obs["is_terminal"][0] or obs["is_last"][0]:
                 self.episode_reward["last"] = self.episode_reward["now"]
                 self.episode_reward["now"] = 0
-                self.collector_ns["episode_reward"].append(self.episode_reward["last"])
 
         trajectory = {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
         trajectory["consec"] = np.full(trajectory["is_first"].shape, 0, np.int32)
@@ -241,7 +226,6 @@ class DreamerCollectorUniform:
     def collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
-            self.collector_ns["steps_processed"].append(rollouts_count * self.rollout_length)
 
             while True:
                 training_done = ray.get(self.controller.is_done.remote())
@@ -268,7 +252,6 @@ class DreamerCollectorUniform:
                     self.flax_state.carry,
                     self.flax_state.carry_train,
                 )
-                self.collector_ns["parameters_updated_on_rollout_count"].append(rollouts_count)
             self.futures_parameters = self.controller.get_parameters.remote()
 
             if rollouts_count % self.report_period == 0:
