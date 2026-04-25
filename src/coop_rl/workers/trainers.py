@@ -115,7 +115,7 @@ class BufferKeeper:
             yield batch
 
 
-class TrainerOnRay(BufferKeeper):
+class Trainer(BufferKeeper):
     def __init__(
         self,
         *,
