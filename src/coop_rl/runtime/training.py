@@ -1,9 +1,11 @@
-"""Runtime orchestration for Ray-based training."""
+"""Runtime orchestration for Ray-based and local-thread training."""
 
 import logging
 import tempfile
 import time
 from argparse import Namespace
+from concurrent.futures import as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +43,7 @@ def create_workdir(workdir_root: str) -> str:
 
 
 def load_runtime_config(config_name: str, checkpoint_dir: str | None) -> Any:
-    """Build and finalize the runtime config after Ray initialization."""
+    """Build and finalize the runtime config."""
     conf = get_config(config_name)
     conf.observation_shape, conf.observation_dtype, conf.actions_shape = conf.env.check_env(
         **conf.args_env
@@ -109,18 +111,23 @@ def initialize_ray(debug_ray: bool) -> None:
 
 
 def run_training(args: Namespace) -> None:
-    """Execute distributed training from parsed CLI arguments."""
+    """Execute training from parsed CLI arguments."""
+    logger = logging.getLogger(__name__)
+
+    conf = load_runtime_config(args.config, args.orbax_checkpoint_dir)
+    logger = configure_logging(conf, args.debug_log)
+    conf.workdir = create_workdir(args.workdir)
+    logger.info("Workdir is %s.", conf.workdir)
+
+    if args.backend == "thread":
+        _run_thread_training(conf)
+        return
+
     import ray
 
     initialize_ray(args.debug_ray)
-    logger = logging.getLogger(__name__)
 
     try:
-        conf = load_runtime_config(args.config, args.orbax_checkpoint_dir)
-        logger = configure_logging(conf, args.debug_log)
-        conf.workdir = create_workdir(args.workdir)
-        logger.info("Workdir is %s.", conf.workdir)
-
         conf = decorate_remote_components(conf)
         trainer, collectors = launch_remote_workers(conf)
 
@@ -138,3 +145,47 @@ def run_training(args: Namespace) -> None:
         if ray.is_initialized():
             ray.shutdown()
         logger.info("Done; ray shutdown.")
+
+
+def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
+    """Launch controller, trainer, and collectors as local objects."""
+    controller = conf.controller()
+    trainer = conf.trainer(**conf.args_trainer, controller=controller)
+
+    collectors = []
+    for _ in range(conf.num_collectors):
+        conf.args_collector.collectors_seed += 1
+        collector = conf.collector(
+            **conf.args_collector,
+            controller=controller,
+            trainer=trainer,
+        )
+        collectors.append(collector)
+
+    return controller, trainer, collectors
+
+
+def _run_thread_training(conf: Any) -> None:
+    """Execute training loop with regular Python multithreading."""
+    controller, trainer, collectors = _launch_thread_workers(conf)
+    max_workers = 3 + conf.num_samplers + conf.num_collectors
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(trainer.training),
+            executor.submit(trainer.buffer_updating),
+            *[executor.submit(trainer.buffer_sampling) for _ in range(conf.num_samplers)],
+            executor.submit(trainer.add_traj_seq, 1),
+            *[executor.submit(collector.collecting) for collector in collectors],
+        ]
+
+        try:
+            for future in as_completed(futures):
+                future.result()
+        except Exception:
+            # Unblock all worker loops when one thread fails.
+            trainer.is_done = True
+            controller.set_done()
+            raise
+
+    time.sleep(3)

@@ -23,7 +23,8 @@ from queue import Queue
 import jax
 import numpy as np
 import orbax.checkpoint as ocp
-import ray
+
+from coop_rl.workers.auxiliary import CommandExecutor
 
 
 class BufferKeeper:
@@ -164,7 +165,12 @@ class Trainer(BufferKeeper):
         )
 
         self.controller = controller
-        self.futures = self.controller.set_parameters.remote(jax.device_get(self.flax_state.params))
+        self.command_executor = CommandExecutor()
+        self.futures = self.command_executor.submit(
+            self.controller,
+            "set_parameters",
+            jax.device_get(self.flax_state.params),
+        )
         self.is_done = False
 
     def training(self):
@@ -177,7 +183,7 @@ class Trainer(BufferKeeper):
 
             if step == self.steps:
                 self.is_done = True
-                ray.get(self.controller.set_done.remote())
+                self.command_executor.call(self.controller, "set_done")
                 self.logger.info(f"Final training step {step} reached; finishing.")
                 break
 
@@ -186,12 +192,15 @@ class Trainer(BufferKeeper):
                 self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
 
             if step % self.synchronization_period == 0:
-                ray.get(self.futures)
-                self.futures = self.controller.set_parameters.remote(jax.device_get(self.flax_state.params))
+                self.command_executor.resolve(self.futures)
+                self.futures = self.command_executor.submit(
+                    self.controller,
+                    "set_parameters",
+                    jax.device_get(self.flax_state.params),
+                )
 
             if step % self.save_period == 0:
                 orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
-                # self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
+                self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
-                # self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
 

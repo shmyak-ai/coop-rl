@@ -16,6 +16,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ray debug environment activation.",
     )
     parser.add_argument("--debug-log", action="store_true", help="Enable debug logs.")
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="thread",
+        choices=["ray", "thread"],
+        help="Execution backend: distributed Ray actors or local Python threads.",
+    )
     parser.add_argument("--config", required=True, type=str, choices=list_available_configs())
     parser.add_argument(
         "--workdir",

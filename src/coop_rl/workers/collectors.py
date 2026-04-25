@@ -21,7 +21,8 @@ from collections import deque
 import elements
 import jax
 import numpy as np
-import ray
+
+from coop_rl.workers.auxiliary import CommandExecutor
 
 
 class DQNCollectorUniform:
@@ -46,6 +47,7 @@ class DQNCollectorUniform:
 
         self.controller = controller
         self.trainer = trainer
+        self.command_executor = CommandExecutor()
 
         self.env = env(**args_env)
 
@@ -61,7 +63,7 @@ class DQNCollectorUniform:
         self.online_params = deque(maxlen=10)
         self.online_params.append(flax_state.params)
 
-        self.futures_parameters = self.controller.get_parameters.remote()
+        self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
 
         self.select_action = get_select_action_fn(flax_state.apply_fn)
         self.episode_reward = {
@@ -112,31 +114,34 @@ class DQNCollectorUniform:
             traj_truncated_np = np.array(traj_truncated, dtype=self.dtypes.truncated)
 
             while True:
-                training_done = ray.get(self.controller.is_done.remote())
+                training_done = self.command_executor.call(self.controller, "is_done")
                 if training_done:
                     self.logger.info("Done signal received; finishing.")
                     return
 
-                adding_traj_done = ray.get(
-                    self.trainer.add_traj_seq.remote(
-                        (
-                            self.collector_seed,
-                            traj_obs_np,
-                            traj_actions_np,
-                            traj_rewards_np,
-                            traj_terminated_np,
-                            traj_truncated_np,
-                        )
-                    )
+                adding_traj_done = self.command_executor.call(
+                    self.trainer,
+                    "add_traj_seq",
+                    (
+                        self.collector_seed,
+                        traj_obs_np,
+                        traj_actions_np,
+                        traj_rewards_np,
+                        traj_terminated_np,
+                        traj_truncated_np,
+                    ),
                 )
                 if adding_traj_done:
                     break
                 time.sleep(0.1)
 
-            parameters = ray.get(self.futures_parameters)
+            parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:
                 self.online_params.append(parameters)
-            self.futures_parameters = self.controller.get_parameters.remote()
+            self.futures_parameters = self.command_executor.submit(
+                self.controller,
+                "get_parameters",
+            )
 
             if rollouts_count % self.report_period == 0:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
@@ -163,6 +168,7 @@ class DreamerCollectorUniform:
 
         self.controller = controller
         self.trainer = trainer
+        self.command_executor = CommandExecutor()
 
         self.env = env(**args_env)
 
@@ -170,7 +176,7 @@ class DreamerCollectorUniform:
         random.seed(collectors_seed)
         self.flax_state = state_recover(jax.random.PRNGKey(collectors_seed), **args_state_recover)
 
-        self.futures_parameters = self.controller.get_parameters.remote()
+        self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
         self.select_action = get_select_action_fn(self.flax_state)
         self.action = {k: np.zeros((1,) + v.shape, v.dtype) for k, v in self.env._env.act_space.items()}
         self.action["reset"] = np.ones(1, bool)
@@ -228,31 +234,34 @@ class DreamerCollectorUniform:
             trajectory = self.run_rollout()
 
             while True:
-                training_done = ray.get(self.controller.is_done.remote())
+                training_done = self.command_executor.call(self.controller, "is_done")
                 if training_done:
                     self.logger.info("Done signal received; finishing.")
                     return
 
-                adding_traj_done = ray.get(
-                    self.trainer.add_traj_seq.remote(
-                        (
-                            self.collector_seed,
-                            trajectory,
-                        )
-                    )
+                adding_traj_done = self.command_executor.call(
+                    self.trainer,
+                    "add_traj_seq",
+                    (
+                        self.collector_seed,
+                        trajectory,
+                    ),
                 )
                 if adding_traj_done:
                     break
                 time.sleep(0.1)
 
-            parameters = ray.get(self.futures_parameters)
+            parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:
                 self.flax_state = self.flax_state.update_state(
                     jax.device_put(parameters, device=self.gpu_device),
                     self.flax_state.carry,
                     self.flax_state.carry_train,
                 )
-            self.futures_parameters = self.controller.get_parameters.remote()
+            self.futures_parameters = self.command_executor.submit(
+                self.controller,
+                "get_parameters",
+            )
 
             if rollouts_count % self.report_period == 0:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")

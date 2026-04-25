@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import collections
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any
 
 
 class Controller:
@@ -41,3 +43,39 @@ class Controller:
 
     def store_size(self):
         return len(self.params_store)
+
+
+class CommandExecutor:
+    """Execute worker commands through Ray actors or local thread workers."""
+
+    def __init__(self, max_workers: int = 4):
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def submit(self, target: Any, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Submit a method call and return a pending handle."""
+        method = getattr(target, method_name)
+        if hasattr(method, "remote"):
+            return method.remote(*args, **kwargs)
+        return self._executor.submit(method, *args, **kwargs)
+
+    def call(self, target: Any, method_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Execute a method call and return the resolved result."""
+        method = getattr(target, method_name)
+        if hasattr(method, "remote"):
+            return self.resolve(method.remote(*args, **kwargs))
+        return method(*args, **kwargs)
+
+    def resolve(self, handle: Any) -> Any:
+        """Resolve a pending handle from Ray or local thread executor."""
+        if isinstance(handle, Future):
+            return handle.result()
+
+        try:
+            import ray
+
+            if isinstance(handle, ray.ObjectRef):
+                return ray.get(handle)
+        except (ImportError, AttributeError):
+            pass
+
+        return handle
