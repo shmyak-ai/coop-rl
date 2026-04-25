@@ -27,7 +27,7 @@ from coop_rl.networks.torso import CNNTorso
 from coop_rl.utils import make_optimizer
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
-from coop_rl.workers.trainers import Trainer
+from coop_rl.workers.trainers import TrainerOnRay
 
 
 def get_config():
@@ -115,7 +115,7 @@ def get_config():
 
     config.controller = Controller
 
-    config.trainer = Trainer
+    config.trainer = TrainerOnRay
     config.args_trainer = ml_collections.ConfigDict()
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level

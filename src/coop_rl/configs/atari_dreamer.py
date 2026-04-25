@@ -24,7 +24,7 @@ from coop_rl.buffers import BufferTrajectoryDreamer
 from coop_rl.environment import HandlerEnvDreamerAtari
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DreamerCollectorUniform
-from coop_rl.workers.trainers import Trainer
+from coop_rl.workers.trainers import TrainerOnRay
 
 DREAMER_CONFIG_PATH = Path(__file__).resolve().parent / "dreamer.yaml"
 DREAMER_ARGV = [
@@ -116,7 +116,7 @@ def get_config():
 
     config.controller = Controller
 
-    config.trainer = Trainer
+    config.trainer = TrainerOnRay
     config.args_trainer = ml_collections.ConfigDict()
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
