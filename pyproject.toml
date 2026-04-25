@@ -33,11 +33,14 @@ dependencies = [
     "einops",
 ]
 
+[project.scripts]
+coop-rl-train = "coop_rl.cli.train:main"
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["coop_rl"]
+packages = ["src/coop_rl"]
 
 [tool.ruff]
 line-length = 100
