@@ -155,4 +155,4 @@ def get_config():
     config.args_collector.args_env = args_env
     config.args_collector.get_select_action_fn = get_select_action_fn
 
-    return config
+    return config.lock()

@@ -41,7 +41,7 @@ def get_config():
     log_level = config_dict.FieldReference("INFO", field_type=str)
     observation_shape = config_dict.FieldReference(None, field_type=tuple)
     observation_dtype = config_dict.FieldReference(None, field_type=np.dtype)
-    num_actions = config_dict.FieldReference(None, field_type=np.integer)
+    actions_shape = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
     checkpointdir = config_dict.FieldReference(None, field_type=str)
 
@@ -55,7 +55,7 @@ def get_config():
     config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
-    config.num_actions = num_actions
+    config.actions_shape = actions_shape
     config.workdir = workdir
 
     config.network = network = get_actor
@@ -72,7 +72,7 @@ def get_config():
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
-    config.args_network.args_action_head.action_dim = num_actions
+    config.args_network.args_action_head.action_dim = actions_shape
     config.args_network.args_action_head.epsilon = 0.1
     config.args_network.input_layer = EmbeddingInput
 
@@ -152,4 +152,4 @@ def get_config():
     config.args_collector.get_select_action_fn = get_select_action_fn
     config.args_collector.time_step_dtypes = time_step_dtypes
 
-    return config
+    return config.lock()

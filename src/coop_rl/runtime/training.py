@@ -54,10 +54,12 @@ def load_runtime_config(config_name: str, checkpoint_dir: str | None) -> Any:
 def configure_logging(conf: Any, debug_log: bool) -> logging.Logger:
     """Configure runtime logging and propagate log level into the config."""
     logger = logging.getLogger(__name__)
-    if debug_log:
-        log_level = "DEBUG"
-        logger.setLevel(log_level)
-        conf.log_level = log_level
+    handler = logging.StreamHandler()
+    log_level = "DEBUG" if debug_log else "INFO"
+    logger.setLevel(log_level)
+    handler.setLevel(log_level)
+    logger.addHandler(handler)
+    conf.log_level = log_level
     return logger
 
 
