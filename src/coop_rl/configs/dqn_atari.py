@@ -22,14 +22,14 @@ from coop_rl.agents.dqn import (
     get_update_step,
     restore_dqn_flax_state,
 )
-from coop_rl.base_types import AtariTimeStepDtypes
-from coop_rl.buffers import BufferTrajectory
-from coop_rl.environment import HandlerEnvAtari
+from coop_rl.base.base_types import AtariTimeStepDtypes
+from coop_rl.base.buffers import BufferTrajectory
+from coop_rl.base.environment import HandlerEnvAtari
+from coop_rl.base.utils import make_optimizer
 from coop_rl.networks.base import FeedForwardActor, get_actor
 from coop_rl.networks.heads import DiscreteQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
-from coop_rl.utils import make_optimizer
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 from coop_rl.workers.trainers import Trainer

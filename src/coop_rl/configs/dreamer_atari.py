@@ -19,9 +19,14 @@ import ml_collections
 import ruamel.yaml as yaml
 from ml_collections import config_dict
 
-from coop_rl.agents.dreamer import get_select_action_fn, get_update_epoch, get_update_step, restore_dreamer_flax_state
-from coop_rl.buffers import BufferTrajectoryDreamer
-from coop_rl.environment import HandlerEnvDreamerAtari
+from coop_rl.agents.dreamer import (
+    get_select_action_fn,
+    get_update_epoch,
+    get_update_step,
+    restore_dreamer_flax_state,
+)
+from coop_rl.base.buffers import BufferTrajectoryDreamer
+from coop_rl.base.environment import HandlerEnvDreamerAtari
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DreamerCollectorUniform
 from coop_rl.workers.trainers import Trainer
@@ -86,7 +91,9 @@ def get_config():
     config.actions_shape = actions_shape
     config.workdir = workdir
     config.dreamer_config = dreamer_config
-    config.dreamer_config = get_dreamer_config()  # only to prevent type change of elements.config.Config
+    config.dreamer_config = (
+        get_dreamer_config()
+    )  # only to prevent type change of elements.config.Config
 
     config.env = env = HandlerEnvDreamerAtari
     config.args_env = args_env = ml_collections.ConfigDict()

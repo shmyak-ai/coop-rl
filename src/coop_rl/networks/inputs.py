@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
-from coop_rl.base_types import Observation
+from coop_rl.base.base_types import Observation
 
 
 class EmbeddingInput(nn.Module):
@@ -38,7 +38,6 @@ class ObservationActionInput(nn.Module):
 
 
 class EmbeddingActionInput(nn.Module):
-
     action_dim: int
 
     @nn.compact
@@ -48,7 +47,6 @@ class EmbeddingActionInput(nn.Module):
 
 
 class EmbeddingActionOnehotInput(nn.Module):
-
     action_dim: int
 
     @nn.compact

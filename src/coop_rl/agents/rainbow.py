@@ -29,12 +29,12 @@ from flax.training import train_state
 from typing_extensions import NamedTuple
 
 # from jax.experimental import checkify
-from coop_rl.base_types import (
+from coop_rl.base.base_types import (
     ActorApply,
 )
-from coop_rl.buffers import TimeStep
-from coop_rl.loss import categorical_double_q_learning
-from coop_rl.multistep import batch_discounted_returns
+from coop_rl.base.buffers import TimeStep
+from coop_rl.base.loss import categorical_double_q_learning
+from coop_rl.base.multistep import batch_discounted_returns
 
 
 class Transition(NamedTuple):
@@ -76,7 +76,9 @@ class TrainState(train_state.TrainState):
         # UPDATE Q PARAMS AND OPTIMISER STATE
         updates, new_opt_state = self.tx.update(grads_with_opt, self.opt_state, params_with_opt)
         new_params_with_opt = optax.apply_updates(params_with_opt, updates)
-        new_target_params = optax.incremental_update(new_params_with_opt, self.target_params, self.tau)
+        new_target_params = optax.incremental_update(
+            new_params_with_opt, self.target_params, self.tau
+        )
 
         # As implied by the OWG name, the gradients are used directly to update the
         # parameters.
@@ -106,13 +108,17 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     model = network(**args_network)
     params = model.init(rngs, jnp.ones((1, *obs_shape)))
     tx = optimizer(**args_optimizer)
-    return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau)
+    return TrainState.create(
+        apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau
+    )
 
 
 def restore_dqn_flax_state(
     rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
 ):
-    state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape, tau)
+    state = create_train_state(
+        rng, network, args_network, optimizer, args_optimizer, observation_shape, tau
+    )
     if checkpointdir is None:
         return state
     orbax_checkpointer = ocp.StandardCheckpointer()
@@ -134,7 +140,9 @@ def get_select_action_fn(apply_fn):
 
 def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
     @jax.jit
-    def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
+    def _update_step(
+        train_state: TrainState, buffer_sample: TrajectoryBufferSample
+    ) -> tuple[TrainState, dict]:
         def _q_loss_fn(
             q_params: FrozenDict,
             target_q_params: FrozenDict,
@@ -145,15 +153,23 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
         ) -> jnp.ndarray:
             noise_key_tm1, noise_key_t, noise_key_select = jax.random.split(noise_key, num=3)
 
-            _, q_logits_tm1, q_atoms_tm1 = q_apply_fn(q_params, transitions.obs, rngs={"noise": noise_key_tm1})
-            _, q_logits_t, q_atoms_t = q_apply_fn(target_q_params, transitions.next_obs, rngs={"noise": noise_key_t})
-            q_t_selector_dist, _, _ = q_apply_fn(q_params, transitions.next_obs, rngs={"noise": noise_key_select})
+            _, q_logits_tm1, q_atoms_tm1 = q_apply_fn(
+                q_params, transitions.obs, rngs={"noise": noise_key_tm1}
+            )
+            _, q_logits_t, q_atoms_t = q_apply_fn(
+                target_q_params, transitions.next_obs, rngs={"noise": noise_key_t}
+            )
+            q_t_selector_dist, _, _ = q_apply_fn(
+                q_params, transitions.next_obs, rngs={"noise": noise_key_select}
+            )
             q_t_selector = q_t_selector_dist.preferences
 
             # Cast and clip rewards.
             discount = 1.0 - transitions.done.astype(jnp.float32)
             d_t = (discount * config.gamma).astype(jnp.float32)
-            r_t = jnp.clip(transitions.reward, -config.max_abs_reward, config.max_abs_reward).astype(jnp.float32)
+            r_t = jnp.clip(
+                transitions.reward, -config.max_abs_reward, config.max_abs_reward
+            ).astype(jnp.float32)
             a_tm1 = transitions.action
 
             batch_q_error = categorical_double_q_learning(

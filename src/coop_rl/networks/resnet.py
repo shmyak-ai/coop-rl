@@ -128,13 +128,16 @@ class VisualResNetTorso(nn.Module):
         if self.channel_first:
             observation = observation.transpose((0, 2, 3, 1))
 
-        assert (
-            observation.ndim == 4
-        ), f"Expected inputs to have shape [B, H, W, C] but got shape {observation.shape}."
+        assert observation.ndim == 4, (
+            f"Expected inputs to have shape [B, H, W, C] but got shape {observation.shape}."
+        )
 
         output = observation
         channels_blocks_strategies = zip(
-            self.channels_per_group, self.blocks_per_group, self.downsampling_strategies, strict=True
+            self.channels_per_group,
+            self.blocks_per_group,
+            self.downsampling_strategies,
+            strict=True,
         )
 
         for _, (num_channels, num_blocks, strategy) in enumerate(channels_blocks_strategies):

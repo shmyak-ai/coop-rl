@@ -83,7 +83,9 @@ class CNNTorso(nn.Module):
         if self.channel_first:
             x = x.transpose((0, 2, 3, 1))
         # Convolutional layers
-        for channel, kernel, stride in zip(self.channel_sizes, self.kernel_sizes, self.strides, strict=True):
+        for channel, kernel, stride in zip(
+            self.channel_sizes, self.kernel_sizes, self.strides, strict=True
+        ):
             x = nn.Conv(
                 channel, (kernel, kernel), (stride, stride), use_bias=not self.use_layer_norm
             )(x)

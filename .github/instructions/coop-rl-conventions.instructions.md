@@ -402,7 +402,7 @@ def get_dqn_update(config: ConfigDict, q_apply: QApply) -> Callable:
 ---
 
 ## See Also
-- [base_types.py](coop_rl/base_types.py) – Core type definitions
-- [agents/dqn.py](coop_rl/agents/dqn.py) – Reference DQN implementation
-- [agents/dreamer.py](coop_rl/agents/dreamer.py) – Complex world model implementation
-- [workers/collectors.py](coop_rl/workers/collectors.py) – Distributed collection pattern
+- [base_types.py](../../coop_rl/base_types.py) – Core type definitions
+- [agents/dqn.py](../../coop_rl/agents/dqn.py) – Reference DQN implementation
+- [agents/dreamer.py](../../coop_rl/agents/dreamer.py) – Complex world model implementation
+- [workers/collectors.py](../../coop_rl/workers/collectors.py) – Distributed collection pattern

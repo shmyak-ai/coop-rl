@@ -16,15 +16,20 @@ import ml_collections
 import numpy as np
 from ml_collections import config_dict
 
-from coop_rl.agents.mdqn import get_select_action_fn, get_update_epoch, get_update_step, restore_dqn_flax_state
-from coop_rl.base_types import AtariTimeStepDtypes
-from coop_rl.buffers import BufferTrajectory
-from coop_rl.environment import HandlerEnvAtari
+from coop_rl.agents.mdqn import (
+    get_select_action_fn,
+    get_update_epoch,
+    get_update_step,
+    restore_dqn_flax_state,
+)
+from coop_rl.base.base_types import AtariTimeStepDtypes
+from coop_rl.base.buffers import BufferTrajectory
+from coop_rl.base.environment import HandlerEnvAtari
+from coop_rl.base.utils import make_optimizer
 from coop_rl.networks.base import FeedForwardActor, get_actor
 from coop_rl.networks.heads import DiscreteQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
-from coop_rl.utils import make_optimizer
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import DQNCollectorUniform
 from coop_rl.workers.trainers import Trainer
@@ -58,7 +63,7 @@ def get_config():
     config.args_network.base = FeedForwardActor
     config.args_network.torso = CNNTorso
     config.args_network.args_torso = ml_collections.ConfigDict()
-    config.args_network.args_torso.activation = 'relu'
+    config.args_network.args_torso.activation = "relu"
     config.args_network.args_torso.channel_first = False
     config.args_network.args_torso.channel_sizes = [32, 64, 64]
     config.args_network.args_torso.kernel_sizes = [8, 4, 3]
@@ -100,15 +105,17 @@ def get_config():
     config.agent_params.entropy_temperature = 0.03  # tau parameter
     config.agent_params.munchausen_coefficient = 0.9  # alpha parameter
     config.agent_params.clip_value_min = -1.0
-    config.agent_params.huber_loss_parameter = 0.0  # parameter for the huber loss. If 0, it uses MSE loss
+    config.agent_params.huber_loss_parameter = (
+        0.0  # parameter for the huber loss. If 0, it uses MSE loss
+    )
     config.agent_params.max_abs_reward = 1000.0
 
     config.state_recover = state_recover = restore_dqn_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
     config.args_state_recover.network = network
     config.args_state_recover.args_network = args_network
-    config.args_state_recover.optimizer = optimizer 
-    config.args_state_recover.args_optimizer = args_optimizer 
+    config.args_state_recover.optimizer = optimizer
+    config.args_state_recover.args_optimizer = args_optimizer
     config.args_state_recover.observation_shape = observation_shape
     config.args_state_recover.tau = tau
     config.args_state_recover.checkpointdir = checkpointdir
@@ -132,7 +139,7 @@ def get_config():
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 600 
+    config.args_trainer.num_samples_on_gpu_cache = 600
     config.args_trainer.num_samples_to_gpu = 300
     config.args_trainer.num_semaphor = 1
 

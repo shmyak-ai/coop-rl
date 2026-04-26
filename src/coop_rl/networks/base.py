@@ -12,13 +12,17 @@ import jax.numpy as jnp
 import numpy as np
 from flax import linen as nn
 
-from coop_rl.base_types import Observation, RNNObservation
+from coop_rl.base.base_types import Observation, RNNObservation
 from coop_rl.networks.inputs import ObservationInput
 from coop_rl.networks.utils import parse_rnn_cell
 
 
 def get_actor(base, torso, args_torso, action_head, args_action_head, input_layer):
-    result = base(torso=torso(**args_torso), action_head=action_head(**args_action_head), input_layer=input_layer())
+    result = base(
+        torso=torso(**args_torso),
+        action_head=action_head(**args_action_head),
+        input_layer=input_layer(),
+    )
     return result
 
 
@@ -74,9 +78,7 @@ class MultiNetwork(nn.Module):
     networks: Sequence[nn.Module]
 
     @nn.compact
-    def __call__(
-        self, *network_input: chex.Array | tuple[chex.Array, ...]
-    ) -> Any | chex.Array:
+    def __call__(self, *network_input: chex.Array | tuple[chex.Array, ...]) -> Any | chex.Array:
         """Forward pass."""
         outputs = []
         for network in self.networks:
@@ -101,14 +103,18 @@ class ScannedRNN(nn.Module):
     def __call__(self, rnn_state: chex.Array, x: chex.Array) -> tuple[chex.Array, chex.Array]:
         """Applies the module."""
         ins, resets = x
+
         def hidden_state_reset_fn(reset_state, current_state):
             return jnp.where(resets[:, np.newaxis], reset_state, current_state)
+
         rnn_state = jax.tree_util.tree_map(
             hidden_state_reset_fn,
             self.initialize_carry(ins.shape[0]),
             rnn_state,
         )
-        new_rnn_state, y = parse_rnn_cell(self.cell_type)(features=self.hidden_state_dim)(rnn_state, ins)
+        new_rnn_state, y = parse_rnn_cell(self.cell_type)(features=self.hidden_state_dim)(
+            rnn_state, ins
+        )
         return new_rnn_state, y
 
     @nn.nowrap

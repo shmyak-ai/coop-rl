@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 from coop_rl.agents.dreamer import Agent
-from coop_rl.base_types import TimeStep
+from coop_rl.base.base_types import TimeStep
 
 
 class BufferFlat:

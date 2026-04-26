@@ -28,12 +28,12 @@ from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
 from flax.training import train_state
 from typing_extensions import NamedTuple
 
-from coop_rl.base_types import (
+from coop_rl.base.base_types import (
     ActorApply,
 )
-from coop_rl.buffers import TimeStep
-from coop_rl.loss import q_learning
-from coop_rl.multistep import batch_discounted_returns
+from coop_rl.base.buffers import TimeStep
+from coop_rl.base.loss import q_learning
+from coop_rl.base.multistep import batch_discounted_returns
 
 
 class Transition(NamedTuple):
