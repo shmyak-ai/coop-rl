@@ -22,9 +22,18 @@ from coop_rl.base_types import TimeStep
 
 class BufferFlat:
     def __init__(
-        self, buffer_seed, max_length, min_length, sample_batch_size, add_sequences, add_batch_size, observation_shape
+        self,
+        buffer_seed,
+        max_length,
+        min_length,
+        sample_batch_size,
+        add_sequences,
+        add_batch_size,
+        observation_shape,
     ):
-        self.buffer = fbx.make_flat_buffer(max_length, min_length, sample_batch_size, add_sequences, add_batch_size)
+        self.buffer = fbx.make_flat_buffer(
+            max_length, min_length, sample_batch_size, add_sequences, add_batch_size
+        )
         fake_timestep = {"obs": jnp.array(observation_shape), "reward": jnp.array(1.0)}
         self.state = self.buffer.init(fake_timestep)
         self.rng_key = jax.random.PRNGKey(buffer_seed)
@@ -131,18 +140,33 @@ class BufferTrajectoryDreamer:
                 can_sample=jax.jit(self.buffer.can_sample),
             )
             self.dummy_timestep = {
-                "image": jnp.ones(observation_shape["image"].shape, dtype=observation_shape["image"].dtype),
-                "is_first": jnp.ones(observation_shape["is_first"].shape, dtype=observation_shape["is_first"].dtype),
-                "is_last": jnp.ones(observation_shape["is_last"].shape, dtype=observation_shape["is_last"].dtype),
-                "is_terminal": jnp.ones(
-                    observation_shape["is_terminal"].shape, dtype=observation_shape["is_terminal"].dtype
+                "image": jnp.ones(
+                    observation_shape["image"].shape, dtype=observation_shape["image"].dtype
                 ),
-                "reward": jnp.ones(observation_shape["reward"].shape, dtype=observation_shape["reward"].dtype),
+                "is_first": jnp.ones(
+                    observation_shape["is_first"].shape, dtype=observation_shape["is_first"].dtype
+                ),
+                "is_last": jnp.ones(
+                    observation_shape["is_last"].shape, dtype=observation_shape["is_last"].dtype
+                ),
+                "is_terminal": jnp.ones(
+                    observation_shape["is_terminal"].shape,
+                    dtype=observation_shape["is_terminal"].dtype,
+                ),
+                "reward": jnp.ones(
+                    observation_shape["reward"].shape, dtype=observation_shape["reward"].dtype
+                ),
                 "stepid": jnp.ones(ext_space["stepid"].shape, dtype=ext_space["stepid"].dtype),
                 "consec": jnp.ones(ext_space["consec"].shape, dtype=ext_space["consec"].dtype),
-                "dyn/deter": jnp.ones(ext_space["dyn/deter"].shape, dtype=ext_space["dyn/deter"].dtype),
-                "dyn/stoch": jnp.ones(ext_space["dyn/stoch"].shape, dtype=ext_space["dyn/stoch"].dtype),
-                "action": jnp.ones(actions_shape["action"].shape, dtype=actions_shape["action"].dtype),
+                "dyn/deter": jnp.ones(
+                    ext_space["dyn/deter"].shape, dtype=ext_space["dyn/deter"].dtype
+                ),
+                "dyn/stoch": jnp.ones(
+                    ext_space["dyn/stoch"].shape, dtype=ext_space["dyn/stoch"].dtype
+                ),
+                "action": jnp.ones(
+                    actions_shape["action"].shape, dtype=actions_shape["action"].dtype
+                ),
             }
             self.state = self.buffer.init(self.dummy_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)

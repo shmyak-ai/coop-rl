@@ -79,7 +79,9 @@ class HandlerEnvAtari:
     @staticmethod
     def make_env(env_name, stack_size, *args, **kwargs):
         env = gym.make(env_name, *args, frameskip=1, repeat_action_probability=0, **kwargs)
-        env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=True)
+        env = AtariPreprocessing(
+            env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=True
+        )
         if stack_size > 1:
             env = FrameStackObservation(env, stack_size)
             env = FirstDimToLast(env)

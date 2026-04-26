@@ -21,7 +21,9 @@ import jax.numpy as jnp
 import optax
 
 
-def make_learning_rate_schedule(init_lr: float, num_updates: int, num_epochs: int, num_minibatches: int) -> Callable:
+def make_learning_rate_schedule(
+    init_lr: float, num_updates: int, num_epochs: int, num_minibatches: int
+) -> Callable:
     """
     We use a simple linear learning rate scheduler based on the suggestions from a blog on PPO
     implementation details which can be viewed at http://tinyurl.com/mr3chs4p

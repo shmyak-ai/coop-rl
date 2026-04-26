@@ -238,5 +238,7 @@ DistributionCriticApply = Callable[[FrozenDict, Observation], Any]
 ContinuousQApply = Callable[[FrozenDict, Observation, Action], Value]
 
 RecActorApply = Callable[[FrozenDict, HiddenState, RNNObservation], tuple[HiddenState, Any]]
-RecActFn = Callable[[FrozenDict, HiddenState, RNNObservation, chex.PRNGKey], tuple[HiddenState, chex.Array]]
+RecActFn = Callable[
+    [FrozenDict, HiddenState, RNNObservation, chex.PRNGKey], tuple[HiddenState, chex.Array]
+]
 RecCriticApply = Callable[[FrozenDict, HiddenState, RNNObservation], tuple[HiddenState, Value]]
