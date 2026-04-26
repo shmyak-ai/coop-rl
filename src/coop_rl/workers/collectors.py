@@ -22,6 +22,7 @@ import elements
 import jax
 import numpy as np
 
+from coop_rl.base.base_types import TimeStepDQN
 from coop_rl.workers.auxiliary import CommandExecutor
 
 
@@ -71,12 +72,8 @@ class CollectorDQNUniform:
             "last": 0,
         }
 
-    def run_rollout(self):
-        traj_obs = []
-        traj_actions = []
-        traj_rewards = []
-        traj_terminated = []
-        traj_truncated = []
+    def run_rollout(self) -> list[TimeStepDQN]:
+        trajectory_steps: list[TimeStepDQN] = []
 
         for _ in range(100):
             self._rng, action_jnp = self.select_action(
@@ -87,11 +84,15 @@ class CollectorDQNUniform:
             action_np = np.asarray(action_jnp, dtype=self.dtypes.action).squeeze()
             next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
 
-            traj_obs.append(self.obs)
-            traj_actions.append(action_np)
-            traj_rewards.append(reward)
-            traj_terminated.append(terminated)
-            traj_truncated.append(truncated)
+            trajectory_steps.append(
+                TimeStepDQN(
+                    obs=np.asarray(self.obs, dtype=self.dtypes.obs),
+                    action=np.asarray(action_np, dtype=self.dtypes.action),
+                    reward=np.asarray(reward, dtype=self.dtypes.reward),
+                    terminated=np.asarray(terminated, dtype=self.dtypes.terminated),
+                    truncated=np.asarray(truncated, dtype=self.dtypes.truncated),
+                )
+            )
             self.episode_reward["now"] += reward
 
             if terminated or truncated:
@@ -101,19 +102,27 @@ class CollectorDQNUniform:
 
             self.obs = next_obs
 
-        return traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated
+        return trajectory_steps
 
     def collecting(self):
         self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
-            traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = (
-                self.run_rollout()
-            )
-            traj_obs_np = np.array(traj_obs, dtype=self.dtypes.obs)
-            traj_actions_np = np.array(traj_actions, dtype=self.dtypes.action)
-            traj_rewards_np = np.array(traj_rewards, dtype=self.dtypes.reward)
-            traj_terminated_np = np.array(traj_terminated, dtype=self.dtypes.terminated)
-            traj_truncated_np = np.array(traj_truncated, dtype=self.dtypes.truncated)
+            trajectory_steps = self.run_rollout()
+            trajectory = {
+                "obs": np.stack([step.obs for step in trajectory_steps], axis=0),
+                "action": np.asarray(
+                    [step.action for step in trajectory_steps], dtype=self.dtypes.action
+                ),
+                "reward": np.asarray(
+                    [step.reward for step in trajectory_steps], dtype=self.dtypes.reward
+                ),
+                "terminated": np.asarray(
+                    [step.terminated for step in trajectory_steps], dtype=self.dtypes.terminated
+                ),
+                "truncated": np.asarray(
+                    [step.truncated for step in trajectory_steps], dtype=self.dtypes.truncated
+                ),
+            }
 
             while True:
                 training_done = self.command_executor.call(self.controller, "is_done")
@@ -126,11 +135,7 @@ class CollectorDQNUniform:
                     "add_traj_seq",
                     (
                         self.collector_seed,
-                        traj_obs_np,
-                        traj_actions_np,
-                        traj_rewards_np,
-                        traj_terminated_np,
-                        traj_truncated_np,
+                        trajectory,
                     ),
                 )
                 if adding_traj_done:
