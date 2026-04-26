@@ -4,8 +4,7 @@ import logging
 import tempfile
 import time
 from argparse import Namespace
-from concurrent.futures import as_completed
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 

@@ -106,7 +106,9 @@ class DQNCollectorUniform:
     def collecting(self):
         self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
-            traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = self.run_rollout()
+            traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated = (
+                self.run_rollout()
+            )
             traj_obs_np = np.array(traj_obs, dtype=self.dtypes.obs)
             traj_actions_np = np.array(traj_actions, dtype=self.dtypes.action)
             traj_rewards_np = np.array(traj_rewards, dtype=self.dtypes.reward)
@@ -178,7 +180,9 @@ class DreamerCollectorUniform:
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
         self.select_action = get_select_action_fn(self.flax_state)
-        self.action = {k: np.zeros((1,) + v.shape, v.dtype) for k, v in self.env._env.act_space.items()}
+        self.action = {
+            k: np.zeros((1,) + v.shape, v.dtype) for k, v in self.env._env.act_space.items()
+        }
         self.action["reset"] = np.ones(1, bool)
         self.episode_reward = {
             "now": 0,
@@ -205,7 +209,9 @@ class DreamerCollectorUniform:
             self.flax_state, self.action, outs = self.select_action(self.flax_state, obs)
             self.action = {**self.action, "reset": obs["is_last"].copy()}
 
-            step_id = np.expand_dims(np.frombuffer(bytes(uuid) + index.to_bytes(4, "big"), np.uint8), axis=0)
+            step_id = np.expand_dims(
+                np.frombuffer(bytes(uuid) + index.to_bytes(4, "big"), np.uint8), axis=0
+            )
             trajectory.append(
                 {
                     "image": obs["image"],

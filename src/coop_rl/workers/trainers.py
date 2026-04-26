@@ -28,7 +28,9 @@ from coop_rl.workers.auxiliary import CommandExecutor
 
 
 class BufferKeeper:
-    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor):
+    def __init__(
+        self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor
+    ):
         self.buffer = buffer(**args_buffer)
         self.traj_store = {}
         self.add_batch_size = args_buffer.add_batch_size
@@ -61,7 +63,9 @@ class BufferKeeper:
                 break
 
             with self.store_lock:
-                trajectories = [self.traj_store[key] for key in self.traj_store if self.traj_store[key]]
+                trajectories = [
+                    self.traj_store[key] for key in self.traj_store if self.traj_store[key]
+                ]
 
             if len(trajectories) != self.add_batch_size:
                 time.sleep(0.1)
@@ -140,7 +144,9 @@ class Trainer(BufferKeeper):
         num_semaphor,
         controller,
     ):
-        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor)
+        super().__init__(
+            buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor
+        )
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
@@ -179,7 +185,9 @@ class Trainer(BufferKeeper):
         for step in itertools.count(start=1, step=1):
             samples = next(samples_generator)
             self.flax_state, info = self.update_epoch_fn(self.flax_state, samples)
-            transitions_processed += self.batch_size * self.batch_length * self.training_iterations_per_step
+            transitions_processed += (
+                self.batch_size * self.batch_length * self.training_iterations_per_step
+            )
 
             if step == self.steps:
                 self.is_done = True
@@ -200,7 +208,8 @@ class Trainer(BufferKeeper):
                 )
 
             if step % self.save_period == 0:
-                orbax_checkpoint_path = os.path.join(self.workdir, f"chkpt_train_step_{self.flax_state.step:07}")
+                orbax_checkpoint_path = os.path.join(
+                    self.workdir, f"chkpt_train_step_{self.flax_state.step:07}"
+                )
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
-

@@ -75,7 +75,9 @@ class TrainState(train_state.TrainState):
         # UPDATE Q PARAMS AND OPTIMISER STATE
         updates, new_opt_state = self.tx.update(grads_with_opt, self.opt_state, params_with_opt)
         new_params_with_opt = optax.apply_updates(params_with_opt, updates)
-        new_target_params = optax.incremental_update(new_params_with_opt, self.target_params, self.tau)
+        new_target_params = optax.incremental_update(
+            new_params_with_opt, self.target_params, self.tau
+        )
 
         # As implied by the OWG name, the gradients are used directly to update the
         # parameters.
@@ -100,13 +102,17 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
     model = network(**args_network)
     params = model.init(init_rng, jnp.ones((1, *obs_shape)))
     tx = optimizer(**args_optimizer)
-    return TrainState.create(apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau)
+    return TrainState.create(
+        apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau
+    )
 
 
 def restore_dqn_flax_state(
     rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
 ):
-    state = create_train_state(rng, network, args_network, optimizer, args_optimizer, observation_shape, tau)
+    state = create_train_state(
+        rng, network, args_network, optimizer, args_optimizer, observation_shape, tau
+    )
     if checkpointdir is None:
         return state
     orbax_checkpointer = ocp.StandardCheckpointer()
@@ -125,7 +131,9 @@ def get_select_action_fn(apply_fn):
 
 
 def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
-    def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
+    def _update_step(
+        train_state: TrainState, buffer_sample: TrajectoryBufferSample
+    ) -> tuple[TrainState, dict]:
         def _q_loss_fn(
             q_params: FrozenDict,
             target_q_params: FrozenDict,
@@ -137,7 +145,9 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             # Cast and clip rewards.
             discount = 1.0 - transitions.done.astype(jnp.float32)
             d_t = (discount * config.gamma).astype(jnp.float32)
-            r_t = jnp.clip(transitions.reward, -config.max_abs_reward, config.max_abs_reward).astype(jnp.float32)
+            r_t = jnp.clip(
+                transitions.reward, -config.max_abs_reward, config.max_abs_reward
+            ).astype(jnp.float32)
             a_tm1 = transitions.action
 
             # Compute Q-learning loss.
