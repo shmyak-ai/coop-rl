@@ -39,6 +39,9 @@ coop-rl-train = "coop_rl.cli.train:main"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.hatch.build]
+sources = ["src"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/coop_rl"]
 

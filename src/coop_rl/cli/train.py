@@ -46,3 +46,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Run distributed training from the command line."""
     run_training(parse_args(argv))
+
+
+if __name__ == "__main__":
+    main()
