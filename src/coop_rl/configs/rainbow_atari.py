@@ -143,6 +143,9 @@ def get_config():
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step
+    config.args_trainer.args_get_update_step = ml_collections.ConfigDict()
+    config.args_trainer.args_get_update_step.apply_fn = None
+    config.args_trainer.args_get_update_step.config = agent_params
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.agent_params = agent_params
     config.args_trainer.buffer = buffer

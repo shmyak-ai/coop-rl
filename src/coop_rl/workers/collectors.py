@@ -30,6 +30,8 @@ class CollectorDQNUniform:
     def __init__(
         self,
         *,
+        controller,
+        trainer,
         collectors_seed,
         log_level,
         report_period,
@@ -39,8 +41,6 @@ class CollectorDQNUniform:
         args_env,
         get_select_action_fn,
         time_step_dtypes,
-        controller,
-        trainer,
     ):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
@@ -58,7 +58,8 @@ class CollectorDQNUniform:
         random.seed(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
         self._rng, rng = jax.random.split(self._rng)
-        flax_state = state_recover(rng, **args_state_recover)
+        args_state_recover["rng"] = rng
+        flax_state = state_recover(**args_state_recover)
 
         # online params are to prevent dqn algs from freezing
         self.online_params = deque(maxlen=10)
@@ -181,7 +182,8 @@ class CollectorDreamerUniform:
 
         self.collector_seed = collectors_seed
         random.seed(collectors_seed)
-        self.flax_state = state_recover(jax.random.PRNGKey(collectors_seed), **args_state_recover)
+        args_state_recover["rng"] = jax.random.PRNGKey(collectors_seed)
+        self.flax_state = state_recover(**args_state_recover)
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
         self.select_action = get_select_action_fn(self.flax_state)

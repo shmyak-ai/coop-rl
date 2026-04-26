@@ -124,6 +124,7 @@ class Trainer(BufferKeeper):
     def __init__(
         self,
         *,
+        controller,
         trainer_seed,
         log_level,
         workdir,
@@ -135,14 +136,14 @@ class Trainer(BufferKeeper):
         state_recover,
         args_state_recover,
         get_update_step,
+        args_get_update_step,
         get_update_epoch,
-        agent_params,
+        args_get_update_epoch,
         buffer,
         args_buffer,
         num_samples_on_gpu_cache,
         num_samples_to_gpu,
         num_semaphor,
-        controller,
     ):
         super().__init__(
             buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor
@@ -165,10 +166,12 @@ class Trainer(BufferKeeper):
 
         self._rng = jax.random.PRNGKey(trainer_seed)
         self._rng, rng = jax.random.split(self._rng)
-        self.flax_state = state_recover(rng, **args_state_recover)
-        self.update_epoch_fn = get_update_epoch(
-            get_update_step(self.flax_state.apply_fn, agent_params), self.buffer_lock, self.buffer
-        )
+        args_state_recover.rng = rng
+        self.flax_state = state_recover(**args_state_recover)
+        args_get_update_step.apply_fn = self.flax_state.apply_fn
+        update_step_fn = get_update_step(**args_get_update_step)
+        args_get_update_epoch.update_step_fn = update_step_fn
+        self.update_epoch_fn = get_update_epoch(**args_get_update_epoch)
 
         self.controller = controller
         self.command_executor = CommandExecutor()

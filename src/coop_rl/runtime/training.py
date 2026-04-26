@@ -150,17 +150,15 @@ def run_training(args: Namespace) -> None:
 
 def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
     """Launch controller, trainer, and collectors as local objects."""
-    controller = conf.controller()
-    trainer = conf.trainer(**conf.args_trainer, controller=controller)
+    conf.args_trainer.controller = controller = conf.controller()
+    trainer = conf.trainer(**conf.args_trainer)
 
     collectors = []
+    conf.args_collector.controller = controller
+    conf.args_collector.trainer = trainer
     for _ in range(conf.num_collectors):
         conf.args_collector.collectors_seed += 1
-        collector = conf.collector(
-            **conf.args_collector,
-            controller=controller,
-            trainer=trainer,
-        )
+        collector = conf.collector(**conf.args_collector)
         collectors.append(collector)
 
     return controller, trainer, collectors

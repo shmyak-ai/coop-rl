@@ -99,28 +99,22 @@ def get_config():
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = TimeStepDQNDtypesAtari()
 
-    config.agent_params = agent_params = ml_collections.ConfigDict()
-    config.agent_params.tau = tau = 0.005  # smoothing coefficient for target networks
-    config.agent_params.gamma = 0.99  # discount factor
-    config.agent_params.huber_loss_parameter = (
-        0.0  # parameter for the huber loss. If 0, it uses MSE loss
-    )
-    config.agent_params.max_abs_reward = 1000.0
-
     config.state_recover = state_recover = restore_dqn_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
+    config.args_state_recover.rng = None
     config.args_state_recover.network = network
     config.args_state_recover.args_network = args_network
     config.args_state_recover.optimizer = optimizer
     config.args_state_recover.args_optimizer = args_optimizer
     config.args_state_recover.observation_shape = observation_shape
-    config.args_state_recover.tau = tau
+    config.args_state_recover.tau = 0.005  # smoothing coefficient for target networks
     config.args_state_recover.checkpointdir = checkpointdir
 
     config.controller = Controller
 
     config.trainer = Trainer
     config.args_trainer = ml_collections.ConfigDict()
+    config.args_trainer.controller = None
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
@@ -132,8 +126,16 @@ def get_config():
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step
+    config.args_trainer.args_get_update_step = ml_collections.ConfigDict()
+    config.args_trainer.args_get_update_step.apply_fn = None
+    config.args_trainer.args_get_update_step.gamma = 0.99  # discount factor
+    config.args_trainer.args_get_update_step.huber_loss_parameter = (
+        0.0  # parameter for the huber loss. If 0, it uses MSE loss
+    )
+    config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
     config.args_trainer.get_update_epoch = get_update_epoch
-    config.args_trainer.agent_params = agent_params
+    config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
+    config.args_trainer.args_get_update_epoch.update_step_fn = None
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.num_samples_on_gpu_cache = 200
@@ -142,6 +144,8 @@ def get_config():
 
     config.collector = CollectorDQNUniform
     config.args_collector = ml_collections.ConfigDict()
+    config.args_collector.controller = None
+    config.args_collector.trainer = None
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
     config.args_collector.report_period = 100  # per rollouts sampled
