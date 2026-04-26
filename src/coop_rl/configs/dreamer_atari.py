@@ -28,7 +28,7 @@ from coop_rl.agents.dreamer import (
 from coop_rl.base.buffers import BufferTrajectoryDreamer
 from coop_rl.base.environment import HandlerEnvDreamerAtari
 from coop_rl.workers.auxiliary import Controller
-from coop_rl.workers.collectors import DreamerCollectorUniform
+from coop_rl.workers.collectors import CollectorDreamerUniform
 from coop_rl.workers.trainers import Trainer
 
 DREAMER_CONFIG_PATH = Path(__file__).resolve().parent / "dreamer.yaml"
@@ -144,7 +144,7 @@ def get_config():
     config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 1
 
-    config.collector = DreamerCollectorUniform
+    config.collector = CollectorDreamerUniform
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level

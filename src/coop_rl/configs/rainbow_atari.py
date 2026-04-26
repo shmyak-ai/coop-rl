@@ -23,7 +23,7 @@ from coop_rl.agents.rainbow import (
     get_update_step,
     restore_dqn_flax_state,
 )
-from coop_rl.base.base_types import AtariTimeStepDtypes
+from coop_rl.base.base_types import TimeStepDQNDtypesAtari
 from coop_rl.base.buffers import BufferPrioritised
 from coop_rl.base.environment import HandlerEnvAtari
 from coop_rl.base.utils import make_optimizer
@@ -32,7 +32,7 @@ from coop_rl.networks.dueling import NoisyDistributionalDuelingQNetwork
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
 from coop_rl.workers.auxiliary import Controller
-from coop_rl.workers.collectors import DQNCollectorUniform
+from coop_rl.workers.collectors import CollectorDQNUniform
 from coop_rl.workers.trainers import Trainer
 
 
@@ -106,7 +106,7 @@ def get_config():
     config.args_buffer.max_size = 300000  # in transitions
     config.args_buffer.priority_exponent = 0.6
     config.args_buffer.observation_shape = observation_shape
-    config.args_buffer.time_step_dtypes = time_step_dtypes = AtariTimeStepDtypes()
+    config.args_buffer.time_step_dtypes = time_step_dtypes = TimeStepDQNDtypesAtari()
 
     config.agent_params = agent_params = ml_collections.ConfigDict()
     config.agent_params.gamma = 0.99  # discount factor
@@ -151,7 +151,7 @@ def get_config():
     config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 1
 
-    config.collector = DQNCollectorUniform
+    config.collector = CollectorDQNUniform
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level

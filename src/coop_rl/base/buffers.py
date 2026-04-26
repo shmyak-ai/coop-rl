@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 
 from coop_rl.agents.dreamer import Agent
-from coop_rl.base.base_types import TimeStep
+from coop_rl.base.base_types import TimeStepDQN
 
 
 class BufferFlat:
@@ -47,7 +47,7 @@ class BufferFlat:
         return batch
 
 
-class BufferTrajectory:
+class BufferTrajectoryDQN:
     def __init__(
         self,
         buffer_seed,
@@ -77,7 +77,7 @@ class BufferTrajectory:
                 sample=jax.jit(self.buffer.sample),
                 can_sample=jax.jit(self.buffer.can_sample),
             )
-            fake_timestep = TimeStep(
+            fake_timestep = TimeStepDQN(
                 obs=jnp.ones(observation_shape, dtype=self.dtypes.obs),
                 action=jnp.ones((), dtype=self.dtypes.action),
                 reward=jnp.ones((), dtype=self.dtypes.reward),
@@ -89,7 +89,7 @@ class BufferTrajectory:
 
     def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
         with jax.default_device(self.cpu):
-            traj_batch_seq = TimeStep(
+            traj_batch_seq = TimeStepDQN(
                 obs=jnp.array(traj_obs, dtype=self.dtypes.obs),
                 action=jnp.array(traj_actions, dtype=self.dtypes.action),
                 reward=jnp.array(traj_rewards, dtype=self.dtypes.reward),
@@ -219,7 +219,7 @@ class BufferPrioritised:
                 can_sample=jax.jit(self.buffer.can_sample),
                 set_priorities=jax.jit(self.buffer.set_priorities, donate_argnums=0),
             )
-            fake_timestep = TimeStep(
+            fake_timestep = TimeStepDQN(
                 obs=jnp.ones(observation_shape, dtype=self.dtypes.obs),
                 action=jnp.ones((), dtype=self.dtypes.action),
                 reward=jnp.ones((), dtype=self.dtypes.reward),
@@ -231,7 +231,7 @@ class BufferPrioritised:
 
     def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
         with jax.default_device(self.cpu):
-            traj_batch_seq = TimeStep(
+            traj_batch_seq = TimeStepDQN(
                 obs=jnp.array(traj_obs, dtype=self.dtypes.obs),
                 action=jnp.array(traj_actions, dtype=self.dtypes.action),
                 reward=jnp.array(traj_rewards, dtype=self.dtypes.reward),

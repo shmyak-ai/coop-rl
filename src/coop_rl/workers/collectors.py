@@ -25,7 +25,7 @@ import numpy as np
 from coop_rl.workers.auxiliary import CommandExecutor
 
 
-class DQNCollectorUniform:
+class CollectorDQNUniform:
     def __init__(
         self,
         *,
@@ -149,7 +149,7 @@ class DQNCollectorUniform:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
 
 
-class DreamerCollectorUniform:
+class CollectorDreamerUniform:
     def __init__(
         self,
         *,

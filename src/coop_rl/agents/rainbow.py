@@ -32,7 +32,7 @@ from typing_extensions import NamedTuple
 from coop_rl.base.base_types import (
     ActorApply,
 )
-from coop_rl.base.buffers import TimeStep
+from coop_rl.base.buffers import TimeStepDQN
 from coop_rl.base.loss import categorical_double_q_learning
 from coop_rl.base.multistep import batch_discounted_returns
 
@@ -193,7 +193,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
 
             return q_loss, loss_info
 
-        sample: TimeStep = buffer_sample.experience
+        sample: TimeStepDQN = buffer_sample.experience
 
         # Get indices of the last observation
         length_batch, length_traj = sample.obs.shape[:2]
