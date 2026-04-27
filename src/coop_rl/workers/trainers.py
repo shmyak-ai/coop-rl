@@ -74,7 +74,7 @@ class BufferKeeper:
             with self.store_lock:
                 self.traj_store = {}
 
-            batched = {k: np.stack([x[k] for x in trajectories]) for k in trajectories[0]}
+            batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs), *trajectories)
             with self.buffer_lock:
                 self.buffer.add(batched)
             update_count += 1

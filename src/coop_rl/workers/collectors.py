@@ -111,21 +111,21 @@ class CollectorDQNUniform:
         self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory_steps = self.run_rollout()
-            trajectory = {
-                "obs": np.stack([step.obs for step in trajectory_steps], axis=0),
-                "action": np.asarray(
+            trajectory = TimeStepDQN(
+                obs=np.stack([step.obs for step in trajectory_steps], axis=0),
+                action=np.asarray(
                     [step.action for step in trajectory_steps], dtype=self.dtypes.action
                 ),
-                "reward": np.asarray(
+                reward=np.asarray(
                     [step.reward for step in trajectory_steps], dtype=self.dtypes.reward
                 ),
-                "terminated": np.asarray(
+                terminated=np.asarray(
                     [step.terminated for step in trajectory_steps], dtype=self.dtypes.terminated
                 ),
-                "truncated": np.asarray(
+                truncated=np.asarray(
                     [step.truncated for step in trajectory_steps], dtype=self.dtypes.truncated
                 ),
-            }
+            )
 
             while True:
                 training_done = self.command_executor.call(self.controller, "is_done")
