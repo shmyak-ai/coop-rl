@@ -40,7 +40,7 @@ class TimeStepDQN:
 
 
 class TimeStepDQNDtypesAtari(NamedTuple):
-    obs: str = "float32"
+    obs: str = "uint8"
     action: str = "int8"
     reward: str = "int32"
     terminated: str = "int8"

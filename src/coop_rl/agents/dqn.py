@@ -119,19 +119,25 @@ def restore_dqn_flax_state(
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
-def get_select_action_fn(apply_fn: ActorApply) -> Callable:
+def get_select_action_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
     @jax.jit
     def select_action(key, params, observation):
         key, policy_key = jax.random.split(key)
-        actor_policy = apply_fn(params, jnp.expand_dims(observation, axis=0))
+        actor_policy = apply_fn(params, jnp.expand_dims(_preprocess(observation), axis=0))
         return key, actor_policy.sample(seed=policy_key)
 
     return select_action
 
 
 def get_update_step(
-    *, apply_fn: ActorApply, gamma: float, huber_loss_parameter: float, max_abs_reward: float
+    *, apply_fn: ActorApply, gamma: float, huber_loss_parameter: float, max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
 ) -> Callable:
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
     def _update_step(
         train_state: TrainState, buffer_sample: TrajectoryBufferSample
     ) -> tuple[TrainState, dict]:
@@ -190,11 +196,11 @@ def get_update_step(
             jnp.zeros_like(discounts),
         )[:, 0]
         transitions = Transition(
-            obs=step_0_obs,
+            obs=_preprocess(step_0_obs),
             action=step_0_actions,
             reward=n_step_reward,
             done=n_step_done,
-            next_obs=step_n_obs,
+            next_obs=_preprocess(step_n_obs),
             info={},
         )
 

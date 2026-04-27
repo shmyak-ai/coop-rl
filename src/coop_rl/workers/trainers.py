@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import collections
 import itertools
 import logging
 import os
 import threading
 import time
 from collections.abc import Generator
-from queue import Queue
+from queue import Empty, Queue
 
 import jax
 import numpy as np
@@ -32,12 +33,12 @@ class BufferKeeper:
         self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor
     ):
         self.buffer = buffer(**args_buffer)
-        self.traj_store = {}
         self.add_batch_size = args_buffer.add_batch_size
+        # Flat deque of individual trajectories; bounded to 8 rounds of all collectors.
+        self.traj_queue = collections.deque(maxlen=self.add_batch_size * 8)
         self.buffer_lock = threading.Lock()
         self.store_lock = threading.Lock()
         self.device_lock = threading.Lock()
-        self.semaphore = threading.Semaphore(num_semaphor)
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
         self.gpu_device = jax.devices("gpu")[0]
         self.num_samples_to_gpu = num_samples_to_gpu
@@ -46,38 +47,24 @@ class BufferKeeper:
         # a trick to start a ray thread, is it necessary?
         if data == 1:
             return
-        # save data from a collector
-        collector_seed, _data = data
+        _collector_seed, _data = data
         with self.store_lock:
-            # for collectors synchronization, put only if there is no data already
-            if self.traj_store.get(collector_seed) is not None:
-                return False
-            self.traj_store[collector_seed] = _data
-            return True
+            self.traj_queue.append(_data)
+        return True
 
     def buffer_updating(self):
-        update_count = 0
         while True:
             if self.is_done:
                 self.logger.info("Done signal received; finishing buffer updating.")
                 break
-
+            time.sleep(0.015)  # 15ms cadence; consume any ready chunk
             with self.store_lock:
-                trajectories = [
-                    self.traj_store[key] for key in self.traj_store if self.traj_store[key]
-                ]
-
-            if len(trajectories) != self.add_batch_size:
-                time.sleep(0.1)
-                continue
-
-            with self.store_lock:
-                self.traj_store = {}
-
+                if len(self.traj_queue) < self.add_batch_size:
+                    continue
+                trajectories = [self.traj_queue.popleft() for _ in range(self.add_batch_size)]
             batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs), *trajectories)
             with self.buffer_lock:
                 self.buffer.add(batched)
-            update_count += 1
 
     def buffer_sampling(self):
         while True:
@@ -104,26 +91,20 @@ class BufferKeeper:
                 samples.append(sample)
             with self.device_lock:
                 samples_on_gpu = jax.device_put(samples, device=self.gpu_device)
-            with self.semaphore:
-                for sample_on_gpu in samples_on_gpu:
-                    self._samples_on_gpu.put(sample_on_gpu)
+            for sample_on_gpu in samples_on_gpu:
+                # Queue.put blocks when full
+                self._samples_on_gpu.put(sample_on_gpu)
 
     def get_samples(self, batch_size: int = 10) -> Generator:
-        sample_count = 0
         while True:
             batch = []
-            while True:
-                if not self._samples_on_gpu.empty():
-                    batch.append(self._samples_on_gpu.get())
-                else:
+            while len(batch) < batch_size:
+                try:
+                    batch.append(self._samples_on_gpu.get(timeout=0.05))
+                except Empty:
                     if self.is_done:
                         self.logger.info("Done signal received; finishing sample generator.")
                         return
-                    self.logger.info("Not enough data; sampling generator sleeps for a second.")
-                    time.sleep(1)
-                if len(batch) == batch_size:
-                    break
-            sample_count += 1
             yield batch
 
 
@@ -192,6 +173,7 @@ class Trainer(BufferKeeper):
     def training(self):
         samples_generator = self.get_samples(self.training_iterations_per_step)
         transitions_processed = 0
+        step_start = time.monotonic()
         for step in itertools.count(start=1, step=1):
             try:
                 samples = next(samples_generator)
@@ -210,8 +192,15 @@ class Trainer(BufferKeeper):
                 break
 
             if step % self.summary_writing_period == 0:
+                elapsed = time.monotonic() - step_start
+                queue_fill = self._samples_on_gpu.qsize() / max(self._samples_on_gpu.maxsize, 1)
                 self.logger.info(f"Training step: {self.flax_state.step}.")
                 self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
+                self.logger.info(
+                    f"Last {self.summary_writing_period} steps: {elapsed:.1f}s  "
+                    f"GPU queue fill: {queue_fill:.2f}"
+                )
+                step_start = time.monotonic()
 
             if step % self.synchronization_period == 0:
                 self.command_executor.resolve(self.futures)

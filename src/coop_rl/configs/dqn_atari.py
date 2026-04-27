@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import jax.numpy as jnp
 import ml_collections
 import numpy as np
 from ml_collections import config_dict
@@ -48,11 +49,10 @@ def get_config():
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
     steps = 3000000
-    training_iterations_per_step = 1
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 1
-    config.num_samplers = 1
+    config.num_collectors = num_collectors = 6
+    config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
@@ -91,7 +91,7 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
-    config.args_buffer.sample_batch_size = 32
+    config.args_buffer.sample_batch_size = 256
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
@@ -119,7 +119,7 @@ def get_config():
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
     config.args_trainer.steps = steps
-    config.args_trainer.training_iterations_per_step = training_iterations_per_step
+    config.args_trainer.training_iterations_per_step = 8
     config.args_trainer.summary_writing_period = 100  # logging and reporting
     config.args_trainer.save_period = 10000  # orbax checkpointing
     config.args_trainer.synchronization_period = 100  # send params to control actor
@@ -133,14 +133,17 @@ def get_config():
         0.0  # parameter for the huber loss. If 0, it uses MSE loss
     )
     config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
+    config.args_trainer.args_get_update_step.obs_preprocess_fn = (
+        lambda x: x.astype(jnp.float32) / 255.0
+    )
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
     config.args_trainer.args_get_update_epoch.update_step_fn = None
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 200
-    config.args_trainer.num_samples_to_gpu = 100
-    config.args_trainer.num_semaphor = 1
+    config.args_trainer.num_samples_on_gpu_cache = 400
+    config.args_trainer.num_samples_to_gpu = 200
+    config.args_trainer.num_semaphor = 2
 
     config.collector = CollectorDQNUniform
     config.args_collector = ml_collections.ConfigDict()
@@ -157,5 +160,8 @@ def get_config():
     config.args_collector.get_select_action_fn = get_select_action_fn
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
+    config.args_collector.args_get_select_action_fn.obs_preprocess_fn = (
+        lambda x: x.astype(jnp.float32) / 255.0
+    )
 
     return config.lock()
