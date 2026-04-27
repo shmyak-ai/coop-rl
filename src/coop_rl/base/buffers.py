@@ -60,7 +60,7 @@ class BufferTrajectoryDQN:
         observation_shape,
         time_step_dtypes,
     ):
-        self.dtypes = time_step_dtypes
+        self.dtypes = time_step_dtypes()
         self.cpu = jax.devices("cpu")[0]
         with jax.default_device(self.cpu):
             self.buffer = fbx.make_trajectory_buffer(

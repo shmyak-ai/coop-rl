@@ -39,8 +39,9 @@ class CollectorDQNUniform:
         args_state_recover,
         env,
         args_env,
-        get_select_action_fn,
         time_step_dtypes,
+        get_select_action_fn,
+        args_get_select_action_fn,
     ):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
@@ -52,13 +53,13 @@ class CollectorDQNUniform:
 
         self.env = env(**args_env)
 
-        self.dtypes = time_step_dtypes
+        self.dtypes = time_step_dtypes()
 
         self.collector_seed = collectors_seed
         random.seed(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
         self._rng, rng = jax.random.split(self._rng)
-        args_state_recover["rng"] = rng
+        args_state_recover.rng = rng
         flax_state = state_recover(**args_state_recover)
 
         # online params are to prevent dqn algs from freezing
@@ -67,7 +68,8 @@ class CollectorDQNUniform:
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
 
-        self.select_action = get_select_action_fn(flax_state.apply_fn)
+        args_get_select_action_fn.apply_fn = flax_state.apply_fn 
+        self.select_action = get_select_action_fn(**args_get_select_action_fn)
         self.episode_reward = {
             "now": 0,
             "last": 0,

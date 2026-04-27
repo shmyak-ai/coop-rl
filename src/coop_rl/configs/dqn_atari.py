@@ -97,7 +97,7 @@ def get_config():
     config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 300000  # in transitions
     config.args_buffer.observation_shape = observation_shape
-    config.args_buffer.time_step_dtypes = time_step_dtypes = TimeStepDQNDtypesAtari()
+    config.args_buffer.time_step_dtypes = time_step_dtypes = TimeStepDQNDtypesAtari
 
     config.state_recover = state_recover = restore_dqn_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
@@ -153,7 +153,9 @@ def get_config():
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
     config.args_collector.args_env = args_env
-    config.args_collector.get_select_action_fn = get_select_action_fn
     config.args_collector.time_step_dtypes = time_step_dtypes
+    config.args_collector.get_select_action_fn = get_select_action_fn
+    config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
+    config.args_collector.args_get_select_action_fn.apply_fn = None
 
     return config.lock()
