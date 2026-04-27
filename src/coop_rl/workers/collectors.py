@@ -156,6 +156,11 @@ class CollectorDQNUniform:
             if rollouts_count % self.report_period == 0:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
 
+    def close(self) -> None:
+        """Release local helper resources after collection stops."""
+        self.command_executor.shutdown()
+        self.env.close()
+
 
 class CollectorDreamerUniform:
     def __init__(
@@ -280,3 +285,8 @@ class CollectorDreamerUniform:
 
             if rollouts_count % self.report_period == 0:
                 self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
+
+    def close(self) -> None:
+        """Release local helper resources after collection stops."""
+        self.command_executor.shutdown()
+        self.env.close()

@@ -79,3 +79,7 @@ class CommandExecutor:
             pass
 
         return handle
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        """Shut down the local executor used for in-process worker calls."""
+        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)

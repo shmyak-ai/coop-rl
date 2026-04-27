@@ -81,6 +81,10 @@ class BufferKeeper:
 
     def buffer_sampling(self):
         while True:
+            if self.is_done:
+                self.logger.info("Done signal received; finishing buffer sampling.")
+                return
+
             with self.buffer_lock:
                 can_sample = self.buffer.can_sample()
             if can_sample:
@@ -112,6 +116,9 @@ class BufferKeeper:
                 if not self._samples_on_gpu.empty():
                     batch.append(self._samples_on_gpu.get())
                 else:
+                    if self.is_done:
+                        self.logger.info("Done signal received; finishing sample generator.")
+                        return
                     self.logger.info("Not enough data; sampling generator sleeps for a second.")
                     time.sleep(1)
                 if len(batch) == batch_size:
@@ -186,7 +193,11 @@ class Trainer(BufferKeeper):
         samples_generator = self.get_samples(self.training_iterations_per_step)
         transitions_processed = 0
         for step in itertools.count(start=1, step=1):
-            samples = next(samples_generator)
+            try:
+                samples = next(samples_generator)
+            except StopIteration:
+                self.logger.info("Done signal received; finishing training.")
+                return
             self.flax_state, info = self.update_epoch_fn(self.flax_state, samples)
             transitions_processed += (
                 self.batch_size * self.batch_length * self.training_iterations_per_step
@@ -216,3 +227,7 @@ class Trainer(BufferKeeper):
                 )
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+
+    def close(self) -> None:
+        """Release local helper resources after training threads have stopped."""
+        self.command_executor.shutdown()

@@ -164,17 +164,30 @@ def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
     return controller, trainer, collectors
 
 
+def _stop_thread_workers(controller: Any, trainer: Any) -> None:
+    """Signal local training workers to finish their loops."""
+    trainer.is_done = True
+    controller.set_done()
+
+
+def _close_thread_workers(trainer: Any, collectors: list[Any]) -> None:
+    """Release helper executors and environments owned by local workers."""
+    trainer.close()
+    for collector in collectors:
+        collector.close()
+
+
 def _run_thread_training(conf: Any) -> None:
     """Execute training loop with regular Python multithreading."""
     controller, trainer, collectors = _launch_thread_workers(conf)
-    max_workers = 3 + conf.num_samplers + conf.num_collectors
+    max_workers = 2 + conf.num_samplers + conf.num_collectors
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
         futures = [
             executor.submit(trainer.training),
             executor.submit(trainer.buffer_updating),
             *[executor.submit(trainer.buffer_sampling) for _ in range(conf.num_samplers)],
-            executor.submit(trainer.add_traj_seq, 1),
             *[executor.submit(collector.collecting) for collector in collectors],
         ]
 
@@ -183,8 +196,12 @@ def _run_thread_training(conf: Any) -> None:
                 future.result()
         except Exception:
             # Unblock all worker loops when one thread fails.
-            trainer.is_done = True
-            controller.set_done()
+            _stop_thread_workers(controller, trainer)
             raise
+        finally:
+            _stop_thread_workers(controller, trainer)
+    finally:
+        executor.shutdown(wait=True)
+        _close_thread_workers(trainer, collectors)
 
     time.sleep(3)
