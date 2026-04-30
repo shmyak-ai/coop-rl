@@ -10,14 +10,10 @@ from typing import Any
 
 from coop_rl.configs import get_config
 
-# TF_ENABLE_ONEDNN_OPTS=0 disables oneDNN (a TF math kernel library; irrelevant for JAX)
+# TF_ENABLE_ONEDNN_OPTS=0 disables oneDNN (a TF math library; irrelevant for JAX)
 # and prevents the associated absl "log messages before InitializeLog" INFO spam.
-# XLA_FLAGS disables Triton GEMM autotuning, which produces "Delay kernel timed out"
-# errors on cold GPU starts. cuBLAS (the fallback) is equally fast for this project's
-# matrix sizes and needs no per-kernel benchmarking warmup.
 TF_LOG_SUPPRESS_ENV_VARS: dict[str, str] = {
     "TF_ENABLE_ONEDNN_OPTS": "0",
-    "XLA_FLAGS": "--xla_gpu_enable_triton_gemm=false",
 }
 
 RUNTIME_ENV_CPU = {
@@ -32,6 +28,17 @@ RUNTIME_ENV_GPU = {
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
         "RAY_DEDUP_LOGS": "0",
         **TF_LOG_SUPPRESS_ENV_VARS,
+    }
+}
+
+# Collector actors do inference only. Disabling XLA autotuning eliminates the
+# "Delay kernel timed out" (cuda_timer.cc) race that fires when multiple collector
+# processes JIT-compile simultaneously on a cold GPU. The trainer keeps full
+# autotuning because gradient-update kernels benefit from it.
+RUNTIME_ENV_COLLECTOR = {
+    "env_vars": {
+        **RUNTIME_ENV_GPU["env_vars"],
+        "XLA_FLAGS": "--xla_gpu_autotune_level=0",
     }
 }
 
@@ -88,7 +95,7 @@ def decorate_remote_components(conf: Any) -> Any:
     conf.collector = ray.remote(
         num_cpus=1,
         num_gpus=0.5 / conf.num_collectors,
-        runtime_env=RUNTIME_ENV_GPU,
+        runtime_env=RUNTIME_ENV_COLLECTOR,
     )(conf.collector)
     return conf
 
@@ -172,6 +179,14 @@ def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
         conf.args_collector.collectors_seed += 1
         collector = conf.collector(**conf.args_collector)
         collectors.append(collector)
+
+    # Warm up each collector's JIT-compiled select_action sequentially in the main
+    # thread. Each collector holds a distinct jit-wrapped function object, so JAX
+    # compiles them independently. Running warmup() here serialises those
+    # compilations and prevents the cuda_timer race that occurs when all collector
+    # threads trigger JIT on a cold GPU simultaneously.
+    for collector in collectors:
+        collector.warmup()
 
     return controller, trainer, collectors
 

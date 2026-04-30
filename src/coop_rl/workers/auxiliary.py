@@ -19,7 +19,7 @@ from typing import Any
 
 
 class Controller:
-    def __init__(self, *, log_level: str = "INFO"):
+    def __init__(self, *, log_level):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
         self.done = False

@@ -78,6 +78,11 @@ class CollectorDQNUniform:
         self._closed = False
         self.logger.info("CollectorDQNUniform initialized (seed=%d).", collectors_seed)
 
+    def warmup(self) -> None:
+        """Trigger JIT compilation of select_action in the calling thread."""
+        self.obs, _ = self.env.reset()
+        self.select_action(self._rng, self.online_params[0], self.obs)
+
     def run_rollout(self) -> list[TimeStepDQN]:
         trajectory_steps: list[TimeStepDQN] = []
 
@@ -117,7 +122,8 @@ class CollectorDQNUniform:
             self.close()
 
     def _collecting(self):
-        self.obs, _ = self.env.reset()
+        if self.obs is None:
+            self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory_steps = self.run_rollout()
             trajectory = TimeStepDQN(
@@ -222,6 +228,13 @@ class CollectorDreamerUniform:
         self.gpu_device = gpu_devices[0]
         self.rollout_length = 1000
         self._closed = False
+
+    def warmup(self) -> None:
+        """Trigger JIT compilation of select_action in the calling thread."""
+        action = {k: v[0] for k, v in self.action.items()}
+        obs = self.env.step(action)
+        obs = {k: np.stack([obs[k]]) for k in obs if not k.startswith("log/")}
+        self.select_action(self.flax_state, obs)
 
     def run_rollout(self):
         trajectory = []
