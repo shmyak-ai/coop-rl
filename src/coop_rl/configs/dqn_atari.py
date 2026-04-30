@@ -111,6 +111,8 @@ def get_config():
     config.args_state_recover.checkpointdir = checkpointdir
 
     config.controller = Controller
+    config.args_controller = ml_collections.ConfigDict()
+    config.args_controller.log_level = log_level
 
     config.trainer = Trainer
     config.args_trainer = ml_collections.ConfigDict()

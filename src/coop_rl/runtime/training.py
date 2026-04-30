@@ -95,7 +95,7 @@ def decorate_remote_components(conf: Any) -> Any:
 
 def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
     """Launch controller, trainer, and collector actors."""
-    controller = conf.controller.remote()
+    controller = conf.controller.remote(**conf.args_controller)
     trainer = conf.trainer.options(max_concurrency=3 + conf.num_samplers).remote(
         **conf.args_trainer, controller=controller
     )
@@ -162,7 +162,7 @@ def run_training(args: Namespace) -> None:
 
 def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
     """Launch controller, trainer, and collectors as local objects."""
-    conf.args_trainer.controller = controller = conf.controller()
+    conf.args_trainer.controller = controller = conf.controller(**conf.args_controller)
     trainer = conf.trainer(**conf.args_trainer)
 
     collectors = []

@@ -13,17 +13,22 @@
 # limitations under the License.
 
 import collections
+import logging
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
 
 
 class Controller:
-    def __init__(self):
+    def __init__(self, *, log_level: str = "INFO"):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
         self.done = False
         self.params_store = collections.deque(maxlen=10)  # FIFO
+        self.logger.info("Controller initialized.")
 
     def set_done(self):
         self.done = True
+        self.logger.info("Controller: done signal set.")
 
     def is_done(self) -> bool:
         return self.done

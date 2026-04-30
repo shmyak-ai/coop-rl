@@ -174,6 +174,7 @@ class Trainer(BufferKeeper):
         )
         self.is_done = False
         self._closed = False
+        self.logger.info("Trainer initialized (steps=%d, buffer_size=%d).", self.steps, self.buffer_size)
 
     def training(self):
         try:
@@ -235,3 +236,4 @@ class Trainer(BufferKeeper):
             return
         self._closed = True
         self.command_executor.shutdown()
+        self.logger.info("Trainer closed.")

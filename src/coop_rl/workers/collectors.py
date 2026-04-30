@@ -76,6 +76,7 @@ class CollectorDQNUniform:
             "last": 0,
         }
         self._closed = False
+        self.logger.info("CollectorDQNUniform initialized (seed=%d).", collectors_seed)
 
     def run_rollout(self) -> list[TimeStepDQN]:
         trajectory_steps: list[TimeStepDQN] = []
@@ -171,6 +172,7 @@ class CollectorDQNUniform:
         self._closed = True
         self.command_executor.shutdown()
         self.env.close()
+        self.logger.info("CollectorDQNUniform closed (seed=%d).", self.collector_seed)
 
 
 class CollectorDreamerUniform:
