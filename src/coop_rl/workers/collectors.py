@@ -43,7 +43,7 @@ class CollectorDQNUniform:
         get_select_action_fn,
         args_get_select_action_fn,
     ):
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(f"{__name__}.seed{collectors_seed}")
         self.logger.setLevel(log_level)
         self.report_period = report_period
 
@@ -196,7 +196,7 @@ class CollectorDreamerUniform:
         controller,
         trainer,
     ):
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger(f"{__name__}.seed{collectors_seed}")
         self.logger.setLevel(log_level)
         self.report_period = report_period
 
