@@ -173,6 +173,7 @@ class Trainer(BufferKeeper):
             jax.device_get(self.flax_state.params),
         )
         self.is_done = False
+        self._closed = False
 
     def training(self):
         try:
@@ -214,6 +215,7 @@ class Trainer(BufferKeeper):
                 step_start = time.monotonic()
 
             if step % self.synchronization_period == 0:
+                self.command_executor.resolve(self.futures)
                 self.futures = self.command_executor.submit(
                     self.controller,
                     "set_parameters",
@@ -229,4 +231,7 @@ class Trainer(BufferKeeper):
 
     def close(self) -> None:
         """Release local helper resources after training threads have stopped."""
+        if self._closed:
+            return
+        self._closed = True
         self.command_executor.shutdown()

@@ -75,6 +75,7 @@ class CollectorDQNUniform:
             "now": 0,
             "last": 0,
         }
+        self._closed = False
 
     def run_rollout(self) -> list[TimeStepDQN]:
         trajectory_steps: list[TimeStepDQN] = []
@@ -165,6 +166,9 @@ class CollectorDQNUniform:
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""
+        if self._closed:
+            return
+        self._closed = True
         self.command_executor.shutdown()
         self.env.close()
 
@@ -190,12 +194,11 @@ class CollectorDreamerUniform:
 
         self.controller = controller
         self.trainer = trainer
-        self.command_executor = CommandExecutor()
+        self.command_executor = CommandExecutor(max_workers=1)
 
         self.env = env(**args_env)
 
         self.collector_seed = collectors_seed
-        random.seed(collectors_seed)
         args_state_recover["rng"] = jax.random.PRNGKey(collectors_seed)
         self.flax_state = state_recover(**args_state_recover)
 
@@ -209,8 +212,14 @@ class CollectorDreamerUniform:
             "now": 0,
             "last": 0,
         }
-        self.gpu_device = jax.devices("gpu")[0]
+        gpu_devices = jax.devices("gpu")
+        if not gpu_devices:
+            raise RuntimeError(
+                "No GPU devices found. CollectorDreamerUniform requires at least one GPU."
+            )
+        self.gpu_device = gpu_devices[0]
         self.rollout_length = 1000
+        self._closed = False
 
     def run_rollout(self):
         trajectory = []
@@ -257,6 +266,12 @@ class CollectorDreamerUniform:
         return trajectory
 
     def collecting(self):
+        try:
+            self._collecting()
+        finally:
+            self.close()
+
+    def _collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
 
@@ -295,5 +310,8 @@ class CollectorDreamerUniform:
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""
+        if self._closed:
+            return
+        self._closed = True
         self.command_executor.shutdown()
         self.env.close()
