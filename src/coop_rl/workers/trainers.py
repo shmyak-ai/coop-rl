@@ -30,7 +30,7 @@ from coop_rl.workers.auxiliary import CommandExecutor
 
 class BufferKeeper:
     def __init__(
-        self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor
+        self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu
     ):
         self.buffer = buffer(**args_buffer)
         self.add_batch_size = args_buffer.add_batch_size
@@ -40,8 +40,13 @@ class BufferKeeper:
         self.store_lock = threading.Lock()
         self.device_lock = threading.Lock()
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
-        self.gpu_device = jax.devices("gpu")[0]
+        gpu_devices = jax.devices("gpu")
+        if not gpu_devices:
+            raise RuntimeError("No GPU devices found. BufferKeeper requires at least one GPU.")
+        self.gpu_device = gpu_devices[0]
         self.num_samples_to_gpu = num_samples_to_gpu
+        self.logger = logging.getLogger(__name__)
+        self.is_done = False
 
     def add_traj_seq(self, data):
         # a trick to start a ray thread, is it necessary?
@@ -131,10 +136,9 @@ class Trainer(BufferKeeper):
         args_buffer,
         num_samples_on_gpu_cache,
         num_samples_to_gpu,
-        num_semaphor,
     ):
         super().__init__(
-            buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu, num_semaphor
+            buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu
         )
 
         self.logger = logging.getLogger(__name__)
@@ -162,7 +166,7 @@ class Trainer(BufferKeeper):
         self.update_epoch_fn = get_update_epoch(**args_get_update_epoch)
 
         self.controller = controller
-        self.command_executor = CommandExecutor()
+        self.command_executor = CommandExecutor(max_workers=1)
         self.futures = self.command_executor.submit(
             self.controller,
             "set_parameters",
@@ -171,6 +175,13 @@ class Trainer(BufferKeeper):
         self.is_done = False
 
     def training(self):
+        try:
+            self._training()
+        finally:
+            self.close()
+
+    def _training(self):
+        self.command_executor.resolve(self.futures)
         samples_generator = self.get_samples(self.training_iterations_per_step)
         transitions_processed = 0
         step_start = time.monotonic()
@@ -203,7 +214,6 @@ class Trainer(BufferKeeper):
                 step_start = time.monotonic()
 
             if step % self.synchronization_period == 0:
-                self.command_executor.resolve(self.futures)
                 self.futures = self.command_executor.submit(
                     self.controller,
                     "set_parameters",

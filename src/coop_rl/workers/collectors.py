@@ -49,14 +49,14 @@ class CollectorDQNUniform:
 
         self.controller = controller
         self.trainer = trainer
-        self.command_executor = CommandExecutor()
+        self.command_executor = CommandExecutor(max_workers=1)
 
         self.env = env(**args_env)
 
         self.dtypes = time_step_dtypes()
 
         self.collector_seed = collectors_seed
-        random.seed(collectors_seed)
+        self._random = random.Random(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
         self._rng, rng = jax.random.split(self._rng)
         args_state_recover.rng = rng
@@ -70,6 +70,7 @@ class CollectorDQNUniform:
 
         args_get_select_action_fn.apply_fn = flax_state.apply_fn 
         self.select_action = get_select_action_fn(**args_get_select_action_fn)
+        self.obs = None
         self.episode_reward = {
             "now": 0,
             "last": 0,
@@ -81,7 +82,7 @@ class CollectorDQNUniform:
         for _ in range(100):
             self._rng, action_jnp = self.select_action(
                 self._rng,
-                random.choice(self.online_params),
+                self._random.choice(self.online_params),
                 self.obs,
             )
             action_np = np.asarray(action_jnp, dtype=self.dtypes.action).squeeze()
@@ -108,6 +109,12 @@ class CollectorDQNUniform:
         return trajectory_steps
 
     def collecting(self):
+        try:
+            self._collecting()
+        finally:
+            self.close()
+
+    def _collecting(self):
         self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory_steps = self.run_rollout()
