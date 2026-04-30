@@ -10,9 +10,20 @@ from typing import Any
 
 from coop_rl.configs import get_config
 
+# TF_ENABLE_ONEDNN_OPTS=0 disables oneDNN (a TF math kernel library; irrelevant for JAX)
+# and prevents the associated absl "log messages before InitializeLog" INFO spam.
+# XLA_FLAGS disables Triton GEMM autotuning, which produces "Delay kernel timed out"
+# errors on cold GPU starts. cuBLAS (the fallback) is equally fast for this project's
+# matrix sizes and needs no per-kernel benchmarking warmup.
+TF_LOG_SUPPRESS_ENV_VARS: dict[str, str] = {
+    "TF_ENABLE_ONEDNN_OPTS": "0",
+    "XLA_FLAGS": "--xla_gpu_enable_triton_gemm=false",
+}
+
 RUNTIME_ENV_CPU = {
     "env_vars": {
         "JAX_PLATFORMS": "cpu",
+        **TF_LOG_SUPPRESS_ENV_VARS,
     }
 }
 
@@ -20,6 +31,7 @@ RUNTIME_ENV_GPU = {
     "env_vars": {
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
         "RAY_DEDUP_LOGS": "0",
+        **TF_LOG_SUPPRESS_ENV_VARS,
     }
 }
 

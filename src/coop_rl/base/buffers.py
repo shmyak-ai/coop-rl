@@ -69,7 +69,7 @@ class BufferTrajectoryDQN:
                 sample_sequence_length=sample_sequence_length,
                 period=period,
                 min_length_time_axis=min_length,
-                max_size=max_size,
+                max_length_time_axis=max_size // add_batch_size,
             )
             self.buffer = self.buffer.replace(
                 init=jax.jit(self.buffer.init),
@@ -124,7 +124,7 @@ class BufferTrajectoryDreamer:
                 sample_sequence_length=sample_sequence_length,
                 period=period,
                 min_length_time_axis=min_length,
-                max_size=max_size,
+                max_length_time_axis=max_size // add_batch_size,
             )
             self.buffer = self.buffer.replace(
                 init=jax.jit(self.buffer.init),
@@ -201,7 +201,7 @@ class BufferPrioritised:
                 sample_sequence_length=sample_sequence_length,
                 period=period,
                 min_length_time_axis=min_length,
-                max_size=max_size,
+                max_length_time_axis=max_size // add_batch_size,
                 priority_exponent=priority_exponent,
                 device="cpu",
             )

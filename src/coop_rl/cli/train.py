@@ -1,10 +1,11 @@
 """Training CLI entry point."""
 
 import argparse
+import os
 from pathlib import Path
 
 from coop_rl.configs import list_available_configs
-from coop_rl.runtime.training import run_training
+from coop_rl.runtime.training import TF_LOG_SUPPRESS_ENV_VARS, run_training
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +46,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     """Run distributed training from the command line."""
+    for key, value in TF_LOG_SUPPRESS_ENV_VARS.items():
+        os.environ.setdefault(key, value)
     run_training(parse_args(argv))
 
 
