@@ -48,7 +48,7 @@ def get_config():
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
-    steps = 3000000
+    steps = 1000000
 
     config.log_level = log_level
     config.num_collectors = num_collectors = 6
@@ -91,7 +91,7 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = num_collectors
-    config.args_buffer.sample_batch_size = 256
+    config.args_buffer.sample_batch_size = 64
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000

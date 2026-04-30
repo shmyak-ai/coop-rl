@@ -29,9 +29,7 @@ from coop_rl.workers.auxiliary import CommandExecutor
 
 
 class BufferKeeper:
-    def __init__(
-        self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu
-    ):
+    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu):
         self.buffer = buffer(**args_buffer)
         self.add_batch_size = args_buffer.add_batch_size
         # Flat deque of individual trajectories; bounded to 8 rounds of all collectors.
@@ -137,9 +135,7 @@ class Trainer(BufferKeeper):
         num_samples_on_gpu_cache,
         num_samples_to_gpu,
     ):
-        super().__init__(
-            buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu
-        )
+        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu)
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
@@ -174,7 +170,9 @@ class Trainer(BufferKeeper):
         )
         self.is_done = False
         self._closed = False
-        self.logger.info("Trainer initialized (steps=%d, buffer_size=%d).", self.steps, self.buffer_size)
+        self.logger.info(
+            "Trainer initialized (steps=%d, buffer_size=%d).", self.steps, self.buffer_size
+        )
 
     def training(self):
         try:
