@@ -144,7 +144,6 @@ def get_config():
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.num_samples_on_gpu_cache = 100
-    config.args_trainer.num_samples_to_gpu = 50
     config.args_trainer.num_semaphor = 1
 
     config.collector = CollectorDreamerUniform

@@ -103,7 +103,9 @@ def decorate_remote_components(conf: Any) -> Any:
 def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
     """Launch controller, trainer, and collector actors."""
     controller = conf.controller.remote(**conf.args_controller)
-    trainer = conf.trainer.options(max_concurrency=3 + conf.num_samplers).remote(
+    trainer = conf.trainer.options(
+        max_concurrency=1 + conf.num_samplers + conf.num_collectors
+    ).remote(
         **conf.args_trainer, controller=controller
     )
 
@@ -152,7 +154,7 @@ def run_training(args: Namespace) -> None:
         trainer, collectors = launch_remote_workers(conf)
 
         trainer_futures = (
-            [trainer.training.remote(), trainer.buffer_updating.remote()]
+            [trainer.training.remote()]
             + [trainer.buffer_sampling.remote() for _ in range(conf.num_samplers)]
             + [trainer.add_traj_seq.remote(1)]
         )
@@ -207,13 +209,12 @@ def _close_thread_workers(trainer: Any, collectors: list[Any]) -> None:
 def _run_thread_training(conf: Any) -> None:
     """Execute training loop with regular Python multithreading."""
     controller, trainer, collectors = _launch_thread_workers(conf)
-    max_workers = 2 + conf.num_samplers + conf.num_collectors
+    max_workers = 1 + conf.num_samplers + conf.num_collectors
 
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
         futures = [
             executor.submit(trainer.training),
-            executor.submit(trainer.buffer_updating),
             *[executor.submit(trainer.buffer_sampling) for _ in range(conf.num_samplers)],
             *[executor.submit(collector.collecting) for collector in collectors],
         ]

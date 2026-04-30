@@ -13,13 +13,14 @@
 # limitations under the License.
 
 import collections
+import contextlib
 import itertools
 import logging
 import os
 import threading
 import time
 from collections.abc import Generator
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 
 import jax
 import numpy as np
@@ -28,21 +29,47 @@ import orbax.checkpoint as ocp
 from coop_rl.workers.auxiliary import CommandExecutor
 
 
+class _RWLock:
+    """Readers-writer lock: concurrent reads, exclusive writes."""
+
+    def __init__(self):
+        self._mutex = threading.Lock()      # protects _readers count
+        self._write_lock = threading.Lock() # held exclusively by a writer
+        self._readers = 0
+
+    @contextlib.contextmanager
+    def read(self):
+        with self._mutex:
+            self._readers += 1
+            if self._readers == 1:
+                self._write_lock.acquire()
+        try:
+            yield
+        finally:
+            with self._mutex:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._write_lock.release()
+
+    @contextlib.contextmanager
+    def write(self):
+        with self._write_lock:
+            yield
+
+
 class BufferKeeper:
-    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu):
+    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache):
         self.buffer = buffer(**args_buffer)
         self.add_batch_size = args_buffer.add_batch_size
         # Flat deque of individual trajectories; bounded to 8 rounds of all collectors.
         self.traj_queue = collections.deque(maxlen=self.add_batch_size * 8)
-        self.buffer_lock = threading.Lock()
+        self._rw_lock = _RWLock()
         self.store_lock = threading.Lock()
-        self.device_lock = threading.Lock()
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
         gpu_devices = jax.devices("gpu")
         if not gpu_devices:
             raise RuntimeError("No GPU devices found. BufferKeeper requires at least one GPU.")
         self.gpu_device = gpu_devices[0]
-        self.num_samples_to_gpu = num_samples_to_gpu
         self.logger = logging.getLogger(__name__)
         self.is_done = False
 
@@ -53,21 +80,13 @@ class BufferKeeper:
         _collector_seed, _data = data
         with self.store_lock:
             self.traj_queue.append(_data)
+            if len(self.traj_queue) < self.add_batch_size:
+                return True
+            trajectories = [self.traj_queue.popleft() for _ in range(self.add_batch_size)]
+        batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs), *trajectories)
+        with self._rw_lock.write():
+            self.buffer.add(batched)
         return True
-
-    def buffer_updating(self):
-        while True:
-            if self.is_done:
-                self.logger.info("Done signal received; finishing buffer updating.")
-                break
-            time.sleep(0.015)  # 15ms cadence; consume any ready chunk
-            with self.store_lock:
-                if len(self.traj_queue) < self.add_batch_size:
-                    continue
-                trajectories = [self.traj_queue.popleft() for _ in range(self.add_batch_size)]
-            batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs), *trajectories)
-            with self.buffer_lock:
-                self.buffer.add(batched)
 
     def buffer_sampling(self):
         while True:
@@ -75,7 +94,7 @@ class BufferKeeper:
                 self.logger.info("Done signal received; finishing buffer sampling.")
                 return
 
-            with self.buffer_lock:
+            with self._rw_lock.read():
                 can_sample = self.buffer.can_sample()
             if can_sample:
                 break
@@ -83,20 +102,20 @@ class BufferKeeper:
                 time.sleep(1)
 
         while True:
-            samples = []
-            for _ in range(self.num_samples_to_gpu):
-                if self.is_done:
-                    self.logger.info("Done signal received; finishing buffer sampling.")
-                    return
+            if self.is_done:
+                self.logger.info("Done signal received; finishing buffer sampling.")
+                return
 
-                with self.buffer_lock:
-                    sample = self.buffer.sample()
-                samples.append(sample)
-            with self.device_lock:
-                samples_on_gpu = jax.device_put(samples, device=self.gpu_device)
-            for sample_on_gpu in samples_on_gpu:
-                # Queue.put blocks when full
-                self._samples_on_gpu.put(sample_on_gpu)
+            with self._rw_lock.read():
+                sample = self.buffer.sample()
+            sample_on_gpu = jax.device_put(sample, device=self.gpu_device)
+            while True:
+                try:
+                    self._samples_on_gpu.put(sample_on_gpu, timeout=0.1)
+                    break
+                except Full:
+                    if self.is_done:
+                        return
 
     def get_samples(self, batch_size: int = 10) -> Generator:
         while True:
@@ -133,9 +152,8 @@ class Trainer(BufferKeeper):
         buffer,
         args_buffer,
         num_samples_on_gpu_cache,
-        num_samples_to_gpu,
     ):
-        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, num_samples_to_gpu)
+        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache)
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)
