@@ -48,15 +48,21 @@ class Controller:
 class CommandExecutor:
     """Execute worker commands through Ray actors or local thread workers."""
 
-    def __init__(self, max_workers: int = 4):
+    def __init__(self, max_workers: int = 1):
         if max_workers < 1:
             raise ValueError("max_workers must be >= 1")
-        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._max_workers = max_workers
+        self._executor: ThreadPoolExecutor | None = None
         self._is_shutdown = False
 
     def _ensure_active(self) -> None:
         if self._is_shutdown:
             raise RuntimeError("CommandExecutor is shut down")
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
+        return self._executor
 
     def submit(self, target: Any, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Submit a method call and return a pending handle."""
@@ -64,7 +70,7 @@ class CommandExecutor:
         method = getattr(target, method_name)
         if hasattr(method, "remote"):
             return method.remote(*args, **kwargs)
-        return self._executor.submit(method, *args, **kwargs)
+        return self._get_executor().submit(method, *args, **kwargs)
 
     def call(self, target: Any, method_name: str, *args: Any, **kwargs: Any) -> Any:
         """Execute a method call and return the resolved result."""
@@ -94,4 +100,5 @@ class CommandExecutor:
         if self._is_shutdown:
             return
         self._is_shutdown = True
-        self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+        if self._executor is not None:
+            self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
