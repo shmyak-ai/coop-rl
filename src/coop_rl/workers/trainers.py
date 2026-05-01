@@ -22,6 +22,7 @@ import time
 from collections.abc import Generator
 from queue import Empty, Full, Queue
 
+import flax
 import jax
 import numpy as np
 import orbax.checkpoint as ocp
@@ -188,9 +189,14 @@ class Trainer(BufferKeeper):
         )
         self.is_done = False
         self._closed = False
+        total_params = sum(x.size for x in jax.tree_util.tree_leaves(self.flax_state.params))
+        flat_params = flax.traverse_util.flatten_dict(self.flax_state.params, sep="/")
+        shape_str = "\n".join(f"  {k}: {v.shape}" for k, v in flat_params.items())
         self.logger.info(
             "Trainer initialized (steps=%d, buffer_size=%d).", self.steps, self.buffer_size
         )
+        self.logger.info("Network parameter shapes:\n%s", shape_str)
+        self.logger.info("Total trainable parameters: %d.", total_params)
 
     def training(self):
         try:
