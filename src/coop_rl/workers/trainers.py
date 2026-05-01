@@ -72,6 +72,9 @@ class BufferKeeper:
             raise RuntimeError("No GPU devices found. BufferKeeper requires at least one GPU.")
         self.gpu_device = gpu_devices[0]
         self.logger = logging.getLogger(__name__)
+        self._sample_steps = args_buffer.sample_batch_size * args_buffer.sample_sequence_length
+        self._steps_added = 0
+        self._steps_sampled = 0
         self.is_done = False
 
     def add_traj_seq(self, data):
@@ -87,6 +90,8 @@ class BufferKeeper:
         batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs), *trajectories)
         with self._rw_lock.write():
             self.buffer.add(batched)
+        traj_len = jax.tree_util.tree_leaves(trajectories[0])[0].shape[0]
+        self._steps_added += self.add_batch_size * traj_len
         return True
 
     def buffer_sampling(self):
@@ -109,6 +114,7 @@ class BufferKeeper:
 
             with self._rw_lock.read():
                 sample = self.buffer.sample()
+            self._steps_sampled += self._sample_steps
             sample_on_gpu = jax.device_put(sample, device=self.gpu_device)
             while True:
                 try:
@@ -207,7 +213,6 @@ class Trainer(BufferKeeper):
     def _training(self):
         self.command_executor.resolve(self.futures)
         samples_generator = self.get_samples(self.training_iterations_per_step)
-        transitions_processed = 0
         step_start = time.monotonic()
         for step in itertools.count(start=1, step=1):
             try:
@@ -216,9 +221,6 @@ class Trainer(BufferKeeper):
                 self.logger.info("Done signal received; finishing training.")
                 return
             self.flax_state, info = self.update_epoch_fn(self.flax_state, samples)
-            transitions_processed += (
-                self.batch_size * self.batch_length * self.training_iterations_per_step
-            )
 
             if step == self.steps:
                 self.is_done = True
@@ -230,7 +232,8 @@ class Trainer(BufferKeeper):
                 elapsed = time.monotonic() - step_start
                 queue_fill = self._samples_on_gpu.qsize() / max(self._samples_on_gpu.maxsize, 1)
                 self.logger.info(f"Training step: {self.flax_state.step}.")
-                self.logger.info(f"Transitions sampled from restart: {transitions_processed}.")
+                self.logger.info(f"Steps added to buffer: {self._steps_added}.")
+                self.logger.info(f"Steps sampled from buffer: {self._steps_sampled}.")
                 self.logger.info(
                     f"Last {self.summary_writing_period} steps: {elapsed:.1f}s  "
                     f"GPU queue fill: {queue_fill:.2f}"
