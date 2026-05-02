@@ -18,7 +18,7 @@ import numpy as np
 from ml_collections import config_dict
 
 from coop_rl.agents.dqn import (
-    get_select_action_fn,
+    get_select_action_batch_fn,
     get_update_epoch,
     get_update_step,
     restore_dqn_flax_state,
@@ -86,6 +86,7 @@ def get_config():
     config.args_env = args_env = ml_collections.ConfigDict()
     config.args_env.env_name = "ale_py:ALE/Breakout-v5"
     config.args_env.stack_size = 4  # >= 1, 1 - no stacking
+    config.args_env.num_envs = 16  # parallel envs per collector process
 
     config.buffer = buffer = BufferTrajectoryDQN
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
@@ -157,7 +158,7 @@ def get_config():
     config.args_collector.env = env
     config.args_collector.args_env = args_env
     config.args_collector.time_step_dtypes = time_step_dtypes
-    config.args_collector.get_select_action_fn = get_select_action_fn
+    config.args_collector.get_select_action_fn = get_select_action_batch_fn
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
     config.args_collector.args_get_select_action_fn.obs_preprocess_fn = (

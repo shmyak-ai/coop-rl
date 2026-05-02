@@ -52,6 +52,7 @@ class CollectorDQNUniform:
         self.command_executor = CommandExecutor(max_workers=1)
 
         self.env = env(**args_env)
+        self.num_envs = self.env.num_envs
 
         self.dtypes = time_step_dtypes()
 
@@ -68,15 +69,19 @@ class CollectorDQNUniform:
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
 
-        args_get_select_action_fn.apply_fn = flax_state.apply_fn 
+        args_get_select_action_fn.apply_fn = flax_state.apply_fn
         self.select_action = get_select_action_fn(**args_get_select_action_fn)
         self.obs = None
         self.episode_reward = {
-            "now": 0,
-            "last": 0,
+            "now": np.zeros(self.num_envs),
+            "last": 0.0,
         }
         self._closed = False
-        self.logger.info("CollectorDQNUniform initialized (seed=%d).", collectors_seed)
+        self.logger.info(
+            "CollectorDQNUniform initialized (seed=%d, num_envs=%d).",
+            collectors_seed,
+            self.num_envs,
+        )
 
     def warmup(self) -> None:
         """Trigger JIT compilation of select_action in the calling thread."""
@@ -84,7 +89,8 @@ class CollectorDQNUniform:
         self.select_action(self._rng, self.online_params[0], self.obs)
 
     def run_rollout(self) -> list[TimeStepDQN]:
-        trajectory_steps: list[TimeStepDQN] = []
+        """Return one TimeStepDQN trajectory per environment (100 steps each)."""
+        steps_per_env: list[list[TimeStepDQN]] = [[] for _ in range(self.num_envs)]
 
         for _ in range(100):
             self._rng, action_jnp = self.select_action(
@@ -92,28 +98,40 @@ class CollectorDQNUniform:
                 self._random.choice(self.online_params),
                 self.obs,
             )
-            action_np = np.asarray(action_jnp, dtype=self.dtypes.action).squeeze()
-            next_obs, reward, terminated, truncated, _info = self.env.step(action_np)
+            actions = np.asarray(action_jnp, dtype=self.dtypes.action)  # (num_envs,)
+            next_obs, rewards, terminated, truncated, _infos = self.env.step(actions)
 
-            trajectory_steps.append(
-                TimeStepDQN(
-                    obs=np.asarray(self.obs, dtype=self.dtypes.obs),
-                    action=np.asarray(action_np, dtype=self.dtypes.action),
-                    reward=np.asarray(reward, dtype=self.dtypes.reward),
-                    terminated=np.asarray(terminated, dtype=self.dtypes.terminated),
-                    truncated=np.asarray(truncated, dtype=self.dtypes.truncated),
+            for i in range(self.num_envs):
+                steps_per_env[i].append(
+                    TimeStepDQN(
+                        obs=np.asarray(self.obs[i], dtype=self.dtypes.obs),
+                        action=np.asarray(actions[i], dtype=self.dtypes.action),
+                        reward=np.asarray(rewards[i], dtype=self.dtypes.reward),
+                        terminated=np.asarray(terminated[i], dtype=self.dtypes.terminated),
+                        truncated=np.asarray(truncated[i], dtype=self.dtypes.truncated),
+                    )
                 )
-            )
-            self.episode_reward["now"] += reward
-
-            if terminated or truncated:
-                next_obs, _info = self.env.reset()
-                self.episode_reward["last"] = self.episode_reward["now"]
-                self.episode_reward["now"] = 0
+                self.episode_reward["now"][i] += rewards[i]
+                if terminated[i] or truncated[i]:
+                    self.episode_reward["last"] = float(self.episode_reward["now"][i])
+                    self.episode_reward["now"][i] = 0.0
 
             self.obs = next_obs
 
-        return trajectory_steps
+        return [
+            TimeStepDQN(
+                obs=np.stack([s.obs for s in env_steps], axis=0),
+                action=np.asarray([s.action for s in env_steps], dtype=self.dtypes.action),
+                reward=np.asarray([s.reward for s in env_steps], dtype=self.dtypes.reward),
+                terminated=np.asarray(
+                    [s.terminated for s in env_steps], dtype=self.dtypes.terminated
+                ),
+                truncated=np.asarray(
+                    [s.truncated for s in env_steps], dtype=self.dtypes.truncated
+                ),
+            )
+            for env_steps in steps_per_env
+        ]
 
     def collecting(self):
         try:
@@ -125,40 +143,23 @@ class CollectorDQNUniform:
         if self.obs is None:
             self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
-            trajectory_steps = self.run_rollout()
-            trajectory = TimeStepDQN(
-                obs=np.stack([step.obs for step in trajectory_steps], axis=0),
-                action=np.asarray(
-                    [step.action for step in trajectory_steps], dtype=self.dtypes.action
-                ),
-                reward=np.asarray(
-                    [step.reward for step in trajectory_steps], dtype=self.dtypes.reward
-                ),
-                terminated=np.asarray(
-                    [step.terminated for step in trajectory_steps], dtype=self.dtypes.terminated
-                ),
-                truncated=np.asarray(
-                    [step.truncated for step in trajectory_steps], dtype=self.dtypes.truncated
-                ),
-            )
+            trajectories = self.run_rollout()
 
-            while True:
+            for trajectory in trajectories:
                 training_done = self.command_executor.call(self.controller, "is_done")
                 if training_done:
                     self.logger.info("Done signal received; finishing.")
                     return
 
-                adding_traj_done = self.command_executor.call(
-                    self.trainer,
-                    "add_traj_seq",
-                    (
-                        self.collector_seed,
-                        trajectory,
-                    ),
-                )
-                if adding_traj_done:
-                    break
-                time.sleep(0.1)
+                while True:
+                    adding_traj_done = self.command_executor.call(
+                        self.trainer,
+                        "add_traj_seq",
+                        (self.collector_seed, trajectory),
+                    )
+                    if adding_traj_done:
+                        break
+                    time.sleep(0.1)
 
             parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:

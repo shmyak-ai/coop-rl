@@ -133,6 +133,21 @@ def get_select_action_fn(
     return select_action
 
 
+def get_select_action_batch_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    """Like get_select_action_fn but for a batch of N observations (num_envs, *obs_shape)."""
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    @jax.jit
+    def select_action_batch(key, params, observations):
+        key, policy_key = jax.random.split(key)
+        actor_policy = apply_fn(params, _preprocess(observations))
+        return key, actor_policy.sample(seed=policy_key)
+
+    return select_action_batch
+
+
 def get_update_step(
     *, apply_fn: ActorApply, gamma: float, huber_loss_parameter: float, max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,

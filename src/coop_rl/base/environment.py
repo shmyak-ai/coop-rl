@@ -1,3 +1,5 @@
+from functools import partial
+
 import gymnasium as gym
 import numpy as np
 from gymnasium import ObservationWrapper
@@ -62,51 +64,53 @@ class HandlerEnv:
         )
 
 
+def _make_atari_env(env_name, stack_size, kwargs):
+    """Module-level factory for VectorEnv (must be picklable)."""
+    env = gym.make(env_name, frameskip=1, repeat_action_probability=0, **kwargs)
+    env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=False)
+    if stack_size > 1:
+        env = FrameStackObservation(env, stack_size)
+        env = FirstDimToLast(env)
+    return env
+
+
 class HandlerEnvAtari:
-    def __init__(self, env_name, *args, stack_size=1, **kwargs):
-        self._env = HandlerEnvAtari.make_env(env_name, stack_size, *args, **kwargs)
+    """Atari env handler supporting 1 or more parallel environments.
 
-    def reset(self, *args, seed=None, **kwargs):
-        if seed is not None:
-            seed = int(seed)
-        observation, info = self._env.reset(*args, seed=seed, **kwargs)
-        return observation[:], info
+    When ``num_envs=1`` a ``SyncVectorEnv`` is used (no subprocess overhead).
+    When ``num_envs>1`` an ``AsyncVectorEnv`` is used (parallel subprocesses).
+    ``reset`` and ``step`` always return batched arrays of shape
+    ``(num_envs, *obs_shape)``.
+    """
 
-    def step(self, action, *args, **kwargs):
-        observation, reward, terminated, truncated, info = self._env.step(action, *args, **kwargs)
-        return observation[:], reward, terminated, truncated, info
+    def __init__(self, env_name, *, stack_size=1, num_envs=1, **kwargs):
+        factory = partial(_make_atari_env, env_name, stack_size, kwargs)
+        if num_envs > 1:
+            self._env = gym.vector.AsyncVectorEnv([factory] * num_envs)
+        else:
+            self._env = gym.vector.SyncVectorEnv([factory])
+        self.num_envs = num_envs
+
+    def reset(self, *, seed=None, **kwargs):
+        obs, info = self._env.reset(seed=seed)
+        return obs, info  # (num_envs, *obs_shape)
+
+    def step(self, actions):  # actions: (num_envs,)
+        obs, rewards, terminated, truncated, infos = self._env.step(actions)
+        return obs, rewards, terminated, truncated, infos
 
     @staticmethod
-    def make_env(env_name, stack_size, *args, **kwargs):
-        env = gym.make(env_name, *args, frameskip=1, repeat_action_probability=0, **kwargs)
-        env = AtariPreprocessing(
-            env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=False
-        )
-        if stack_size > 1:
-            env = FrameStackObservation(env, stack_size)
-            env = FirstDimToLast(env)
-        return env
+    def make_env(env_name, stack_size, **kwargs):
+        return _make_atari_env(env_name, stack_size, kwargs)
 
     @staticmethod
-    def check_env(env_name, stack_size, *args, **kwargs):
-        env = HandlerEnvAtari.make_env(env_name, stack_size, *args, **kwargs)
-        return (
-            env.observation_space.shape,
-            env.observation_space.dtype,
-            env.action_space.n,
-        )
-
-    @property
-    def action_space(self):
-        return self._env.action_space
-
-    @property
-    def observation_space(self):
-        return self._env.observation_space
-
-    @property
-    def reward_range(self):
-        return self._env.reward_range
+    def check_env(env_name, stack_size, num_envs=1, **kwargs):
+        env = _make_atari_env(env_name, stack_size, kwargs)
+        shape = env.observation_space.shape
+        dtype = env.observation_space.dtype
+        n_actions = env.action_space.n
+        env.close()
+        return shape, dtype, n_actions
 
     def close(self):
         self._env.close()
