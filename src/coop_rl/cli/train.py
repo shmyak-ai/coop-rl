@@ -11,12 +11,7 @@ from coop_rl.runtime.training import TF_LOG_SUPPRESS_ENV_VARS, run_training
 def build_parser() -> argparse.ArgumentParser:
     """Create the CLI parser for distributed training."""
     parser = argparse.ArgumentParser(description="Cooperative reinforcement learning.")
-    parser.add_argument(
-        "--debug-ray",
-        action="store_true",
-        help="Ray debug environment activation.",
-    )
-    parser.add_argument("--debug-log", action="store_true", help="Enable debug logs.")
+    parser.add_argument("--config", required=True, type=str, choices=list_available_configs())
     parser.add_argument(
         "--backend",
         type=str,
@@ -24,7 +19,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["ray", "thread"],
         help="Execution backend: distributed Ray actors or local Python threads.",
     )
-    parser.add_argument("--config", required=True, type=str, choices=list_available_configs())
     parser.add_argument(
         "--workdir",
         type=str,
@@ -36,6 +30,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         help="The absolute path to the orbax checkpoint dir",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Activate debug environment.",
+    )
     return parser
 
 
@@ -46,9 +45,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     """Run distributed training from the command line."""
+    args = parse_args(argv)
     for key, value in TF_LOG_SUPPRESS_ENV_VARS.items():
         os.environ.setdefault(key, value)
-    run_training(parse_args(argv))
+    if args.debug:
+        from coop_rl.runtime.training import RUNTIME_ENV_DEBUG
+
+        for key, value in RUNTIME_ENV_DEBUG["env_vars"].items():
+            os.environ.setdefault(key, value)
+    run_training(args)
 
 
 if __name__ == "__main__":

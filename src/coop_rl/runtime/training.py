@@ -137,7 +137,7 @@ def run_training(args: Namespace) -> None:
     logger = logging.getLogger(__name__)
 
     conf = load_runtime_config(args.config, args.orbax_checkpoint_dir)
-    logger = configure_logging(conf, args.debug_log)
+    logger = configure_logging(conf, args.debug)
     conf.workdir = create_workdir(args.workdir)
     logger.info("Workdir is %s.", conf.workdir)
 
@@ -147,7 +147,7 @@ def run_training(args: Namespace) -> None:
 
     import ray
 
-    initialize_ray(args.debug_ray)
+    initialize_ray(args.debug)
 
     try:
         conf = decorate_remote_components(conf)
