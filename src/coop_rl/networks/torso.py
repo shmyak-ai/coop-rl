@@ -3,6 +3,7 @@
 #
 
 from collections.abc import Sequence
+from typing import Any
 
 import chex
 import numpy as np
@@ -21,6 +22,7 @@ class MLPTorso(nn.Module):
     use_layer_norm: bool = False
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     activate_final: bool = True
+    dtype: Any = None
 
     @nn.compact
     def __call__(self, observation: chex.Array) -> chex.Array:
@@ -28,7 +30,8 @@ class MLPTorso(nn.Module):
         x = observation
         for layer_size in self.layer_sizes:
             x = nn.Dense(
-                layer_size, kernel_init=self.kernel_init, use_bias=not self.use_layer_norm
+                layer_size, kernel_init=self.kernel_init, use_bias=not self.use_layer_norm,
+                dtype=self.dtype,
             )(x)
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
@@ -74,6 +77,7 @@ class CNNTorso(nn.Module):
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     channel_first: bool = False
     hidden_sizes: Sequence[int] = (256,)
+    dtype: Any = None
 
     @nn.compact
     def __call__(self, observation: chex.Array) -> chex.Array:
@@ -87,7 +91,8 @@ class CNNTorso(nn.Module):
             self.channel_sizes, self.kernel_sizes, self.strides, strict=True
         ):
             x = nn.Conv(
-                channel, (kernel, kernel), (stride, stride), use_bias=not self.use_layer_norm
+                channel, (kernel, kernel), (stride, stride), use_bias=not self.use_layer_norm,
+                dtype=self.dtype,
             )(x)
             if self.use_layer_norm:
                 x = nn.LayerNorm(reduction_axes=(-3, -2, -1))(x)
@@ -103,6 +108,7 @@ class CNNTorso(nn.Module):
             use_layer_norm=self.use_layer_norm,
             kernel_init=self.kernel_init,
             activate_final=True,
+            dtype=self.dtype,
         )(x)
 
         return x

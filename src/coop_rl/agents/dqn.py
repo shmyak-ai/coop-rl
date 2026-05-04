@@ -170,7 +170,7 @@ def get_update_step(
             r_t = jnp.clip(transitions.reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
             a_tm1 = transitions.action
 
-            # Compute Q-learning loss.
+            # Compute Q-learning loss. Cast to float32 so gradients are in float32.
             batch_loss = q_learning(
                 q_tm1,
                 a_tm1,
@@ -178,7 +178,7 @@ def get_update_step(
                 d_t,
                 q_t,
                 huber_loss_parameter,
-            )
+            ).astype(jnp.float32)
 
             loss_info = {
                 "loss": batch_loss,

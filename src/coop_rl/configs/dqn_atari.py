@@ -70,10 +70,12 @@ def get_config():
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.hidden_sizes = [128, 128]
     config.args_network.args_torso.use_layer_norm = False
+    config.args_network.args_torso.dtype = jnp.bfloat16
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
     config.args_network.args_action_head.action_dim = actions_shape
     config.args_network.args_action_head.epsilon = 0.1
+    config.args_network.args_action_head.dtype = jnp.bfloat16
     config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = make_optimizer
@@ -137,7 +139,7 @@ def get_config():
     )
     config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
     config.args_trainer.args_get_update_step.obs_preprocess_fn = (
-        lambda x: x.astype(jnp.float32) / 255.0
+        lambda x: x.astype(jnp.bfloat16) / jnp.bfloat16(255.0)
     )
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
