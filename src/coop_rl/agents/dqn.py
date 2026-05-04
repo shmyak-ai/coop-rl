@@ -161,8 +161,8 @@ def get_update_step(
             target_q_params: FrozenDict,
             transitions: Transition,
         ) -> tuple[jnp.ndarray, dict]:
-            q_tm1 = apply_fn(q_params, transitions.obs).preferences
-            q_t = apply_fn(target_q_params, transitions.next_obs).preferences
+            q_tm1 = apply_fn(q_params, transitions.obs).preferences.astype(jnp.float32)
+            q_t = apply_fn(target_q_params, transitions.next_obs).preferences.astype(jnp.float32)
 
             # Cast and clip rewards.
             discount = 1.0 - transitions.done.astype(jnp.float32)
