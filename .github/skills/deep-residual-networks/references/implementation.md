@@ -23,15 +23,16 @@ def _residual_block(
     width: int,
     normalize,
     activation,
+    dtype: Any,
 ) -> chex.Array:
     """One residual block = 4 Dense layers + additive skip.
 
-    Paper: each block has 4 (Dense → LayerNorm → Swish) units plus x + identity.
-    Bias is absorbed by LayerNorm so use_bias=False when normalizing.
+    LayerNorm is always applied (not optional). Bias is redundant after
+    LayerNorm so use_bias=False. dtype is propagated to all Dense layers.
     """
     identity = x
     for _ in range(4):
-        x = nn.Dense(width, kernel_init=_lecun_uniform, use_bias=False)(x)
+        x = nn.Dense(width, kernel_init=_lecun_uniform, use_bias=False, dtype=dtype)(x)
         x = normalize(x)
         x = activation(x)
     return x + identity
@@ -42,42 +43,38 @@ class DeepResidualTorso(nn.Module):
 
     Scales to 1000+ layers by combining:
       - Residual connections (additive skip after every 4 Dense layers)
-      - LayerNorm after every Dense layer
+      - LayerNorm after every Dense layer (always on, essential for stability)
       - Swish activation (Ramachandran et al. 2018)
       - LeCun uniform initialization
 
     Args:
-        width:          Hidden size of every Dense layer. 256 is parameter-efficient;
-                        width 4096 (depth 4) is outperformed by width 256 (depth 8).
-        depth:          Total number of Dense layers, must be a multiple of 4.
-                        Depth 16–64 is a good starting range for most RL tasks.
-                        Critic can go to 1024; keep actor ≤ 512.
-        activation:     Activation function name. 'swish' strongly preferred; 'relu'
-                        degrades scaling (confirmed by ablation in the paper).
-        use_layer_norm: Must be True for stable deep training. Setting False collapses
-                        performance at depth ≥ 16 (confirmed by ablation).
+        width:      Hidden size of every Dense layer.
+        depth:      Total Dense layers, must be a multiple of 4.
+        activation: Activation function name. 'swish' strongly preferred.
+        dtype:      Dtype for Dense layers (e.g. jnp.bfloat16). Propagated
+                    to all Dense layers including inside residual blocks.
     """
 
     width: int = 256
     depth: int = 16
     activation: str = "swish"
-    use_layer_norm: bool = True
+    dtype: Any = None
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
         assert self.depth % 4 == 0, f"depth must be a multiple of 4, got {self.depth}"
 
-        normalize = nn.LayerNorm() if self.use_layer_norm else (lambda v: v)
+        normalize = nn.LayerNorm()
         act = parse_activation_fn(self.activation)
 
         # Input projection
-        x = nn.Dense(self.width, kernel_init=_lecun_uniform, use_bias=False)(x)
+        x = nn.Dense(self.width, kernel_init=_lecun_uniform, use_bias=False, dtype=self.dtype)(x)
         x = normalize(x)
         x = act(x)
 
         # Residual blocks (depth // 4 blocks × 4 layers each = depth total layers)
         for _ in range(self.depth // 4):
-            x = _residual_block(x, self.width, normalize, act)
+            x = _residual_block(x, self.width, normalize, act, self.dtype)
 
         return x
 ```
@@ -104,7 +101,7 @@ To integrate, replace `nn.LayerNorm()` with a custom normalization that applies 
 
 | Component removed | Effect |
 |------------------|--------|
-| LayerNorm         | Severe degradation at all depths ≥ 16 |
+| LayerNorm         | Severe degradation at all depths ≥ 16 (not configurable — always on) |
 | Swish → ReLU      | Significant degradation, especially at depth ≥ 32 |
 | Residual connections | Training diverges at depth ≥ 16 |
 

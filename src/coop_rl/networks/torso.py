@@ -8,10 +8,23 @@ from typing import Any
 import chex
 import numpy as np
 from flax import linen as nn
-from flax.linen.initializers import Initializer, orthogonal
+from flax.linen.initializers import Initializer, orthogonal, variance_scaling
 
 from coop_rl.networks.layers import NoisyLinear
 from coop_rl.networks.utils import parse_activation_fn
+
+# LeCun uniform initializer used in Wang et al. (NeurIPS 2025) deep residual networks.
+_lecun_uniform = variance_scaling(1 / 3, "fan_in", "uniform")
+
+
+def _residual_block(x: chex.Array, width: int, normalize, activation, dtype: Any) -> chex.Array:
+    """One residual block: 4× (Dense → LayerNorm → activation) + additive skip."""
+    identity = x
+    for _ in range(4):
+        x = nn.Dense(width, kernel_init=_lecun_uniform, use_bias=False, dtype=dtype)(x)
+        x = normalize(x)
+        x = activation(x)
+    return x + identity
 
 
 class MLPTorso(nn.Module):
@@ -64,10 +77,43 @@ class NoisyMLPTorso(nn.Module):
         return x
 
 
+class DeepResidualTorso(nn.Module):
+    """Deep residual MLP torso from Wang et al. (NeurIPS 2025 Best Paper).
+
+    Scales to 1000+ layers via residual connections + LayerNorm + Swish.
+    All three components are jointly essential for stable depth scaling.
+
+    Args:
+        width: Hidden size of every Dense layer.
+        depth: Total Dense layers; must be a multiple of 4 (4 per residual block).
+        activation: Activation name. 'swish' strongly preferred; 'relu' degrades at depth.
+        dtype: Dtype for Dense layers (e.g. jnp.bfloat16).
+    """
+
+    width: int = 256
+    depth: int = 16
+    activation: str = "swish"
+    dtype: Any = None
+
+    @nn.compact
+    def __call__(self, x: chex.Array) -> chex.Array:
+        assert self.depth % 4 == 0, f"depth must be a multiple of 4, got {self.depth}"
+        normalize = nn.LayerNorm()
+        act = parse_activation_fn(self.activation)
+
+        x = nn.Dense(self.width, kernel_init=_lecun_uniform, use_bias=False, dtype=self.dtype)(x)
+        x = normalize(x)
+        x = act(x)
+
+        for _ in range(self.depth // 4):
+            x = _residual_block(x, self.width, normalize, act, self.dtype)
+
+        return x
+
+
 class CNNTorso(nn.Module):
     """2D CNN torso. Expects input of shape (batch, height, width, channels).
-    After this torso, the output is flattened and put through an MLP of
-    hidden_sizes."""
+    After flattening, feeds into a DeepResidualTorso (Wang et al., NeurIPS 2025)."""
 
     channel_sizes: Sequence[int]
     kernel_sizes: Sequence[int]
@@ -76,17 +122,16 @@ class CNNTorso(nn.Module):
     use_layer_norm: bool = False
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     channel_first: bool = False
-    hidden_sizes: Sequence[int] = (256,)
     dtype: Any = None
+    width: int = 256
+    depth: int = 16
 
     @nn.compact
     def __call__(self, observation: chex.Array) -> chex.Array:
         """Forward pass."""
         x = observation
-        # Move channels to the last dimension if they are first
         if self.channel_first:
             x = x.transpose((0, 2, 3, 1))
-        # Convolutional layers
         for channel, kernel, stride in zip(
             self.channel_sizes, self.kernel_sizes, self.strides, strict=True
         ):
@@ -98,16 +143,12 @@ class CNNTorso(nn.Module):
                 x = nn.LayerNorm(reduction_axes=(-3, -2, -1))(x)
             x = parse_activation_fn(self.activation)(x)
 
-        # Flatten
         x = x.reshape(*observation.shape[:-3], -1)
 
-        # MLP layers
-        x = MLPTorso(
-            layer_sizes=self.hidden_sizes,
-            activation=self.activation,
-            use_layer_norm=self.use_layer_norm,
-            kernel_init=self.kernel_init,
-            activate_final=True,
+        x = DeepResidualTorso(
+            width=self.width,
+            depth=self.depth,
+            activation="swish",
             dtype=self.dtype,
         )(x)
 

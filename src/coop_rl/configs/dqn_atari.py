@@ -68,9 +68,10 @@ def get_config():
     config.args_network.args_torso.channel_sizes = [32, 64, 64]
     config.args_network.args_torso.kernel_sizes = [8, 4, 3]
     config.args_network.args_torso.strides = [4, 2, 1]
-    config.args_network.args_torso.hidden_sizes = [128, 128]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.args_torso.dtype = jnp.bfloat16
+    config.args_network.args_torso.depth = 16   # Wang et al. (NeurIPS 2025)
+    config.args_network.args_torso.width = 256
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
     config.args_network.args_action_head.action_dim = actions_shape

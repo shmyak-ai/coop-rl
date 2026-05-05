@@ -45,10 +45,10 @@ from flax.linen.initializers import variance_scaling
 
 _lecun_uniform = variance_scaling(1 / 3, "fan_in", "uniform")
 
-def _residual_block(x, width, normalize, activation):
+def _residual_block(x, width, normalize, activation, dtype):
     identity = x
     for _ in range(4):
-        x = nn.Dense(width, kernel_init=_lecun_uniform, use_bias=False)(x)
+        x = nn.Dense(width, kernel_init=_lecun_uniform, use_bias=False, dtype=dtype)(x)
         x = normalize(x)
         x = activation(x)
     return x + identity
@@ -58,24 +58,24 @@ class DeepResidualTorso(nn.Module):
     """Deep residual MLP torso from Wang et al. (NeurIPS 2025).
 
     depth must be a multiple of 4. Each residual block = 4 layers.
-    Recommended: activation='swish', use_layer_norm=True (both essential).
+    LayerNorm is always applied (essential for stability).
     """
     width: int = 256
     depth: int = 16          # total layers; must be multiple of 4
     activation: str = "swish"
-    use_layer_norm: bool = True
+    dtype: Any = None        # propagated to all Dense layers
 
     @nn.compact
     def __call__(self, x: chex.Array) -> chex.Array:
-        normalize = nn.LayerNorm() if self.use_layer_norm else (lambda v: v)
-        activation = parse_activation_fn(self.activation)
+        normalize = nn.LayerNorm()
+        act = parse_activation_fn(self.activation)
 
-        x = nn.Dense(self.width, kernel_init=_lecun_uniform, use_bias=False)(x)
+        x = nn.Dense(self.width, kernel_init=_lecun_uniform, use_bias=False, dtype=self.dtype)(x)
         x = normalize(x)
-        x = activation(x)
+        x = act(x)
 
         for _ in range(self.depth // 4):
-            x = _residual_block(x, self.width, normalize, activation)
+            x = _residual_block(x, self.width, normalize, act, self.dtype)
 
         return x
 ```
@@ -91,7 +91,8 @@ from coop_rl.networks.torso import DeepResidualTorso
 | Setting | Recommended value |
 |---------|-----------------|
 | `activation` | `"swish"` (ReLU degrades at depth, per ablation) |
-| `use_layer_norm` | `True` (essential — removing it collapses performance) |
+| LayerNorm | Always on — not configurable, essential |
+| `dtype` | Match the rest of the network (e.g. `jnp.bfloat16`) |
 | `width` | 256 (default; increasing width helps less than increasing depth) |
 | Starting depth | 8 or 16 — step up to 32, 64, 128 |
 | Actor depth limit | ≤ 512 (actor loss can explode at 1024 layers) |
@@ -105,7 +106,7 @@ config.network.torso = "DeepResidualTorso"
 config.network.width = 256
 config.network.depth = 64       # start here for most tasks
 config.network.activation = "swish"
-config.network.use_layer_norm = True
+config.network.dtype = jnp.bfloat16
 ```
 
 ### 4. Scale batch size with depth
