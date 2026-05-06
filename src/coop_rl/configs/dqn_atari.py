@@ -161,6 +161,7 @@ def get_config():
     config.args_collector.env = env
     config.args_collector.args_env = args_env
     config.args_collector.time_step_dtypes = time_step_dtypes
+    config.args_collector.steps_per_rollout = 200
     config.args_collector.get_select_action_fn = get_select_action_batch_fn
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None

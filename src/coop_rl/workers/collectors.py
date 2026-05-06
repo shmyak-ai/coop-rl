@@ -40,6 +40,7 @@ class CollectorDQNUniform:
         env,
         args_env,
         time_step_dtypes,
+        steps_per_rollout,
         get_select_action_fn,
         args_get_select_action_fn,
     ):
@@ -55,6 +56,7 @@ class CollectorDQNUniform:
         self.num_envs = self.env.num_envs
 
         self.dtypes = time_step_dtypes()
+        self.steps_per_rollout = steps_per_rollout
 
         self.collector_seed = collectors_seed
         self._random = random.Random(collectors_seed)
@@ -93,7 +95,7 @@ class CollectorDQNUniform:
         """Return one TimeStepDQN trajectory per environment (100 steps each)."""
         steps_per_env: list[list[TimeStepDQN]] = [[] for _ in range(self.num_envs)]
 
-        for _ in range(100):
+        for _ in range(self.steps_per_rollout):
             self._rng, action_jnp = self.select_action(
                 self._rng,
                 self._random.choice(self.online_params),
@@ -160,7 +162,7 @@ class CollectorDQNUniform:
                     )
                     if adding_traj_done:
                         break
-                    time.sleep(0.1)
+                    time.sleep(0.01)
 
             parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:
