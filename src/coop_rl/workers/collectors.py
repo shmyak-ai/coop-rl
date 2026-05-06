@@ -74,7 +74,7 @@ class CollectorDQNUniform:
         self.obs = None
         self.episode_reward = {
             "now": np.zeros(self.num_envs),
-            "last": 0.0,
+            "last": np.full(self.num_envs, np.nan),
         }
         self._closed = False
         self.logger.info(
@@ -113,7 +113,7 @@ class CollectorDQNUniform:
                 )
                 self.episode_reward["now"][i] += rewards[i]
                 if terminated[i] or truncated[i]:
-                    self.episode_reward["last"] = float(self.episode_reward["now"][i])
+                    self.episode_reward["last"][i] = float(self.episode_reward["now"][i])
                     self.episode_reward["now"][i] = 0.0
 
             self.obs = next_obs
@@ -170,7 +170,11 @@ class CollectorDQNUniform:
             )
 
             if rollouts_count % self.report_period == 0:
-                self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
+                rewards = self.episode_reward["last"]
+                self.logger.info(
+                    "Last episode rewards per env: %s.",
+                    [f"{r:.4f}" if not np.isnan(r) else "n/a" for r in rewards],
+                )
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""
@@ -219,7 +223,7 @@ class CollectorDreamerUniform:
         self.action["reset"] = np.ones(1, bool)
         self.episode_reward = {
             "now": 0,
-            "last": 0,
+            "last": float("nan"),
         }
         gpu_devices = jax.devices("gpu")
         if not gpu_devices:
@@ -274,7 +278,7 @@ class CollectorDreamerUniform:
             self.episode_reward["now"] += obs["reward"][0]
 
             if obs["is_terminal"][0] or obs["is_last"][0]:
-                self.episode_reward["last"] = self.episode_reward["now"]
+                self.episode_reward["last"] = float(self.episode_reward["now"])
                 self.episode_reward["now"] = 0
 
         trajectory = {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
@@ -322,7 +326,11 @@ class CollectorDreamerUniform:
             )
 
             if rollouts_count % self.report_period == 0:
-                self.logger.info(f"Last episode reward: {self.episode_reward['last']:.4f}.")
+                r = self.episode_reward["last"]
+                self.logger.info(
+                    "Last episode reward: %s.",
+                    f"{r:.4f}" if not np.isnan(r) else "n/a",
+                )
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""

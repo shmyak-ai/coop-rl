@@ -70,7 +70,7 @@ def get_config():
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.args_torso.dtype = jnp.bfloat16
-    config.args_network.args_torso.depth = 16   # Wang et al. (NeurIPS 2025)
+    config.args_network.args_torso.depth = 32   # Wang et al. (NeurIPS 2025)
     config.args_network.args_torso.width = 256
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
@@ -155,7 +155,7 @@ def get_config():
     config.args_collector.trainer = None
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
-    config.args_collector.report_period = 100  # per rollouts sampled
+    config.args_collector.report_period = 30  # per rollouts sampled
     config.args_collector.state_recover = state_recover
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
