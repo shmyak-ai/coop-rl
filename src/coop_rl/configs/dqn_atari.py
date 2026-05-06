@@ -51,7 +51,7 @@ def get_config():
     steps = 1000000
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 6
+    config.num_collectors = num_collectors = 10
     config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -128,7 +128,7 @@ def get_config():
     config.args_trainer.training_iterations_per_step = 1  # this is a "sample"
     config.args_trainer.summary_writing_period = 100  # logging and reporting
     config.args_trainer.save_period = 10000  # orbax checkpointing
-    config.args_trainer.synchronization_period = 100  # send params to control actor
+    config.args_trainer.synchronization_period = 10  # send params to control actor
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step

@@ -76,6 +76,7 @@ class CollectorDQNUniform:
             "now": np.zeros(self.num_envs),
             "last": np.full(self.num_envs, np.nan),
         }
+        self._params_received = 0
         self._closed = False
         self.logger.info(
             "CollectorDQNUniform initialized (seed=%d, num_envs=%d).",
@@ -164,6 +165,7 @@ class CollectorDQNUniform:
             parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:
                 self.online_params.append(parameters)
+                self._params_received += 1
             self.futures_parameters = self.command_executor.submit(
                 self.controller,
                 "get_parameters",
@@ -175,6 +177,11 @@ class CollectorDQNUniform:
                     "Last episode rewards per env: %s.",
                     [f"{r:.4f}" if not np.isnan(r) else "n/a" for r in rewards],
                 )
+                self.logger.info(
+                    "Parameter updates received since last report: %d.",
+                    self._params_received,
+                )
+                self._params_received = 0
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""
