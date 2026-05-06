@@ -66,6 +66,9 @@ class HandlerEnv:
 
 def _make_atari_env(env_name, stack_size, kwargs):
     """Module-level factory for VectorEnv (must be picklable)."""
+    import ale_py
+
+    ale_py.ALEInterface.setLoggerMode(ale_py.LoggerMode.Error)
     env = gym.make(env_name, frameskip=1, repeat_action_probability=0, **kwargs)
     env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=False)
     if stack_size > 1:
@@ -86,7 +89,7 @@ class HandlerEnvAtari:
     def __init__(self, env_name, *, stack_size=1, num_envs=1, **kwargs):
         factory = partial(_make_atari_env, env_name, stack_size, kwargs)
         if num_envs > 1:
-            self._env = gym.vector.AsyncVectorEnv([factory] * num_envs)
+            self._env = gym.vector.AsyncVectorEnv([factory] * num_envs, context="forkserver")
         else:
             self._env = gym.vector.SyncVectorEnv([factory])
         self.num_envs = num_envs

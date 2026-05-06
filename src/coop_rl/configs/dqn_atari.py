@@ -125,7 +125,7 @@ def get_config():
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
     config.args_trainer.steps = steps
-    config.args_trainer.training_iterations_per_step = 8  # this is a "sample"
+    config.args_trainer.training_iterations_per_step = 1  # this is a "sample"
     config.args_trainer.summary_writing_period = 100  # logging and reporting
     config.args_trainer.save_period = 10000  # orbax checkpointing
     config.args_trainer.synchronization_period = 100  # send params to control actor
