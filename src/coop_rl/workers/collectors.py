@@ -74,10 +74,8 @@ class CollectorDQNUniform:
         args_get_select_action_fn.apply_fn = flax_state.apply_fn
         self.select_action = get_select_action_fn(**args_get_select_action_fn)
         self.obs = None
-        self.episode_reward = {
-            "now": np.zeros(self.num_envs),
-            "last": np.full(self.num_envs, np.nan),
-        }
+        self.episode_reward_now = np.zeros(self.num_envs)
+        self.completed_returns: deque[float] = deque(maxlen=100)
         self._params_received = 0
         self._closed = False
         self.logger.info(
@@ -114,10 +112,19 @@ class CollectorDQNUniform:
                         truncated=np.asarray(truncated[i], dtype=self.dtypes.truncated),
                     )
                 )
-                self.episode_reward["now"][i] += rewards[i]
+                self.episode_reward_now[i] += rewards[i]
                 if terminated[i] or truncated[i]:
-                    self.episode_reward["last"][i] = float(self.episode_reward["now"][i])
-                    self.episode_reward["now"][i] = 0.0
+                    self.completed_returns.append(float(self.episode_reward_now[i]))
+                    self.episode_reward_now[i] = 0.0
+
+            # AutoresetMode.DISABLED: env.step() returns the terminal obs but
+            # never resets sub-environments internally. Reset done envs here so
+            # self.obs always holds a valid initial observation for the next step.
+            done = np.logical_or(terminated, truncated)
+            if done.any():
+                reset_obs, _ = self.env.reset(options={"reset_mask": done})
+                next_obs = next_obs.copy()
+                next_obs[done] = reset_obs[done]
 
             self.obs = next_obs
 
@@ -174,13 +181,11 @@ class CollectorDQNUniform:
             )
 
             if rollouts_count % self.report_period == 0:
-                rewards = self.episode_reward["last"]
+                mean_r = np.mean(self.completed_returns) if self.completed_returns else float("nan")
                 self.logger.info(
-                    "Last episode rewards per env: %s.",
-                    [f"{r:.1f}" if not np.isnan(r) else "n/a" for r in rewards],
-                )
-                self.logger.info(
-                    "Parameter updates received since last report: %d.",
+                    "Mean episode return (last %d): %.2f. Param updates: %d.",
+                    len(self.completed_returns),
+                    mean_r,
                     self._params_received,
                 )
                 self._params_received = 0

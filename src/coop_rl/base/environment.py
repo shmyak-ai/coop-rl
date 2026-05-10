@@ -88,10 +88,17 @@ class HandlerEnvAtari:
 
     def __init__(self, env_name, *, stack_size=1, num_envs=1, **kwargs):
         factory = partial(_make_atari_env, env_name, stack_size, kwargs)
+        # DISABLED mode: env.step() never auto-resets sub-environments.
+        # The collector resets done envs explicitly, preventing cross-episode
+        # transitions from being stored in the replay buffer (which happens
+        # with the default NextStep mode).
+        autoreset_mode = gym.vector.AutoresetMode.DISABLED
         if num_envs > 1:
-            self._env = gym.vector.AsyncVectorEnv([factory] * num_envs, context="forkserver")
+            self._env = gym.vector.AsyncVectorEnv(
+                [factory] * num_envs, context="forkserver", autoreset_mode=autoreset_mode
+            )
         else:
-            self._env = gym.vector.SyncVectorEnv([factory])
+            self._env = gym.vector.SyncVectorEnv([factory], autoreset_mode=autoreset_mode)
         self.num_envs = num_envs
 
     def reset(self, *, seed=None, **kwargs):
