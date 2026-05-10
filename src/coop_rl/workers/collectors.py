@@ -177,7 +177,7 @@ class CollectorDQNUniform:
                 rewards = self.episode_reward["last"]
                 self.logger.info(
                     "Last episode rewards per env: %s.",
-                    [f"{r:.4f}" if not np.isnan(r) else "n/a" for r in rewards],
+                    [f"{r:.1f}" if not np.isnan(r) else "n/a" for r in rewards],
                 )
                 self.logger.info(
                     "Parameter updates received since last report: %d.",
