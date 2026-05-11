@@ -102,7 +102,7 @@ class HandlerEnvAtari:
         self.num_envs = num_envs
 
     def reset(self, *, seed=None, **kwargs):
-        obs, info = self._env.reset(seed=seed)
+        obs, info = self._env.reset(seed=seed, **kwargs)
         return obs, info  # (num_envs, *obs_shape)
 
     def step(self, actions):  # actions: (num_envs,)

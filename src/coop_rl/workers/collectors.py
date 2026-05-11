@@ -181,13 +181,13 @@ class CollectorDQNUniform:
             )
 
             if rollouts_count % self.report_period == 0:
-                mean_r = np.mean(self.completed_returns) if self.completed_returns else float("nan")
                 self.logger.info(
-                    "Mean episode return (last %d): %.2f. Param updates: %d.",
+                    "Episode returns (%d): %s. Param updates: %d.",
                     len(self.completed_returns),
-                    mean_r,
+                    [f"{r:.1f}" for r in self.completed_returns],
                     self._params_received,
                 )
+                self.completed_returns.clear()
                 self._params_received = 0
 
     def close(self) -> None:

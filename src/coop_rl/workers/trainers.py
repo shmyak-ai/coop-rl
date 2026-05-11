@@ -103,7 +103,7 @@ class BufferKeeper:
             with self._rw_lock.read():
                 can_sample = self.buffer.can_sample()
             if can_sample:
-                self.logger.info("Start buffer sampling.")
+                self.logger.info("Sampler: start buffer sampling.")
                 break
             else:
                 time.sleep(1)

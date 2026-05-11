@@ -51,7 +51,7 @@ def get_config():
     steps = 1000000
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 10
+    config.num_collectors = num_collectors = 8
     config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -89,7 +89,7 @@ def get_config():
     config.args_env = args_env = ml_collections.ConfigDict()
     config.args_env.env_name = "ale_py:ALE/Breakout-v5"
     config.args_env.stack_size = 4  # >= 1, 1 - no stacking
-    config.args_env.num_envs = 16  # parallel envs per collector process
+    config.args_env.num_envs = 32  # parallel envs per collector process
 
     config.buffer = buffer = BufferTrajectoryDQN
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
@@ -155,7 +155,7 @@ def get_config():
     config.args_collector.trainer = None
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
-    config.args_collector.report_period = 30  # per rollouts sampled
+    config.args_collector.report_period = 10  # per rollouts sampled
     config.args_collector.state_recover = state_recover
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env
