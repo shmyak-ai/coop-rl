@@ -31,6 +31,8 @@ dependencies = [
     "ray[default]",
     "elements>=3.19.1",
     "einops",
+    "ruff",
+    "jupyter_client",
 ]
 
 [project.scripts]
