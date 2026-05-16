@@ -112,38 +112,25 @@ The canonical RL update loop uses nested functions with JAX transformations:
 
 ```python
 def get_update_step(config: ConfigDict, apply_fn) -> Callable:
-    """Factory returning an update function."""
-    def _update_step(
-        train_state: TrainState,
-        batch: dict,
-    ) -> tuple[TrainState, dict]:
-        """Single gradient step."""
+    def _update_step(train_state: TrainState, batch: dict) -> tuple[TrainState, dict]:
         def _loss_fn(params: FrozenDict) -> tuple[chex.Array, dict]:
-            # Compute predictions and targets
             pred = apply_fn({"params": params}, batch["observations"])
             loss = jnp.mean((pred - batch["targets"]) ** 2)
             return loss, {"loss": loss}
 
-        # Compute gradients
         grads, info = jax.grad(_loss_fn, has_aux=True)(train_state.params)
-        
-        # Soft update target network
         target_params = optax.incremental_update(
             train_state.params, train_state.target_params, train_state.tau
         )
-        
-        # Apply optimizer
         updates, new_opt_state = optimizer.update(grads, train_state.opt_state)
         new_params = optax.apply_updates(train_state.params, updates)
-        
-        new_train_state = train_state.replace(
+        return train_state.replace(
             params=new_params,
             target_params=target_params,
             opt_state=new_opt_state,
             step=train_state.step + 1,
-        )
-        return new_train_state, info
-    
+        ), info
+
     return _update_step
 ```
 
@@ -202,6 +189,22 @@ Use `jax.tree.map()` for applying functions across nested structures:
 def reset_optimizer_state(train_state: TrainState) -> TrainState:
     zero_opt_state = jax.tree.map(jnp.zeros_like, train_state.opt_state)
     return train_state.replace(opt_state=zero_opt_state)
+```
+
+### Array Operations
+Prefer `einops` and `jnp.einsum` over manual indexing or reshaping for new array code:
+
+```python
+from einops import rearrange, reduce, repeat
+
+# ✓ Prefer
+x = rearrange(x, "b t h w c -> b (t h w) c")
+x = reduce(x, "b t c -> b c", "mean")
+out = jnp.einsum("bti,bj->btij", queries, keys)
+
+# ✗ Avoid
+x = x.reshape(x.shape[0], -1, x.shape[-1])
+out = queries[:, :, :, None] * keys[:, None, :, :]
 ```
 
 ---
@@ -302,20 +305,6 @@ new_state = train_state.replace(params=new_params, step=train_state.step + 1)
 train_state.params = new_params
 ```
 
-### Ring Buffer Data
-Use Flashbax for trajectories:
-
-```python
-from coop_rl.buffers import BufferTrajectory
-
-trajectory = BufferTrajectory(
-    observations=obs_batch,
-    actions=action_batch,
-    rewards=reward_batch,
-    dones=done_batch,
-)
-```
-
 ---
 
 ## 10. Testing & Validation
@@ -341,68 +330,3 @@ Rely on type annotations; ensure files pass Pylance/pyright checks.
 | Manual gradient accumulation | Use `jax.grad(..., has_aux=True)` | Cleaner, prevents bugs |
 | Mutating parameters | Use `FrozenDict` and `.replace()` | JAX requirement; prevents bugs |
 
----
-
-## Example: Complete DQN Update
-
-```python
-from typing import NamedTuple, TypeAlias
-import jax
-import jax.numpy as jnp
-from flax import linen as nn
-import optax
-from ml_collections import ConfigDict
-
-# Type definitions
-QApply: TypeAlias = Callable[[FrozenDict, chex.Array], chex.Array]
-
-class DQNTrainState(NamedTuple):
-    params: FrozenDict
-    target_params: FrozenDict
-    opt_state: Any
-    step: int
-
-def get_dqn_update(config: ConfigDict, q_apply: QApply) -> Callable:
-    """Create a DQN update function."""
-    def _update(
-        train_state: DQNTrainState,
-        batch: dict,
-        key: chex.PRNGKey,
-    ) -> tuple[DQNTrainState, dict]:
-        def _loss_fn(params: FrozenDict) -> tuple[chex.Array, dict]:
-            # Compute TD error
-            q_pred = q_apply(params, batch["obs"])
-            q_target = q_apply(train_state.target_params, batch["next_obs"])
-            
-            td_target = batch["reward"] + config.gamma * jnp.max(q_target, axis=-1) * (1 - batch["done"])
-            td_error = q_pred - td_target[(..., None)]
-            loss = jnp.mean(td_error ** 2)
-            
-            return loss, {"loss": loss, "td_error": jnp.mean(jnp.abs(td_error))}
-        
-        grads, info = jax.grad(_loss_fn, has_aux=True)(train_state.params)
-        updates, opt_state = optimizer.update(grads, train_state.opt_state)
-        params = optax.apply_updates(train_state.params, updates)
-        
-        target_params = optax.incremental_update(
-            params, train_state.target_params, config.tau
-        )
-        
-        new_state = train_state.replace(
-            params=params,
-            target_params=target_params,
-            opt_state=opt_state,
-            step=train_state.step + 1,
-        )
-        return new_state, info
-    
-    return _update
-```
-
----
-
-## See Also
-- [base_types.py](../../coop_rl/base_types.py) – Core type definitions
-- [agents/dqn.py](../../coop_rl/agents/dqn.py) – Reference DQN implementation
-- [agents/dreamer.py](../../coop_rl/agents/dreamer.py) – Complex world model implementation
-- [workers/collectors.py](../../coop_rl/workers/collectors.py) – Distributed collection pattern
