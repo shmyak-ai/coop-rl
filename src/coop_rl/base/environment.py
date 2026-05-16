@@ -27,7 +27,12 @@ class FirstDimToLast(ObservationWrapper):
         super().__init__(env)
         new_obs_space_shape = list(env.observation_space.shape[1:])
         new_obs_space_shape.append(env.observation_space.shape[0])
-        self.observation_space = Box(shape=tuple(new_obs_space_shape), low=-np.inf, high=np.inf)
+        orig = env.observation_space
+        self.observation_space = Box(
+            low=np.moveaxis(orig.low, 0, -1),
+            high=np.moveaxis(orig.high, 0, -1),
+            dtype=orig.dtype,
+        )
 
     def observation(self, obs):
         transposed_obs = np.moveaxis(obs, 0, -1)

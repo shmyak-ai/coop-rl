@@ -30,3 +30,4 @@ applyTo: "**/*.py"
 
 - Verify no protected-file edits were introduced unintentionally.
 - If a protected-file update is needed, ask for approval and explain why.
+- Run `pyright <changed files>` and fix any type errors before reporting the task done.
