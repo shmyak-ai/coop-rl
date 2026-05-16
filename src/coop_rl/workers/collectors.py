@@ -90,8 +90,12 @@ class CollectorDQNUniform:
         self.select_action(self._rng, self.online_params[0], self.obs)
 
     def run_rollout(self) -> list[TimeStepDQN]:
-        """Return one TimeStepDQN trajectory per environment (100 steps each)."""
-        steps_per_env: list[list[TimeStepDQN]] = [[] for _ in range(self.num_envs)]
+        """Return one TimeStepDQN trajectory per environment."""
+        obs_list: list[np.ndarray] = []
+        action_list: list[np.ndarray] = []
+        reward_list: list[np.ndarray] = []
+        terminated_list: list[np.ndarray] = []
+        truncated_list: list[np.ndarray] = []
 
         for _ in range(self.steps_per_rollout):
             self._rng, action_jnp = self.select_action(
@@ -102,25 +106,21 @@ class CollectorDQNUniform:
             actions = np.asarray(action_jnp, dtype=self.dtypes.action)  # (num_envs,)
             next_obs, rewards, terminated, truncated, _infos = self.env.step(actions)
 
-            for i in range(self.num_envs):
-                steps_per_env[i].append(
-                    TimeStepDQN(
-                        obs=np.asarray(self.obs[i], dtype=self.dtypes.obs),
-                        action=np.asarray(actions[i], dtype=self.dtypes.action),
-                        reward=np.asarray(rewards[i], dtype=self.dtypes.reward),
-                        terminated=np.asarray(terminated[i], dtype=self.dtypes.terminated),
-                        truncated=np.asarray(truncated[i], dtype=self.dtypes.truncated),
-                    )
-                )
-                self.episode_reward_now[i] += rewards[i]
-                if terminated[i] or truncated[i]:
-                    self.completed_returns.append(float(self.episode_reward_now[i]))
-                    self.episode_reward_now[i] = 0.0
+            obs_list.append(self.obs)
+            action_list.append(actions)
+            reward_list.append(rewards)
+            terminated_list.append(terminated)
+            truncated_list.append(truncated)
+
+            self.episode_reward_now += rewards
+            done = np.logical_or(terminated, truncated)
+            for i in np.where(done)[0]:
+                self.completed_returns.append(float(self.episode_reward_now[i]))
+                self.episode_reward_now[i] = 0.0
 
             # AutoresetMode.DISABLED: env.step() returns the terminal obs but
             # never resets sub-environments internally. Reset done envs here so
             # self.obs always holds a valid initial observation for the next step.
-            done = np.logical_or(terminated, truncated)
             if done.any():
                 reset_obs, _ = self.env.reset(options={"reset_mask": done})
                 next_obs = next_obs.copy()
@@ -128,19 +128,22 @@ class CollectorDQNUniform:
 
             self.obs = next_obs
 
+        # Stack to (T, N, ...) then swap to (N, T, ...) for per-env trajectories.
+        obs_arr = np.stack(obs_list).astype(self.dtypes.obs).swapaxes(0, 1)
+        act_arr = np.stack(action_list).astype(self.dtypes.action).swapaxes(0, 1)
+        rew_arr = np.stack(reward_list).astype(self.dtypes.reward).swapaxes(0, 1)
+        ter_arr = np.stack(terminated_list).astype(self.dtypes.terminated).swapaxes(0, 1)
+        tru_arr = np.stack(truncated_list).astype(self.dtypes.truncated).swapaxes(0, 1)
+
         return [
             TimeStepDQN(
-                obs=np.stack([s.obs for s in env_steps], axis=0),
-                action=np.asarray([s.action for s in env_steps], dtype=self.dtypes.action),
-                reward=np.asarray([s.reward for s in env_steps], dtype=self.dtypes.reward),
-                terminated=np.asarray(
-                    [s.terminated for s in env_steps], dtype=self.dtypes.terminated
-                ),
-                truncated=np.asarray(
-                    [s.truncated for s in env_steps], dtype=self.dtypes.truncated
-                ),
+                obs=obs_arr[i],
+                action=act_arr[i],
+                reward=rew_arr[i],
+                terminated=ter_arr[i],
+                truncated=tru_arr[i],
             )
-            for env_steps in steps_per_env
+            for i in range(self.num_envs)
         ]
 
     def collecting(self):
