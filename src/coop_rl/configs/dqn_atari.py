@@ -51,7 +51,7 @@ def get_config():
     steps = 1000000
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 8
+    config.num_collectors = 8
     config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype

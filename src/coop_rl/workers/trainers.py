@@ -114,10 +114,10 @@ class BufferKeeper:
                     if self.is_done:
                         return
 
-    def get_samples(self, batch_size: int = 10) -> Generator:
+    def get_samples(self, train_iterations_num: int = 10) -> Generator:
         while True:
             batch = []
-            while len(batch) < batch_size:
+            while len(batch) < train_iterations_num:
                 try:
                     batch.append(self._samples_on_gpu.get(timeout=0.05))
                 except Empty:
