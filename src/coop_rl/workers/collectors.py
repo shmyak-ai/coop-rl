@@ -135,16 +135,13 @@ class CollectorDQNUniform:
         ter_arr = np.stack(terminated_list).astype(self.dtypes.terminated).swapaxes(0, 1)
         tru_arr = np.stack(truncated_list).astype(self.dtypes.truncated).swapaxes(0, 1)
 
-        return [
-            TimeStepDQN(
-                obs=obs_arr[i],
-                action=act_arr[i],
-                reward=rew_arr[i],
-                terminated=ter_arr[i],
-                truncated=tru_arr[i],
-            )
-            for i in range(self.num_envs)
-        ]
+        return TimeStepDQN(
+            obs=obs_arr,
+            action=act_arr,
+            reward=rew_arr,
+            terminated=ter_arr,
+            truncated=tru_arr,
+        )
 
     def collecting(self):
         try:
@@ -158,21 +155,20 @@ class CollectorDQNUniform:
         for rollouts_count in itertools.count(start=1, step=1):
             trajectories = self.run_rollout()
 
-            for trajectory in trajectories:
-                training_done = self.command_executor.call(self.controller, "is_done")
-                if training_done:
-                    self.logger.info("Done signal received; finishing.")
-                    return
+            training_done = self.command_executor.call(self.controller, "is_done")
+            if training_done:
+                self.logger.info("Done signal received; finishing.")
+                return
 
-                while True:
-                    adding_traj_done = self.command_executor.call(
-                        self.trainer,
-                        "add_traj_seq",
-                        (self.collector_seed, trajectory),
-                    )
-                    if adding_traj_done:
-                        break
-                    time.sleep(0.01)
+            while True:
+                adding_traj_done = self.command_executor.call(
+                    self.trainer,
+                    "add_traj_seq",
+                    (self.collector_seed, trajectories),
+                )
+                if adding_traj_done:
+                    break
+                time.sleep(0.01)
 
             parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:

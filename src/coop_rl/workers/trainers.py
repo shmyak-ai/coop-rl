@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import collections
 import contextlib
 import itertools
 import logging
@@ -24,7 +23,6 @@ from queue import Empty, Full, Queue
 
 import flax
 import jax
-import numpy as np
 import orbax.checkpoint as ocp
 
 from coop_rl.workers.auxiliary import CommandExecutor
@@ -61,11 +59,7 @@ class _RWLock:
 class BufferKeeper:
     def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache):
         self.buffer = buffer(**args_buffer)
-        self.add_batch_size = args_buffer.add_batch_size
-        # Flat deque of individual trajectories; bounded to 8 rounds of all collectors.
-        self.traj_queue = collections.deque(maxlen=self.add_batch_size * 8)
         self._rw_lock = _RWLock()
-        self.store_lock = threading.Lock()
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
         gpu_devices = jax.devices("gpu")
         if not gpu_devices:
@@ -81,17 +75,12 @@ class BufferKeeper:
         # a trick to start a ray thread, is it necessary?
         if data == 1:
             return
-        _collector_seed, _data = data
-        with self.store_lock:
-            self.traj_queue.append(_data)
-            if len(self.traj_queue) < self.add_batch_size:
-                return True
-            trajectories = [self.traj_queue.popleft() for _ in range(self.add_batch_size)]
-        batched = jax.tree_util.tree_map(lambda *xs: np.stack(xs), *trajectories)
+        _collector_seed, batch = data
         with self._rw_lock.write():
-            self.buffer.add(batched)
-        traj_len = jax.tree_util.tree_leaves(trajectories[0])[0].shape[0]
-        self._steps_added += self.add_batch_size * traj_len
+            self.buffer.add(batch)
+        leaves = jax.tree_util.tree_leaves(batch)
+        n, traj_len = leaves[0].shape[0], leaves[0].shape[1]
+        self._steps_added += n * traj_len
         return True
 
     def buffer_sampling(self):

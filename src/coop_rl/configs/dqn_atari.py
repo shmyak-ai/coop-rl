@@ -94,7 +94,7 @@ def get_config():
     config.buffer = buffer = BufferTrajectoryDQN
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
-    config.args_buffer.add_batch_size = num_collectors
+    config.args_buffer.add_batch_size = config.args_env.num_envs
     config.args_buffer.sample_batch_size = 256
     config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
     config.args_buffer.period = 1
