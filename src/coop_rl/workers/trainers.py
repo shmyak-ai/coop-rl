@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import contextlib
+import gc
 import itertools
 import logging
 import os
@@ -24,6 +25,7 @@ from queue import Empty, Full, Queue
 import flax
 import jax
 import orbax.checkpoint as ocp
+import psutil
 
 from coop_rl.workers.auxiliary import CommandExecutor
 
@@ -32,8 +34,8 @@ class _RWLock:
     """Readers-writer lock: concurrent reads, exclusive writes."""
 
     def __init__(self):
-        self._mutex = threading.Lock()      # protects _readers count
-        self._write_lock = threading.Lock() # held exclusively by a writer
+        self._mutex = threading.Lock()  # protects _readers count
+        self._write_lock = threading.Lock()  # held exclusively by a writer
         self._readers = 0
 
     @contextlib.contextmanager
@@ -228,6 +230,9 @@ class Trainer(BufferKeeper):
                     f"Last {self.summary_writing_period} steps: {elapsed:.1f}s  "
                     f"GPU queue fill: {queue_fill:.2f}"
                 )
+                rss_main = psutil.Process().memory_info().rss / 2**30
+                self.logger.info(f"Memory RSS — main process: {rss_main:.1f} GiB.")
+                _ = gc.collect()
                 step_start = time.monotonic()
 
             if step % self.synchronization_period == 0:

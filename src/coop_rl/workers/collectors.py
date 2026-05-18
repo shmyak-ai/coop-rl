@@ -129,7 +129,9 @@ class CollectorDQNUniform:
             self.obs = next_obs
 
         # Stack to (T, N, ...) then swap to (N, T, ...) for per-env trajectories.
-        obs_arr = np.stack(obs_list).astype(self.dtypes.obs).swapaxes(0, 1)
+        obs_arr = np.stack(obs_list)
+        del obs_list
+        obs_arr = obs_arr.astype(self.dtypes.obs).swapaxes(0, 1)
         act_arr = np.stack(action_list).astype(self.dtypes.action).swapaxes(0, 1)
         rew_arr = np.stack(reward_list).astype(self.dtypes.reward).swapaxes(0, 1)
         ter_arr = np.stack(terminated_list).astype(self.dtypes.terminated).swapaxes(0, 1)
@@ -169,6 +171,7 @@ class CollectorDQNUniform:
                 if adding_traj_done:
                     break
                 time.sleep(0.01)
+            del trajectories
 
             parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:

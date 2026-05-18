@@ -23,10 +23,18 @@ RUNTIME_ENV_CPU = {
     }
 }
 
+# Enables async memory-transfer/compute overlap and prioritises critical-path GPU
+# streams. Applicable to single-GPU workloads; harmless if unused by a kernel.
+_XLA_GPU_PERF_FLAGS = (
+    "--xla_gpu_enable_latency_hiding_scheduler=true "
+    "--xla_gpu_enable_highest_priority_async_stream=true"
+)
+
 RUNTIME_ENV_GPU = {
     "env_vars": {
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
         "RAY_DEDUP_LOGS": "0",
+        "XLA_FLAGS": _XLA_GPU_PERF_FLAGS,
         **TF_LOG_SUPPRESS_ENV_VARS,
     }
 }
@@ -38,7 +46,7 @@ RUNTIME_ENV_GPU = {
 RUNTIME_ENV_COLLECTOR = {
     "env_vars": {
         **RUNTIME_ENV_GPU["env_vars"],
-        "XLA_FLAGS": "--xla_gpu_autotune_level=0",
+        "XLA_FLAGS": "--xla_gpu_autotune_level=0 " + _XLA_GPU_PERF_FLAGS,
     }
 }
 
