@@ -2,8 +2,9 @@
 # from Stoix https://github.com/EdanToledo/Stoix
 #
 
+from typing import Any
+
 import chex
-import distrax
 import jax
 import jax.numpy as jnp
 import rlax
@@ -36,8 +37,8 @@ def ppo_penalty_loss(
     b_pi_log_prob_t: chex.Array,
     gae_t: chex.Array,
     beta: float,
-    pi: distrax.DistributionLike,
-    b_pi: distrax.DistributionLike,
+    pi: Any,
+    b_pi: Any,
 ) -> tuple[chex.Array, chex.Array]:
     ratio = jnp.exp(pi_log_prob_t - b_pi_log_prob_t)
     kl_div = b_pi.kl_divergence(pi).mean()
@@ -97,9 +98,7 @@ def categorical_double_q_learning(
     target = jax.vmap(rlax.categorical_l2_project)(target_z, p_target_z, q_atoms_tm1)
     # Compute loss (i.e. temporal difference error).
     logit_qa_tm1 = q_logits_tm1[batch_indices, a_tm1]
-    td_error = distrax.Categorical(probs=target).cross_entropy(
-        distrax.Categorical(logits=logit_qa_tm1)
-    )
+    td_error = -jnp.sum(target * jax.nn.log_softmax(logit_qa_tm1, axis=-1), axis=-1)
 
     return td_error
 
@@ -183,7 +182,7 @@ def categorical_td_learning(
     # Project using the Cramer distance and maybe stop gradient flow to targets.
     target = jax.vmap(rlax.categorical_l2_project)(target_z, v_t_probs, v_atoms_tm1)
 
-    td_error = distrax.Categorical(probs=target).cross_entropy(distrax.Categorical(logits=v_logits_tm1))
+    td_error = -jnp.sum(target * jax.nn.log_softmax(v_logits_tm1, axis=-1), axis=-1)
 
     return jnp.mean(td_error)
 

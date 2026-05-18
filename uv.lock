@@ -619,7 +619,6 @@ dependencies = [
     { name = "brax" },
     { name = "chex" },
     { name = "clu" },
-    { name = "distrax" },
     { name = "einops" },
     { name = "elements" },
     { name = "flashbax" },
@@ -640,7 +639,6 @@ dependencies = [
     { name = "ruff" },
     { name = "seaborn" },
     { name = "tensorboard" },
-    { name = "tensorflow-probability" },
 ]
 
 [package.metadata]
@@ -648,7 +646,6 @@ requires-dist = [
     { name = "brax", specifier = ">=0.9.0" },
     { name = "chex" },
     { name = "clu" },
-    { name = "distrax" },
     { name = "einops" },
     { name = "elements", specifier = ">=3.19.1" },
     { name = "flashbax" },
@@ -670,7 +667,6 @@ requires-dist = [
     { name = "ruff" },
     { name = "seaborn" },
     { name = "tensorboard" },
-    { name = "tensorflow-probability" },
 ]
 
 [[package]]
@@ -3968,23 +3964,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/48/a9/fc520ea91ab1f3ba51cbf3fe24f2b6364ed3b49046969e0868d46d6da372/tensorboardx-2.6.5.tar.gz", hash = "sha256:ca176db3997ee8c07d2eb77381225956a3fd1c10c91beafab1f17069adc47017", size = 4770195, upload-time = "2026-04-03T15:40:23.803Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/87/0f/69fbab4c30b2f3a76e6de67585ea72a8eccf381751f5c0046b966fde9658/tensorboardx-2.6.5-py3-none-any.whl", hash = "sha256:c10b891d00af306537cb8b58a039b2ba41571f0da06f433a41c4ca8d6abe1373", size = 87510, upload-time = "2026-04-03T15:40:22.111Z" },
-]
-
-[[package]]
-name = "tensorflow-probability"
-version = "0.25.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "absl-py" },
-    { name = "cloudpickle" },
-    { name = "decorator" },
-    { name = "dm-tree" },
-    { name = "gast" },
-    { name = "numpy" },
-    { name = "six" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/b6/e116761ceeb880b7ad4c6a7e1203538754dd7dda42538f08d6daaf8dfa4d/tensorflow_probability-0.25.0-py2.py3-none-any.whl", hash = "sha256:f3f4d6431656c0122906888afe1b67b4400e82bd7f254b45b92e6c5b84ea8e3e", size = 6979403, upload-time = "2024-11-08T16:25:57.238Z" },
 ]
 
 [[package]]
