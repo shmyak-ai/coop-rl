@@ -17,7 +17,7 @@ dependencies = [
     "ipykernel",
     "ipywidgets",
     "tensorboard",
-    "tensorflow-probability[tf]",
+    "tensorflow-probability",
     "jax[cuda12]",
     "optax",
     "chex",

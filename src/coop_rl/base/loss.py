@@ -7,10 +7,6 @@ import distrax
 import jax
 import jax.numpy as jnp
 import rlax
-import tensorflow_probability.substrates.jax as tfp
-from tensorflow_probability.substrates.jax.distributions import Distribution
-
-tfd = tfp.distributions
 
 # These losses are generally taken from rlax but edited to explicitly take in a batch of data.
 # This is because the original rlax losses are not batched and are meant to be used with vmap,
@@ -40,8 +36,8 @@ def ppo_penalty_loss(
     b_pi_log_prob_t: chex.Array,
     gae_t: chex.Array,
     beta: float,
-    pi: Distribution,
-    b_pi: Distribution,
+    pi: distrax.DistributionLike,
+    b_pi: distrax.DistributionLike,
 ) -> tuple[chex.Array, chex.Array]:
     ratio = jnp.exp(pi_log_prob_t - b_pi_log_prob_t)
     kl_div = b_pi.kl_divergence(pi).mean()
@@ -187,7 +183,7 @@ def categorical_td_learning(
     # Project using the Cramer distance and maybe stop gradient flow to targets.
     target = jax.vmap(rlax.categorical_l2_project)(target_z, v_t_probs, v_atoms_tm1)
 
-    td_error = tfd.Categorical(probs=target).cross_entropy(tfd.Categorical(logits=v_logits_tm1))
+    td_error = distrax.Categorical(probs=target).cross_entropy(distrax.Categorical(logits=v_logits_tm1))
 
     return jnp.mean(td_error)
 

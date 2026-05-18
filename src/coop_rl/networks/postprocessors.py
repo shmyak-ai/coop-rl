@@ -7,15 +7,15 @@ from functools import partial
 from typing import Any
 
 import chex
+import distrax
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
-from tensorflow_probability.substrates.jax.distributions import Distribution
 
 # Different to bijectors, postprocessors simply wrap the sample and mode methods of a distribution.
 
 
-class PostProcessedDistribution(Distribution):
+class PostProcessedDistribution:
     """A distribution that applies a postprocessing function to the samples and mode.
 
     This is useful for transforming the output of a distribution to a different space, such as
@@ -26,7 +26,7 @@ class PostProcessedDistribution(Distribution):
     distribution should be transformed using a bijector, not a postprocessor."""
 
     def __init__(
-        self, distribution: Distribution, postprocessor: Callable[[chex.Array], chex.Array]
+        self, distribution: distrax.DistributionLike, postprocessor: Callable[[chex.Array], chex.Array]
     ):
         self.distribution = distribution
         self.postprocessor = postprocessor
@@ -70,7 +70,7 @@ class ScalePostProcessor(nn.Module):
     scale_fn: Callable[[chex.Array, float, float], chex.Array]
 
     @nn.compact
-    def __call__(self, distribution: Distribution) -> Distribution:
+    def __call__(self, distribution: distrax.DistributionLike) -> PostProcessedDistribution:
         post_processor = partial(
             self.scale_fn, minimum=self.minimum, maximum=self.maximum
         )  # type: ignore

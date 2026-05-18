@@ -10,25 +10,14 @@ import distrax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import tensorflow_probability.substrates.jax as tfp
 from flax import linen as nn
 from flax.linen.initializers import Initializer, lecun_normal, orthogonal
-from tensorflow_probability.substrates.jax.distributions import (
-    Categorical,
-    Deterministic,
-    Independent,
-    MultivariateNormalDiag,
-    Normal,
-    TransformedDistribution,
-)
 
 from coop_rl.networks.distributions import (
     AffineTanhTransformedDistribution,
     ClippedBeta,
-    DiscreteValuedTfpDistribution,
+    DiscreteValuedDistribution,
 )
-
-tfb = tfp.bijectors
 
 
 class CategoricalHead(nn.Module):
@@ -36,13 +25,13 @@ class CategoricalHead(nn.Module):
     kernel_init: Initializer = orthogonal(0.01)
 
     @nn.compact
-    def __call__(self, embedding: chex.Array) -> Categorical:
+    def __call__(self, embedding: chex.Array) -> distrax.Categorical:
         logits = nn.Dense(np.prod(self.action_dim), kernel_init=self.kernel_init)(embedding)
 
         if not isinstance(self.action_dim, int):
             logits = logits.reshape(self.action_dim)
 
-        return Categorical(logits=logits)
+        return distrax.Categorical(logits=logits)
 
 
 class NormalAffineTanhDistributionHead(nn.Module):
@@ -54,16 +43,16 @@ class NormalAffineTanhDistributionHead(nn.Module):
     kernel_init: Initializer = orthogonal(0.01)
 
     @nn.compact
-    def __call__(self, embedding: chex.Array) -> Independent:
+    def __call__(self, embedding: chex.Array) -> distrax.Independent:
 
         loc = nn.Dense(self.action_dim, kernel_init=self.kernel_init)(embedding)
         scale = (
             jax.nn.softplus(nn.Dense(self.action_dim, kernel_init=self.kernel_init)(embedding))
             + self.min_scale
         )
-        distribution = Normal(loc=loc, scale=scale)
+        distribution = distrax.Normal(loc=loc, scale=scale)
 
-        return Independent(
+        return distrax.Independent(
             AffineTanhTransformedDistribution(distribution, self.minimum, self.maximum),
             reinterpreted_batch_ndims=1,
         )
@@ -77,7 +66,7 @@ class BetaDistributionHead(nn.Module):
     kernel_init: Initializer = orthogonal(0.01)
 
     @nn.compact
-    def __call__(self, embedding: chex.Array) -> Independent:
+    def __call__(self, embedding: chex.Array) -> distrax.Independent:
 
         # Use alpha and beta >= 1 according to [Chou et. al, 2017]
         alpha = (
@@ -90,13 +79,11 @@ class BetaDistributionHead(nn.Module):
         # [minimum, maximum].
         scale = self.maximum - self.minimum
         shift = self.minimum
-        affine_bijector = tfb.Chain([tfb.Shift(shift), tfb.Scale(scale)])
+        affine_bijector = distrax.ScalarAffine(shift=shift, scale=scale)
 
-        transformed_distribution = TransformedDistribution(
-            ClippedBeta(alpha, beta), bijector=affine_bijector
-        )
+        transformed_distribution = distrax.Transformed(ClippedBeta(alpha, beta), affine_bijector)
 
-        return Independent(
+        return distrax.Independent(
             transformed_distribution,
             reinterpreted_batch_ndims=1,
         )
@@ -115,7 +102,7 @@ class MultivariateNormalDiagHead(nn.Module):
         scale = jax.nn.softplus(nn.Dense(self.action_dim, kernel_init=self.kernel_init)(embedding))
         scale *= self.init_scale / jax.nn.softplus(0.0)
         scale += self.min_scale
-        return MultivariateNormalDiag(loc=loc, scale_diag=scale)
+        return distrax.MultivariateNormalDiag(loc=loc, scale_diag=scale)
 
 
 class DeterministicHead(nn.Module):
@@ -127,7 +114,7 @@ class DeterministicHead(nn.Module):
 
         x = nn.Dense(self.action_dim, kernel_init=self.kernel_init)(embedding)
 
-        return Deterministic(x)
+        return distrax.Deterministic(x)
 
 
 class ScalarCriticHead(nn.Module):
@@ -164,7 +151,7 @@ class CategoricalCriticHead(nn.Module):
 class DiscreteValuedTfpHead(nn.Module):
     """Represents a parameterized discrete valued distribution.
 
-    The returned distribution is essentially a `tfd.Categorical` that knows its
+    The returned distribution is essentially a `Categorical` that knows its
     support and thus can compute the mean value.
     If vmin and vmax have shape S, this will store the category values as a
     Tensor of shape (S*, num_atoms).
@@ -197,10 +184,10 @@ class DiscreteValuedTfpHead(nn.Module):
         self._logits_size = np.prod(self._logits_shape)
         self._net = nn.Dense(self._logits_size, kernel_init=self.kernel_init)
 
-    def __call__(self, inputs: chex.Array) -> distrax.DistributionLike:
+    def __call__(self, inputs: chex.Array) -> DiscreteValuedDistribution:
         logits = self._net(inputs)
         logits = logits.reshape(logits.shape[:-1] + self._logits_shape)
-        return DiscreteValuedTfpDistribution(values=self._values, logits=logits)
+        return DiscreteValuedDistribution(values=self._values, logits=logits)
 
 
 class DiscreteQNetworkHead(nn.Module):

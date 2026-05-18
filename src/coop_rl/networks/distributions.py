@@ -2,34 +2,24 @@
 # from Stoix https://github.com/EdanToledo/Stoix
 #
 
-from collections.abc import Sequence
 from typing import Any
 
 import chex
+import distrax
 import jax
 import jax.numpy as jnp
 import numpy as np
-import tensorflow_probability.substrates.jax as tfp
-from tensorflow_probability.substrates.jax.distributions import (
-    Beta,
-    Categorical,
-    Distribution,
-    TransformedDistribution,
-)
-
-tfb = tfp.bijectors
 
 
-class AffineTanhTransformedDistribution(TransformedDistribution):
+class AffineTanhTransformedDistribution(distrax.Transformed):
     """Distribution followed by tanh and then affine transformations."""
 
     def __init__(
         self,
-        distribution: Distribution,
+        distribution: distrax.DistributionLike,
         minimum: float,
         maximum: float,
         epsilon: float = 1e-3,
-        validate_args: bool = False,
     ) -> None:
         """Initialize the distribution with a tanh and affine bijector.
 
@@ -42,27 +32,24 @@ class AffineTanhTransformedDistribution(TransformedDistribution):
             outside the clipping range, i.e. on the interval
             [-inf, atanh(inverse_affine(minimum))] for log_prob_left and
             [atanh(inverse_affine(maximum)), inf] for log_prob_right.
-          validate_args: Passed to super class.
         """
         # Calculate scale and shift for the affine transformation to achieve the range
         # [minimum, maximum] after the tanh.
         scale = (maximum - minimum) / 2.0
         shift = (minimum + maximum) / 2.0
 
-        # Chain the bijectors
-        joint_bijector = tfb.Chain([tfb.Shift(shift), tfb.Scale(scale), tfb.Tanh()])
+        # Chain the bijectors: distrax.Chain applies last-to-first, so Tanh runs first.
+        joint_bijector = distrax.Chain([distrax.ScalarAffine(shift=shift, scale=scale), distrax.Tanh()])
 
-        super().__init__(
-            distribution=distribution, bijector=joint_bijector, validate_args=validate_args
-        )
+        super().__init__(distribution=distribution, bijector=joint_bijector)
 
         # Computes the log of the average probability distribution outside the
         # clipping range, i.e. on the interval [-inf, atanh(inverse_affine(minimum))] for
         # log_prob_left and [atanh(inverse_affine(maximum)), inf] for log_prob_right.
         self._min_threshold = minimum + epsilon
         self._max_threshold = maximum - epsilon
-        min_inverse_threshold = self.bijector.inverse(self._min_threshold)
-        max_inverse_threshold = self.bijector.inverse(self._max_threshold)
+        min_inverse_threshold = self.bijector.inverse(jnp.asarray(self._min_threshold))
+        max_inverse_threshold = self.bijector.inverse(jnp.asarray(self._max_threshold))
         # average(pdf) = p/epsilon
         # So log(average(pdf)) = log(p) - log(epsilon)
         log_epsilon = jnp.log(epsilon)
@@ -74,7 +61,7 @@ class AffineTanhTransformedDistribution(TransformedDistribution):
         )
 
     def log_prob(self, event: chex.Array) -> chex.Array:
-        # Without this clip there would be NaNs in the inner tf.where and that
+        # Without this clip there would be NaNs in the inner jnp.where and that
         # causes issues for some reasons.
         event = jnp.clip(event, self._min_threshold, self._max_threshold)
         return jnp.where(
@@ -88,42 +75,25 @@ class AffineTanhTransformedDistribution(TransformedDistribution):
 
     def entropy(self, seed: chex.PRNGKey = None) -> chex.Array:
         return self.distribution.entropy() + self.bijector.forward_log_det_jacobian(
-            self.distribution.sample(seed=seed), event_ndims=0
+            self.distribution.sample(seed=seed)
         )
 
-    @classmethod
-    def _parameter_properties(cls, dtype: Any | None, num_classes: Any = None) -> Any:
-        td_properties = super()._parameter_properties(dtype, num_classes=num_classes)
-        del td_properties["bijector"]
-        return td_properties
 
-
-class ClippedBeta(Beta):
+class ClippedBeta(distrax.Beta):
     """Beta distribution with clipped samples."""
 
-    def sample(
-        self,
-        sample_shape: Sequence[int] = (),
-        seed: chex.PRNGKey | None = None,
-        name: str = "sample",
-        **kwargs: Any,
-    ) -> chex.Array:
+    def _sample_n(self, key: chex.PRNGKey, n: int) -> chex.Array:
         _epsilon = 1e-7
-        # Call the original sample method
-        sample = super().sample(sample_shape, seed, name, **kwargs)
-        # Clip the sample to avoid being too close to 0 and 1
-        # This is important for numerical stability
-        clipped_sample = jnp.clip(sample, _epsilon, 1 - _epsilon)
-        return clipped_sample
+        samples = super()._sample_n(key, n)
+        return jnp.clip(samples, _epsilon, 1 - _epsilon)
 
 
-class DiscreteValuedTfpDistribution(Categorical):
-    """This is a generalization of a categorical distribution.
+class DiscreteValuedDistribution:
+    """Categorical distribution over a real-valued support.
 
-    The support for the DiscreteValued distribution can be any real valued range,
-    whereas the categorical distribution has support [0, n_categories - 1] or
-    [1, n_categories]. This generalization allows us to take the mean of the
-    distribution over its support.
+    The support can be any real valued range, whereas a standard Categorical
+    distribution has integer support [0, n_categories - 1]. This generalization
+    allows computing the mean and variance of the distribution over its support.
     """
 
     def __init__(
@@ -143,28 +113,16 @@ class DiscreteValuedTfpDistribution(Categorical):
             batch of independent distributions and the last dimension indexes into
             the classes.
           probs: An N-D Tensor, N >= 1, representing the probabilities of a set of
-            Categorical distributions. The first N - 1 dimensions index into a batch
-            of independent distributions and the last dimension represents a vector
-            of probabilities for each class. Only one of logits or probs should be
-            passed in.
+            Categorical distributions. Only one of logits or probs should be passed in.
           name: Name of the distribution object.
         """
-        parameters = dict(locals())
         self._values = np.asarray(values)
-        self._logits: chex.Array | None = None
-        self._probs: chex.Array | None = None
-
         if logits is not None:
-            logits = jnp.asarray(logits)
-            chex.assert_shape(logits, (..., *self._values.shape))
-
-        if probs is not None:
-            probs = jnp.asarray(probs)
-            chex.assert_shape(probs, (..., *self._values.shape))
-
-        super().__init__(logits=logits, probs=probs, name=name)
-
-        self._parameters = parameters
+            self._logits = jnp.asarray(logits)
+        elif probs is not None:
+            self._logits = jnp.log(jnp.asarray(probs))
+        else:
+            raise ValueError("One of logits or probs must be provided.")
 
     @property
     def values(self) -> chex.Array:
@@ -172,41 +130,23 @@ class DiscreteValuedTfpDistribution(Categorical):
 
     @property
     def logits(self) -> chex.Array:
-        if self._logits is None:
-            self._logits = jax.nn.log_softmax(self._probs)
         return self._logits
 
     @property
     def probs(self) -> chex.Array:
-        if self._probs is None:
-            self._probs = jax.nn.softmax(self._logits)
-        return self._probs
+        return jax.nn.softmax(self._logits)
 
-    @classmethod
-    def _parameter_properties(cls, dtype: np.dtype, num_classes: Any = None) -> Any:
-        return {
-            "values": tfp.util.ParameterProperties(
-                event_ndims=None, shape_fn=lambda shape: (num_classes,), specifies_shape=True
-            ),
-            "logits": tfp.util.ParameterProperties(event_ndims=1),
-            "probs": tfp.util.ParameterProperties(event_ndims=1, is_preferred=False),
-        }
-
-    def _sample_n(self, key: chex.PRNGKey, n: int) -> chex.Array:
-        indices = super()._sample_n(key=key, n=n)
-        return jnp.take_along_axis(self._values, indices, axis=-1)
+    def sample(self, seed: chex.PRNGKey, sample_shape: tuple[int, ...] = ()) -> chex.Array:
+        indices = jax.random.categorical(seed, self._logits)
+        return jnp.take(self._values, indices, axis=-1)
 
     def mean(self) -> chex.Array:
-        """Overrides the Categorical mean by incorporating category values."""
-        return jnp.sum(self.probs_parameter() * self._values, axis=-1)
+        return jnp.sum(self.probs * self._values, axis=-1)
 
     def variance(self) -> chex.Array:
-        """Overrides the Categorical variance by incorporating category values."""
         dist_squared = jnp.square(jnp.expand_dims(self.mean(), -1) - self._values)
-        return jnp.sum(self.probs_parameter() * dist_squared, axis=-1)
+        return jnp.sum(self.probs * dist_squared, axis=-1)
 
-    def _event_shape(self) -> chex.Array:
-        return jnp.zeros((), dtype=jnp.int32)
 
-    def _event_shape_tensor(self) -> chex.Array:
-        return []
+# Preserve old name as alias so any external code referencing it still works.
+DiscreteValuedTfpDistribution = DiscreteValuedDistribution
