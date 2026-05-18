@@ -153,6 +153,7 @@ def get_config():
     config.args_collector = ml_collections.ConfigDict()
     config.args_collector.controller = None
     config.args_collector.trainer = None
+    config.args_collector.workdir = workdir
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
     config.args_collector.report_period = 10  # per rollouts sampled

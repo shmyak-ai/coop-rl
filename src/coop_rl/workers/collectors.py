@@ -14,6 +14,7 @@
 
 import itertools
 import logging
+import os
 import random
 import time
 from collections import deque
@@ -23,7 +24,7 @@ import jax
 import numpy as np
 
 from coop_rl.base.base_types import TimeStepDQN
-from coop_rl.workers.auxiliary import CommandExecutor
+from coop_rl.workers.auxiliary import CommandExecutor, _TBWriter
 
 
 class CollectorDQNUniform:
@@ -43,6 +44,7 @@ class CollectorDQNUniform:
         steps_per_rollout,
         get_select_action_fn,
         args_get_select_action_fn,
+        workdir: str | None = None,
     ):
         self.logger = logging.getLogger(f"{__name__}.seed{collectors_seed}")
         self.logger.setLevel(log_level)
@@ -77,6 +79,10 @@ class CollectorDQNUniform:
         self.episode_reward_now = np.zeros(self.num_envs)
         self.completed_returns: deque[float] = deque(maxlen=100)
         self._params_received = 0
+        self._env_steps = 0
+        self._writer: _TBWriter | None = (
+            _TBWriter(os.path.join(workdir, "tb")) if workdir is not None else None
+        )
         self._closed = False
         self.logger.info(
             "CollectorDQNUniform initialized (seed=%d, num_envs=%d).",
@@ -156,6 +162,7 @@ class CollectorDQNUniform:
             self.obs, _ = self.env.reset()
         for rollouts_count in itertools.count(start=1, step=1):
             trajectories = self.run_rollout()
+            self._env_steps += self.steps_per_rollout * self.num_envs
 
             training_done = self.command_executor.call(self.controller, "is_done")
             if training_done:
@@ -189,6 +196,12 @@ class CollectorDQNUniform:
                     [f"{r:.1f}" for r in self.completed_returns],
                     self._params_received,
                 )
+                if self._writer is not None and self.completed_returns:
+                    self._writer.write_scalars(
+                        self._env_steps,
+                        {"collector/mean_return": float(np.mean(self.completed_returns))},
+                    )
+                    self._writer.flush()
                 self.completed_returns.clear()
                 self._params_received = 0
 
@@ -199,6 +212,8 @@ class CollectorDQNUniform:
         self._closed = True
         self.command_executor.shutdown()
         self.env.close()
+        if self._writer is not None:
+            self._writer.close()
         self.logger.info("CollectorDQNUniform closed (seed=%d).", self.collector_seed)
 
 

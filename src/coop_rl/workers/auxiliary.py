@@ -14,8 +14,14 @@
 
 import collections
 import logging
+import os
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
+
+from tensorboard.compat.proto.event_pb2 import Event
+from tensorboard.compat.proto.summary_pb2 import Summary
+from tensorboard.summary.writer.event_file_writer import EventFileWriter
 
 
 class Controller:
@@ -107,3 +113,28 @@ class CommandExecutor:
         self._is_shutdown = True
         if self._executor is not None:
             self._executor.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+
+class _TBWriter:
+    """TensorBoard writer backed by tensorboard's EventFileWriter directly.
+
+    Does not import tensorflow, so TF's GPU allocator is never activated.
+    EventFileWriter flushes asynchronously in a background thread; flush() blocks.
+    """
+
+    def __init__(self, logdir: str) -> None:
+        os.makedirs(logdir, exist_ok=True)
+        self._writer = EventFileWriter(logdir)
+
+    def write_scalars(self, step: int, scalars: dict[str, float]) -> None:
+        summary = Summary(value=[
+            Summary.Value(tag=tag, simple_value=value)
+            for tag, value in scalars.items()
+        ])
+        self._writer.add_event(Event(wall_time=time.time(), step=step, summary=summary))
+
+    def flush(self) -> None:
+        self._writer.flush()
+
+    def close(self) -> None:
+        self._writer.close()

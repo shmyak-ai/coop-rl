@@ -27,7 +27,7 @@ import jax
 import orbax.checkpoint as ocp
 import psutil
 
-from coop_rl.workers.auxiliary import CommandExecutor
+from coop_rl.workers.auxiliary import CommandExecutor, _TBWriter
 
 
 class _RWLock:
@@ -187,6 +187,9 @@ class Trainer(BufferKeeper):
         )
         self.is_done = False
         self._closed = False
+        self._proc = psutil.Process()
+        psutil.cpu_percent()  # prime baseline; first call always returns 0.0
+        self._writer = _TBWriter(os.path.join(workdir, "tb"))
         total_params = sum(x.size for x in jax.tree_util.tree_leaves(self.flax_state.params))
         flat_params = flax.traverse_util.flatten_dict(self.flax_state.params, sep="/")
         shape_str = "\n".join(f"  {k}: {v.shape}" for k, v in flat_params.items())
@@ -223,6 +226,14 @@ class Trainer(BufferKeeper):
             if step % self.summary_writing_period == 0:
                 elapsed = time.monotonic() - step_start
                 queue_fill = self._samples_on_gpu.qsize() / max(self._samples_on_gpu.maxsize, 1)
+                rss_main = self._proc.memory_info().rss / 2**30
+                cpu_pct = psutil.cpu_percent()
+                try:
+                    _gpu_stats = jax.devices("gpu")[0].memory_stats()
+                    gpu_peak_gib = _gpu_stats.get("peak_bytes_in_use", 0) / 2**30
+                    gpu_reserved_gib = _gpu_stats.get("bytes_reserved", 0) / 2**30
+                except Exception:
+                    gpu_peak_gib = gpu_reserved_gib = float("nan")
                 self.logger.info(f"Training step: {self.flax_state.step}.")
                 self.logger.info(f"Steps added to buffer: {self._steps_added}.")
                 self.logger.info(f"Steps sampled from buffer: {self._steps_sampled}.")
@@ -230,9 +241,24 @@ class Trainer(BufferKeeper):
                     f"Last {self.summary_writing_period} steps: {elapsed:.1f}s  "
                     f"GPU queue fill: {queue_fill:.2f}"
                 )
-                rss_main = psutil.Process().memory_info().rss / 2**30
-                self.logger.info(f"Memory RSS — main process: {rss_main:.1f} GiB.")
+                self.logger.info(
+                    f"CPU: {cpu_pct:.1f}%  RSS: {rss_main:.2f} GiB  "
+                    f"GPU peak: {gpu_peak_gib:.2f} GiB  reserved: {gpu_reserved_gib:.2f} GiB."
+                )
                 _ = gc.collect()
+                self._writer.write_scalars(
+                    int(self.flax_state.step),
+                    {
+                        "trainer/loss": float(info["loss"]),
+                        "trainer/steps_per_second": self.summary_writing_period / elapsed,
+                        "perf/gpu_queue_fill": queue_fill,
+                        "system/cpu_percent": cpu_pct,
+                        "system/cpu_rss_gib": rss_main,
+                        "system/gpu_peak_bytes_in_use_gib": gpu_peak_gib,
+                        "system/gpu_bytes_reserved_gib": gpu_reserved_gib,
+                    },
+                )
+                self._writer.flush()
                 step_start = time.monotonic()
 
             if step % self.synchronization_period == 0:
@@ -256,4 +282,5 @@ class Trainer(BufferKeeper):
             return
         self._closed = True
         self.command_executor.shutdown()
+        self._writer.close()
         self.logger.info("Trainer closed.")
