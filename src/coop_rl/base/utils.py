@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
-import time
 from collections.abc import Callable
 
-import jax
-import jax.numpy as jnp
 import optax
 
 
@@ -60,50 +56,3 @@ def make_optimizer(*, max_grad_norm: float, **kwargs):
         optax.clip_by_global_norm(max_grad_norm),
         optax.adam(lr, eps=1e-5),
     )
-
-
-def timeit(func):
-    """Decorator to measure and report the execution time of a function."""
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        start_time = time.perf_counter()
-        result = func(*args, **kwargs)
-        execution_time = time.perf_counter() - start_time
-        print(f"Function '{func.__name__}' took {execution_time:.4f} seconds to complete.")
-        return result
-
-    return wrapper
-
-
-#  callbacks slow down a program significantly
-def print_if_nonfinite(x):
-    is_finite = jnp.isfinite(x).all()
-
-    def true_fn(x):
-        pass
-
-    def false_fn(x):
-        jax.debug.print("Non finite values detected: {x}", x=x)
-
-    jax.lax.cond(is_finite, true_fn, false_fn, x)
-
-
-def _raise_if_negative(x):
-    if jax.numpy.less(x, 0).any():
-        raise ValueError("Negative value detected.")
-
-
-@jax.jit
-def error_if_negative(x):
-    jax.debug.callback(_raise_if_negative, x)
-
-
-def _raise_if_nonfinite(x):
-    if not jnp.isfinite(x).all():
-        raise ValueError("Not finite value detected.")
-
-
-@jax.jit
-def error_if_nonfinite(x):
-    jax.debug.callback(_raise_if_nonfinite, x)

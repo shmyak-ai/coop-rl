@@ -22,7 +22,6 @@ dependencies = [
     "chex",
     "flax",
     "brax>=0.9.0",
-
     "flashbax",
     "rlax",
     "clu",
