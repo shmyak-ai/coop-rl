@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from coop_rl.configs import list_available_configs
-from coop_rl.runtime.training import TF_LOG_SUPPRESS_ENV_VARS, run_training
+from coop_rl.runtime.training import RUNTIME_ENV_THREAD, TF_LOG_SUPPRESS_ENV_VARS, run_training
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     for key, value in TF_LOG_SUPPRESS_ENV_VARS.items():
         os.environ.setdefault(key, value)
+    if args.backend == "thread":
+        for key, value in RUNTIME_ENV_THREAD["env_vars"].items():
+            os.environ.setdefault(key, value)
     if args.debug:
         from coop_rl.runtime.training import RUNTIME_ENV_DEBUG
 

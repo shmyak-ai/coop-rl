@@ -68,7 +68,7 @@ class BufferKeeper:
             raise RuntimeError("No GPU devices found. BufferKeeper requires at least one GPU.")
         self.gpu_device = gpu_devices[0]
         self.logger = logging.getLogger(__name__)
-        self._sample_steps = args_buffer.sample_batch_size * args_buffer.sample_sequence_length
+        self._sample_steps = args_buffer.sample_batch_size
         self._steps_added = 0
         self._steps_sampled = 0
         self.is_done = False

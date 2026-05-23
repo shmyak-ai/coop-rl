@@ -50,6 +50,14 @@ RUNTIME_ENV_COLLECTOR = {
     }
 }
 
+RUNTIME_ENV_THREAD = {
+    "env_vars": {
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "XLA_FLAGS": _XLA_GPU_PERF_FLAGS,
+        **TF_LOG_SUPPRESS_ENV_VARS,
+    }
+}
+
 RUNTIME_ENV_DEBUG = {
     "env_vars": {
         "RAY_DEBUG": "1",

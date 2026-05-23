@@ -70,7 +70,7 @@ def get_config():
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.args_torso.dtype = jnp.bfloat16
-    config.args_network.args_torso.depth = 32   # Wang et al. (NeurIPS 2025)
+    config.args_network.args_torso.depth = 64  # Wang et al. (NeurIPS 2025)
     config.args_network.args_torso.width = 256
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
@@ -95,8 +95,8 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = config.args_env.num_envs
-    config.args_buffer.sample_batch_size = 256
-    config.args_buffer.sample_sequence_length = 3  # DQN n-steps update
+    config.args_buffer.sample_batch_size = 512
+    config.args_buffer.sample_sequence_length = 7  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 300000  # in transitions
@@ -139,8 +139,8 @@ def get_config():
         0.0  # parameter for the huber loss. If 0, it uses MSE loss
     )
     config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
-    config.args_trainer.args_get_update_step.obs_preprocess_fn = (
-        lambda x: x.astype(jnp.bfloat16) / jnp.bfloat16(255.0)
+    config.args_trainer.args_get_update_step.obs_preprocess_fn = lambda x: (
+        x.astype(jnp.bfloat16) / jnp.bfloat16(255.0)
     )
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
@@ -166,8 +166,8 @@ def get_config():
     config.args_collector.get_select_action_fn = get_select_action_batch_fn
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
-    config.args_collector.args_get_select_action_fn.obs_preprocess_fn = (
-        lambda x: x.astype(jnp.float32) / 255.0
+    config.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
+        x.astype(jnp.float32) / 255.0
     )
 
     return config.lock()
