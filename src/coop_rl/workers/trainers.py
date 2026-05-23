@@ -228,12 +228,8 @@ class Trainer(BufferKeeper):
                 queue_fill = self._samples_on_gpu.qsize() / max(self._samples_on_gpu.maxsize, 1)
                 rss_main = self._proc.memory_info().rss / 2**30
                 cpu_pct = psutil.cpu_percent()
-                try:
-                    _gpu_stats = jax.devices("gpu")[0].memory_stats()
-                    gpu_peak_gib = _gpu_stats.get("peak_bytes_in_use", 0) / 2**30
-                    gpu_reserved_gib = _gpu_stats.get("bytes_reserved", 0) / 2**30
-                except Exception:
-                    gpu_peak_gib = gpu_reserved_gib = float("nan")
+                _gpu_stats = jax.devices("gpu")[0].memory_stats()
+                gpu_peak_gib = _gpu_stats.get("peak_bytes_in_use", 0) / 2**30
                 self.logger.info(f"Training step: {self.flax_state.step}.")
                 self.logger.info(f"Steps added to buffer: {self._steps_added}.")
                 self.logger.info(f"Steps sampled from buffer: {self._steps_sampled}.")
@@ -243,7 +239,7 @@ class Trainer(BufferKeeper):
                 )
                 self.logger.info(
                     f"CPU: {cpu_pct:.1f}%  RSS: {rss_main:.2f} GiB  "
-                    f"GPU peak: {gpu_peak_gib:.2f} GiB  reserved: {gpu_reserved_gib:.2f} GiB."
+                    f"GPU peak: {gpu_peak_gib:.2f} GiB."
                 )
                 _ = gc.collect()
                 self._writer.write_scalars(
@@ -255,7 +251,6 @@ class Trainer(BufferKeeper):
                         "system/cpu_percent": cpu_pct,
                         "system/cpu_rss_gib": rss_main,
                         "system/gpu_peak_bytes_in_use_gib": gpu_peak_gib,
-                        "system/gpu_bytes_reserved_gib": gpu_reserved_gib,
                     },
                 )
                 self._writer.flush()

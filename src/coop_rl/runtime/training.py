@@ -121,9 +121,7 @@ def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
     controller = conf.controller.remote(**conf.args_controller)
     trainer = conf.trainer.options(
         max_concurrency=1 + conf.num_samplers + conf.num_collectors
-    ).remote(
-        **conf.args_trainer, controller=controller
-    )
+    ).remote(**conf.args_trainer, controller=controller)
 
     collectors = []
     for _ in range(conf.num_collectors):
