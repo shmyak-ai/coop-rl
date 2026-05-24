@@ -119,18 +119,18 @@ def decorate_remote_components(conf: Any) -> Any:
 def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
     """Launch controller, trainer, and collector actors."""
     controller = conf.controller.remote(**conf.args_controller)
+
+    conf.args_trainer.controller = controller
     trainer = conf.trainer.options(
         max_concurrency=1 + conf.num_samplers + conf.num_collectors
-    ).remote(**conf.args_trainer, controller=controller)
+    ).remote(**conf.args_trainer)
 
+    conf.args_collector.controller = controller
+    conf.args_collector.trainer = trainer
     collectors = []
     for _ in range(conf.num_collectors):
         conf.args_collector.collectors_seed += 1
-        collector = conf.collector.remote(
-            **conf.args_collector,
-            controller=controller,
-            trainer=trainer,
-        )
+        collector = conf.collector.remote(**conf.args_collector)
         collectors.append(collector)
 
     return trainer, collectors
