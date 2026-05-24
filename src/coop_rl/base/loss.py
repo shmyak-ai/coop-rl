@@ -78,7 +78,7 @@ def munchausen_q_learning(
         q_tm1_target / entropy_temperature, axis=-1
     )
     munchausen_term_a = jnp.sum(action_one_hot * munchausen_term, axis=-1)
-    munchausen_term_a = jnp.clip(munchausen_term_a, a_min=clip_value_min, a_max=0.0)
+    munchausen_term_a = jnp.clip(munchausen_term_a, clip_value_min, 0.0)
 
     # Soft Bellman operator applied to q
     next_v = entropy_temperature * jax.nn.logsumexp(q_t_target / entropy_temperature, axis=-1)

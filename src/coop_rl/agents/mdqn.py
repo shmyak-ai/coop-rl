@@ -18,7 +18,6 @@ from typing import Any
 import chex
 import jax
 import jax.numpy as jnp
-import ml_collections
 import optax
 import orbax.checkpoint as ocp
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
@@ -108,7 +107,7 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
 
 
 def restore_dqn_flax_state(
-    rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
+    *, rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
 ):
     state = create_train_state(
         rng, network, args_network, optimizer, args_optimizer, observation_shape, tau
@@ -120,17 +119,48 @@ def restore_dqn_flax_state(
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
-def get_select_action_fn(apply_fn):
+def get_select_action_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
     @jax.jit
     def select_action(key, params, observation):
         key, policy_key = jax.random.split(key)
-        actor_policy = apply_fn(params, jnp.expand_dims(observation, axis=0))
+        actor_policy = apply_fn(params, jnp.expand_dims(_preprocess(observation), axis=0))
         return key, actor_policy.sample(seed=policy_key)
 
     return select_action
 
 
-def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
+def get_select_action_batch_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    """Like get_select_action_fn but for a batch of N observations (num_envs, *obs_shape)."""
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    @jax.jit
+    def select_action_batch(key, params, observations):
+        key, policy_key = jax.random.split(key)
+        actor_policy = apply_fn(params, _preprocess(observations))
+        return key, actor_policy.sample(seed=policy_key)
+
+    return select_action_batch
+
+
+def get_update_step(
+    *,
+    apply_fn: ActorApply,
+    gamma: float,
+    entropy_temperature: float,
+    munchausen_coefficient: float,
+    clip_value_min: float,
+    huber_loss_parameter: float,
+    max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
+) -> Callable:
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
     def _update_step(
         train_state: TrainState, buffer_sample: TrajectoryBufferSample
     ) -> tuple[TrainState, dict]:
@@ -139,16 +169,18 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             target_q_params: FrozenDict,
             transitions: Transition,
         ) -> tuple[jnp.ndarray, dict]:
-            q_tm1 = q_apply_fn(q_params, transitions.obs).preferences
-            q_tm1_target = q_apply_fn(target_q_params, transitions.obs).preferences
-            q_t_target = q_apply_fn(target_q_params, transitions.next_obs).preferences
+            q_tm1 = apply_fn(q_params, transitions.obs).preferences.astype(jnp.float32)
+            q_tm1_target = apply_fn(target_q_params, transitions.obs).preferences.astype(
+                jnp.float32
+            )
+            q_t_target = apply_fn(target_q_params, transitions.next_obs).preferences.astype(
+                jnp.float32
+            )
 
             # Cast and clip rewards.
             discount = 1.0 - transitions.done.astype(jnp.float32)
-            d_t = (discount * config.gamma).astype(jnp.float32)
-            r_t = jnp.clip(
-                transitions.reward, -config.max_abs_reward, config.max_abs_reward
-            ).astype(jnp.float32)
+            d_t = (discount * gamma).astype(jnp.float32)
+            r_t = jnp.clip(transitions.reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
             a_tm1 = transitions.action
 
             # Compute Q-learning loss.
@@ -159,10 +191,10 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
                 r_t,
                 d_t,
                 q_t_target,
-                config.entropy_temperature,
-                config.munchausen_coefficient,
-                config.clip_value_min,
-                config.huber_loss_parameter,
+                entropy_temperature,
+                munchausen_coefficient,
+                clip_value_min,
+                huber_loss_parameter,
             )
 
             loss_info = {
@@ -192,15 +224,15 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
         discounts = 1.0 - mask_done.astype(jnp.float32)
         n_step_reward = batch_discounted_returns(
             sample.reward.astype(jnp.float32),
-            discounts * config.gamma,
+            discounts * gamma,
             jnp.zeros_like(discounts),
         )[:, 0]
         transitions = Transition(
-            obs=step_0_obs,
+            obs=_preprocess(step_0_obs),
             action=step_0_actions,
             reward=n_step_reward,
             done=n_step_done,
-            next_obs=step_n_obs,
+            next_obs=_preprocess(step_n_obs),
             info={},
         )
 
@@ -223,7 +255,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
     return _update_step
 
 
-def get_update_epoch(update_step_fn: Callable, *args, **kwargs) -> Callable:
+def get_update_epoch(*, update_step_fn: Callable, **kwargs) -> Callable:
     @jax.jit
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
         for sample in samples:
