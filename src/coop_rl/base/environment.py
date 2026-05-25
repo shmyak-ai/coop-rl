@@ -149,6 +149,9 @@ class HandlerEnvDreamerAtari:
         env = Atari(task, **kwargs)
         return wrap_env(env)
 
+    def close(self):
+        self._env.close()
+
     @staticmethod
     def check_env(*, dreamer_config):
         env = HandlerEnvDreamerAtari.make_env(dreamer_config)

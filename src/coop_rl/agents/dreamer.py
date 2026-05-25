@@ -104,7 +104,9 @@ class Agent:
 
         self.val = dreamer.MLPHead(scalar, **config.value, name="val")
         self.slowval = dreamer.SlowModel(
-            dreamer.MLPHead(scalar, **config.value, name="slowval"), source=self.val, **config.slowvalue
+            dreamer.MLPHead(scalar, **config.value, name="slowval"),
+            source=self.val,
+            **config.slowvalue,
         )
 
         self.retnorm = dreamer.Normalize(**config.retnorm, name="retnorm")
@@ -112,7 +114,9 @@ class Agent:
         self.advnorm = dreamer.Normalize(**config.advnorm, name="advnorm")
 
         self.modules = [self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
-        self.opt = dreamer.Optimizer(self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt")
+        self.opt = dreamer.Optimizer(
+            self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt"
+        )
 
         scales = self.config.loss_scales.copy()
         rec = scales.pop("rec")
@@ -131,7 +135,9 @@ class Agent:
         if self.config.replay_context:
             spaces.update(
                 elements.tree.flatdict(
-                    dict(enc=self.enc.entry_space, dyn=self.dyn.entry_space, dec=self.dec.entry_space)
+                    dict(
+                        enc=self.enc.entry_space, dyn=self.dyn.entry_space, dec=self.dec.entry_space
+                    )
                 )
             )
         return spaces
@@ -178,12 +184,16 @@ class Agent:
 
     def train(self, carry, data):
         carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
-        metrics, (carry, entries, outs, mets) = self.opt(self.loss, carry, obs, prevact, training=True, has_aux=True)
+        metrics, (carry, entries, outs, mets) = self.opt(
+            self.loss, carry, obs, prevact, training=True, has_aux=True
+        )
         metrics.update(mets)
         self.slowval.update()
         outs = {}
         if self.config.replay_context:
-            updates = elements.tree.flatdict(dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
+            updates = elements.tree.flatdict(
+                dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2])
+            )
             B, T = obs["is_first"].shape
             assert all(x.shape[:2] == (B, T) for x in updates.values()), (
                 (B, T),
@@ -204,7 +214,9 @@ class Agent:
 
         # World model
         enc_carry, enc_entries, tokens = self.enc(enc_carry, obs, reset, training)
-        dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(dyn_carry, tokens, prevact, reset, training)
+        dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
+            dyn_carry, tokens, prevact, reset, training
+        )
         losses.update(los)
         metrics.update(mets)
         dec_carry, dec_entries, recons = self.dec(dec_carry, repfeat, reset, training)
@@ -264,7 +276,9 @@ class Agent:
             feat = sg(repfeat, skip=self.config.repval_grad)
             last, term, rew = [obs[k] for k in ("is_last", "is_terminal", "reward")]
             boot = imgloss_out["ret"][:, 0].reshape(B, K)
-            feat, last, term, rew, boot = jax.tree.map(lambda x: x[:, -K:], (feat, last, term, rew, boot))
+            feat, last, term, rew, boot = jax.tree.map(
+                lambda x: x[:, -K:], (feat, last, term, rew, boot)
+            )
             inp = self.feat2tensor(feat)
             los, reploss_out, mets = repl_loss(
                 last,
@@ -281,7 +295,10 @@ class Agent:
             losses.update(los)
             metrics.update(prefix(mets, "reploss"))
 
-        assert set(losses.keys()) == set(self.scales.keys()), (sorted(losses.keys()), sorted(self.scales.keys()))
+        assert set(losses.keys()) == set(self.scales.keys()), (
+            sorted(losses.keys()),
+            sorted(self.scales.keys()),
+        )
         metrics.update({f"loss/{k}": v.mean() for k, v in losses.items()})
         loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 
@@ -326,10 +343,18 @@ class Agent:
         dyn_carry = jax.tree.map(lambda x: x[:RB], dyn_carry)
         dec_carry = jax.tree.map(lambda x: x[:RB], dec_carry)
         dyn_carry, _, obsfeat = self.dyn.observe(
-            dyn_carry, firsthalf(outs["tokens"]), firsthalf(prevact), firsthalf(obs["is_first"]), training=False
+            dyn_carry,
+            firsthalf(outs["tokens"]),
+            firsthalf(prevact),
+            firsthalf(obs["is_first"]),
+            training=False,
         )
-        _, imgfeat, _ = self.dyn.imagine(dyn_carry, secondhalf(prevact), length=T - T // 2, training=False)
-        dec_carry, _, obsrecons = self.dec(dec_carry, obsfeat, firsthalf(obs["is_first"]), training=False)
+        _, imgfeat, _ = self.dyn.imagine(
+            dyn_carry, secondhalf(prevact), length=T - T // 2, training=False
+        )
+        dec_carry, _, obsrecons = self.dec(
+            dec_carry, obsfeat, firsthalf(obs["is_first"]), training=False
+        )
         dec_carry, _, imgrecons = self.dec(
             dec_carry, imgfeat, jnp.zeros_like(secondhalf(obs["is_first"])), training=False
         )
@@ -484,7 +509,8 @@ def imag_loss(
     tar_normed = (ret - voffset) / vscale
     tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
     losses["value"] = (
-        sg(weight[:, :-1]) * (value.loss(sg(tar_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
+        sg(weight[:, :-1])
+        * (value.loss(sg(tar_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
     )
 
     ret_normed = (ret - roffset) / rscale
@@ -540,7 +566,8 @@ def repl_loss(
     ret_normed = (ret - voffset) / vscale
     ret_padded = jnp.concatenate([ret_normed, 0 * ret_normed[:, -1:]], 1)
     losses["repval"] = (
-        weight[:, :-1] * (value.loss(sg(ret_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
+        weight[:, :-1]
+        * (value.loss(sg(ret_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
     )
 
     outs = {}
@@ -655,7 +682,9 @@ def create_train_state(rng, config, obs_space, act_space):
     return flax_state
 
 
-def restore_dreamer_flax_state(rng, dreamer_config, observation_shape, actions_shape, checkpointdir):
+def restore_dreamer_flax_state(
+    rng, dreamer_config, observation_shape, actions_shape, checkpointdir
+):
     state = create_train_state(rng, dreamer_config, observation_shape, actions_shape)
     if checkpointdir is None:
         return state
@@ -671,7 +700,9 @@ def get_select_action_fn(flax_state: TrainState):
     def select_action(flax_state: TrainState, observation: chex.ArrayTree):
         policy_params = {k: flax_state.params[k].copy() for k in policy_keys}
         flax_state, seed = flax_state.get_key()
-        _, (carry, acts, outs) = flax_state.policy_fn(policy_params, flax_state.carry, observation, seed=seed)
+        _, (carry, acts, outs) = flax_state.policy_fn(
+            policy_params, flax_state.carry, observation, seed=seed
+        )
         flax_state = flax_state.update_state(flax_state.params, carry, flax_state.carry_train)
         acts, outs = take_outs((acts, outs))
         _ = outs.pop("finite", {})
@@ -680,14 +711,19 @@ def get_select_action_fn(flax_state: TrainState):
     return select_action
 
 
-def get_update_step(apply_fn: None = None, config: ml_collections.ConfigDict | None = None) -> Callable:
-    def _update_step(train_state: TrainState, buffer_sample: TrajectoryBufferSample) -> tuple[TrainState, dict]:
+def get_update_step(
+    apply_fn: None = None, config: ml_collections.ConfigDict | None = None
+) -> Callable:
+    def _update_step(
+        train_state: TrainState, buffer_sample: TrajectoryBufferSample
+    ) -> tuple[TrainState, dict]:
         data = buffer_sample.experience
         train_state, seed = train_state.get_key()
         params, (carry_train, outs, mets) = train_state.apply_fn(
             train_state.params, train_state.carry_train, data, seed=seed
         )
         train_state = train_state.update_state(params, train_state.carry, carry_train)
+        mets = {**mets, "loss": mets["opt/loss"]}
         return train_state, mets
 
     # _checked_update_step = checkify.checkify(

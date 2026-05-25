@@ -231,6 +231,7 @@ class CollectorDreamerUniform:
         get_select_action_fn,
         controller,
         trainer,
+        workdir: str | None = None,
     ):
         self.logger = logging.getLogger(f"{__name__}.seed{collectors_seed}")
         self.logger.setLevel(log_level)
@@ -263,6 +264,10 @@ class CollectorDreamerUniform:
             )
         self.gpu_device = gpu_devices[0]
         self.rollout_length = 1000
+        self._env_steps = 0
+        self._writer: _TBWriter | None = (
+            _TBWriter(os.path.join(workdir, "tb")) if workdir is not None else None
+        )
         self._closed = False
 
     def warmup(self) -> None:
@@ -314,7 +319,7 @@ class CollectorDreamerUniform:
 
         trajectory = {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
         trajectory["consec"] = np.full(trajectory["is_first"].shape, 0, np.int32)
-        return trajectory
+        return {k: v[None] for k, v in trajectory.items()}
 
     def collecting(self):
         try:
@@ -325,6 +330,7 @@ class CollectorDreamerUniform:
     def _collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
+            self._env_steps += self.rollout_length
 
             while True:
                 training_done = self.command_executor.call(self.controller, "is_done")
@@ -362,6 +368,12 @@ class CollectorDreamerUniform:
                     "Last episode reward: %s.",
                     f"{r:.4f}" if not np.isnan(r) else "n/a",
                 )
+                if self._writer is not None and not np.isnan(r):
+                    self._writer.write_scalars(
+                        self._env_steps,
+                        {"collector/episode_reward": r},
+                    )
+                    self._writer.flush()
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""
@@ -370,3 +382,5 @@ class CollectorDreamerUniform:
         self._closed = True
         self.command_executor.shutdown()
         self.env.close()
+        if self._writer is not None:
+            self._writer.close()

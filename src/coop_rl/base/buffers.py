@@ -167,13 +167,15 @@ class BufferTrajectoryDreamer:
             }
             self.state = self.buffer.init(self.dummy_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
+            self._rng_lock = threading.Lock()
 
     def add(self, batch_sequence):
         with jax.default_device(self.cpu):
             self.state = self.buffer.add(self.state, batch_sequence)
 
     def sample(self):
-        self.rng_key, rng_key = jax.random.split(self.rng_key)
+        with self._rng_lock:
+            self.rng_key, rng_key = jax.random.split(self.rng_key)
         with jax.default_device(self.cpu):
             batch = self.buffer.sample(self.state, rng_key)
         return batch

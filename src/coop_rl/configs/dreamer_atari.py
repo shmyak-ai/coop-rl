@@ -84,8 +84,8 @@ def get_config():
     training_iterations_per_step = 1
 
     config.log_level = log_level
-    config.num_collectors = num_collectors = 3
-    config.num_samplers = 1
+    config.num_collectors = 5
+    config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
@@ -103,7 +103,7 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.dreamer_config = dreamer_config
     config.args_buffer.buffer_seed = buffer_seed
-    config.args_buffer.add_batch_size = num_collectors
+    config.args_buffer.add_batch_size = 1
     config.args_buffer.sample_batch_size = config.dreamer_config.batch_size
     config.args_buffer.sample_sequence_length = config.dreamer_config.batch_length
     config.args_buffer.period = 1
@@ -114,6 +114,7 @@ def get_config():
 
     config.state_recover = state_recover = restore_dreamer_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
+    config.args_state_recover.rng = None
     config.args_state_recover.dreamer_config = dreamer_config
     config.args_state_recover.observation_shape = observation_shape
     config.args_state_recover.actions_shape = actions_shape
@@ -122,9 +123,12 @@ def get_config():
     config.agent_params = agent_params = None
 
     config.controller = Controller
+    config.args_controller = ml_collections.ConfigDict()
+    config.args_controller.log_level = log_level
 
     config.trainer = Trainer
     config.args_trainer = ml_collections.ConfigDict()
+    config.args_trainer.controller = None
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
@@ -140,14 +144,19 @@ def get_config():
     config.args_trainer.args_get_update_step.apply_fn = None
     config.args_trainer.args_get_update_step.config = agent_params
     config.args_trainer.get_update_epoch = get_update_epoch
-    config.args_trainer.agent_params = agent_params
+    config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
+    config.args_trainer.args_get_update_epoch.update_step_fn = None
+    config.args_trainer.args_get_update_epoch.buffer_lock = None
+    config.args_trainer.args_get_update_epoch.buffer = None
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.num_samples_on_gpu_cache = 100
-    config.args_trainer.num_semaphor = 1
 
     config.collector = CollectorDreamerUniform
     config.args_collector = ml_collections.ConfigDict()
+    config.args_collector.controller = None
+    config.args_collector.trainer = None
+    config.args_collector.workdir = workdir
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
     config.args_collector.report_period = 100  # per rollouts sampled
