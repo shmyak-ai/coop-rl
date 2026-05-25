@@ -3,6 +3,7 @@
 #
 
 from collections.abc import Sequence
+from typing import Any
 
 import chex
 import jax
@@ -27,21 +28,32 @@ class NoisyDistributionalDuelingQNetwork(nn.Module):
     activation: str = "relu"
     use_layer_norm: bool = False
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
+    dtype: Any = None
 
     @nn.compact
-    def __call__(self, embeddings: chex.Array) -> chex.Array:
+    def __call__(self, embeddings: chex.Array) -> tuple[EpsilonGreedy, chex.Array, chex.Array]:
         value_torso = NoisyMLPTorso(
-            self.layer_sizes, self.activation, self.use_layer_norm, self.sigma_zero
+            self.layer_sizes,
+            self.activation,
+            self.use_layer_norm,
+            sigma_zero=self.sigma_zero,
+            dtype=self.dtype,
         )(embeddings)
         advantages_torso = NoisyMLPTorso(
-            self.layer_sizes, self.activation, self.use_layer_norm, self.sigma_zero
+            self.layer_sizes,
+            self.activation,
+            self.use_layer_norm,
+            sigma_zero=self.sigma_zero,
+            dtype=self.dtype,
         )(embeddings)
 
-        value_logits = NoisyLinear(self.num_atoms, sigma_zero=self.sigma_zero)(value_torso)
-        value_logits = jnp.reshape(value_logits, (-1, 1, self.num_atoms))
-        adv_logits = NoisyLinear(self.action_dim * self.num_atoms, sigma_zero=self.sigma_zero)(
-            advantages_torso
+        value_logits = NoisyLinear(self.num_atoms, sigma_zero=self.sigma_zero, dtype=self.dtype)(
+            value_torso
         )
+        value_logits = jnp.reshape(value_logits, (-1, 1, self.num_atoms))
+        adv_logits = NoisyLinear(
+            self.action_dim * self.num_atoms, sigma_zero=self.sigma_zero, dtype=self.dtype
+        )(advantages_torso)
         adv_logits = jnp.reshape(adv_logits, (-1, self.action_dim, self.num_atoms))
         q_logits = value_logits + adv_logits - adv_logits.mean(axis=1, keepdims=True)
 

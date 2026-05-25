@@ -18,7 +18,6 @@ from typing import Any
 import chex
 import jax
 import jax.numpy as jnp
-import ml_collections
 import optax
 import orbax.checkpoint as ocp
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
@@ -28,7 +27,6 @@ from flax.linen.fp8_ops import OVERWRITE_WITH_GRADIENT
 from flax.training import train_state
 from typing_extensions import NamedTuple
 
-# from jax.experimental import checkify
 from coop_rl.base.base_types import (
     ActorApply,
 )
@@ -114,7 +112,7 @@ def create_train_state(rng, network, args_network, optimizer, args_optimizer, ob
 
 
 def restore_dqn_flax_state(
-    rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
+    *, rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
 ):
     state = create_train_state(
         rng, network, args_network, optimizer, args_optimizer, observation_shape, tau
@@ -126,19 +124,49 @@ def restore_dqn_flax_state(
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
-def get_select_action_fn(apply_fn):
+def get_select_action_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
     @jax.jit
     def select_action(key, params, observation):
         key, noise_key, policy_key = jax.random.split(key, num=3)
         actor_policy, q_logits, atoms = apply_fn(
-            params, jnp.expand_dims(observation, axis=0), rngs={"noise": noise_key}
+            params, jnp.expand_dims(_preprocess(observation), axis=0), rngs={"noise": noise_key}
         )
         return key, actor_policy.sample(seed=policy_key)
 
     return select_action
 
 
-def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -> Callable:
+def get_select_action_batch_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    """Like get_select_action_fn but for a batch of N observations (num_envs, *obs_shape)."""
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    @jax.jit
+    def select_action_batch(key, params, observations):
+        key, noise_key, policy_key = jax.random.split(key, num=3)
+        actor_policy, q_logits, atoms = apply_fn(
+            params, _preprocess(observations), rngs={"noise": noise_key}
+        )
+        return key, actor_policy.sample(seed=policy_key)
+
+    return select_action_batch
+
+
+def get_update_step(
+    *,
+    apply_fn: ActorApply,
+    gamma: float,
+    max_abs_reward: float,
+    importance_weight_scheduler_fn: Callable,
+    obs_preprocess_fn: Callable | None = None,
+) -> Callable:
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
     @jax.jit
     def _update_step(
         train_state: TrainState, buffer_sample: TrajectoryBufferSample
@@ -150,26 +178,28 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             transition_probs: chex.Array,
             noise_key: chex.PRNGKey,
             importance_sampling_exponent: float,
-        ) -> jnp.ndarray:
+        ) -> tuple[jnp.ndarray, dict]:
             noise_key_tm1, noise_key_t, noise_key_select = jax.random.split(noise_key, num=3)
 
-            _, q_logits_tm1, q_atoms_tm1 = q_apply_fn(
+            _, q_logits_tm1, q_atoms_tm1 = apply_fn(
                 q_params, transitions.obs, rngs={"noise": noise_key_tm1}
             )
-            _, q_logits_t, q_atoms_t = q_apply_fn(
+            q_logits_tm1 = q_logits_tm1.astype(jnp.float32)
+            q_atoms_tm1 = q_atoms_tm1.astype(jnp.float32)
+            _, q_logits_t, q_atoms_t = apply_fn(
                 target_q_params, transitions.next_obs, rngs={"noise": noise_key_t}
             )
-            q_t_selector_dist, _, _ = q_apply_fn(
+            q_logits_t = q_logits_t.astype(jnp.float32)
+            q_atoms_t = q_atoms_t.astype(jnp.float32)
+            q_t_selector_dist, _, _ = apply_fn(
                 q_params, transitions.next_obs, rngs={"noise": noise_key_select}
             )
             q_t_selector = q_t_selector_dist.preferences
 
             # Cast and clip rewards.
             discount = 1.0 - transitions.done.astype(jnp.float32)
-            d_t = (discount * config.gamma).astype(jnp.float32)
-            r_t = jnp.clip(
-                transitions.reward, -config.max_abs_reward, config.max_abs_reward
-            ).astype(jnp.float32)
+            d_t = (discount * gamma).astype(jnp.float32)
+            r_t = jnp.clip(transitions.reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
             a_tm1 = transitions.action
 
             batch_q_error = categorical_double_q_learning(
@@ -214,19 +244,19 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
         discounts = 1.0 - mask_done.astype(jnp.float32)
         n_step_reward = batch_discounted_returns(
             sample.reward.astype(jnp.float32),
-            discounts * config.gamma,
+            discounts * gamma,
             jnp.zeros_like(discounts),
         )[:, 0]
         transitions = Transition(
-            obs=step_0_obs,
+            obs=_preprocess(step_0_obs),
             action=step_0_actions,
             reward=n_step_reward,
             done=n_step_done,
-            next_obs=step_n_obs,
+            next_obs=_preprocess(step_n_obs),
             info={},
         )
 
-        importance_sampling_exponent = config.importance_weight_scheduler_fn(train_state.step)
+        importance_sampling_exponent = importance_weight_scheduler_fn(train_state.step)
         train_state, noise_key = train_state.get_key()
 
         # CALCULATE Q LOSS
@@ -235,7 +265,7 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
             train_state.params,
             train_state.target_params,
             transitions,
-            buffer_sample.priorities,
+            buffer_sample.probabilities,
             noise_key,
             importance_sampling_exponent,
         )
@@ -256,14 +286,15 @@ def get_update_step(q_apply_fn: ActorApply, config: ml_collections.ConfigDict) -
     return _update_step
 
 
-def get_update_epoch(update_step_fn: Callable, buffer_lock, buffer) -> Callable:
+def get_update_epoch(
+    *, update_step_fn: Callable, buffer_lock=None, buffer=None, **kwargs
+) -> Callable:
     def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
         for sample in samples:
-            # err, (train_state, info) = update_step_fn(train_state, sample)
-            # err.throw()
             train_state, info = update_step_fn(train_state, sample)
-            with buffer_lock:
-                buffer.set_priorities(sample.indices, info["priorities"])
+            if buffer_lock is not None and buffer is not None:
+                with buffer_lock.write():
+                    buffer.set_priorities(sample.indices, info["priorities"])
         return train_state, info
 
     return _update_epoch

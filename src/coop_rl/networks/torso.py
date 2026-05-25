@@ -43,7 +43,9 @@ class MLPTorso(nn.Module):
         x = observation
         for layer_size in self.layer_sizes:
             x = nn.Dense(
-                layer_size, kernel_init=self.kernel_init, use_bias=not self.use_layer_norm,
+                layer_size,
+                kernel_init=self.kernel_init,
+                use_bias=not self.use_layer_norm,
                 dtype=self.dtype,
             )(x)
             if self.use_layer_norm:
@@ -62,13 +64,17 @@ class NoisyMLPTorso(nn.Module):
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     activate_final: bool = True
     sigma_zero: float = 0.5
+    dtype: Any = None
 
     @nn.compact
     def __call__(self, observation: chex.Array) -> chex.Array:
         x = observation
         for layer_size in self.layer_sizes:
             x = NoisyLinear(
-                layer_size, sigma_zero=self.sigma_zero, use_bias=not self.use_layer_norm
+                layer_size,
+                sigma_zero=self.sigma_zero,
+                use_bias=not self.use_layer_norm,
+                dtype=self.dtype,
             )(x)
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
@@ -136,7 +142,10 @@ class CNNTorso(nn.Module):
             self.channel_sizes, self.kernel_sizes, self.strides, strict=True
         ):
             x = nn.Conv(
-                channel, (kernel, kernel), (stride, stride), use_bias=not self.use_layer_norm,
+                channel,
+                (kernel, kernel),
+                (stride, stride),
+                use_bias=not self.use_layer_norm,
                 dtype=self.dtype,
             )(x)
             if self.use_layer_norm:

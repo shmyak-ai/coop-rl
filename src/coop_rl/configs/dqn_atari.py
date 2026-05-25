@@ -70,7 +70,7 @@ def get_config():
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.args_torso.dtype = jnp.bfloat16
-    config.args_network.args_torso.depth = 64  # Wang et al. (NeurIPS 2025)
+    config.args_network.args_torso.depth = 32  # Wang et al. (NeurIPS 2025)
     config.args_network.args_torso.width = 256
     config.args_network.action_head = DiscreteQNetworkHead
     config.args_network.args_action_head = ml_collections.ConfigDict()
@@ -96,10 +96,10 @@ def get_config():
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = config.args_env.num_envs
     config.args_buffer.sample_batch_size = 512
-    config.args_buffer.sample_sequence_length = 7  # DQN n-steps update
+    config.args_buffer.sample_sequence_length = 5  # DQN n-steps update
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
-    config.args_buffer.max_size = 300000  # in transitions
+    config.args_buffer.max_size = 500000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = TimeStepDQNDtypesAtari
 

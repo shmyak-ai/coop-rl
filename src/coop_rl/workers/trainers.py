@@ -176,6 +176,10 @@ class Trainer(BufferKeeper):
         args_get_update_step.apply_fn = self.flax_state.apply_fn
         update_step_fn = get_update_step(**args_get_update_step)
         args_get_update_epoch.update_step_fn = update_step_fn
+        if hasattr(args_get_update_epoch, "buffer_lock"):
+            args_get_update_epoch.buffer_lock = self._rw_lock
+        if hasattr(args_get_update_epoch, "buffer"):
+            args_get_update_epoch.buffer = self.buffer
         self.update_epoch_fn = get_update_epoch(**args_get_update_epoch)
 
         self.controller = controller

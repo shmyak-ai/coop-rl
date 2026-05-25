@@ -196,7 +196,7 @@ class BufferPrioritised:
         observation_shape,
         time_step_dtypes,
     ):
-        self.dtypes = time_step_dtypes
+        self.dtypes = time_step_dtypes()
         self.cpu = jax.devices("cpu")[0]
         with jax.default_device(self.cpu):
             self.buffer = fbx.make_prioritised_trajectory_buffer(
@@ -225,21 +225,16 @@ class BufferPrioritised:
             )
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
+            self._rng_lock = threading.Lock()
 
-    def add(self, traj_obs, traj_actions, traj_rewards, traj_terminated, traj_truncated):
+    def add(self, batch_sequence):
         with jax.default_device(self.cpu):
-            traj_batch_seq = TimeStepDQN(
-                obs=jnp.array(traj_obs, dtype=self.dtypes.obs),
-                action=jnp.array(traj_actions, dtype=self.dtypes.action),
-                reward=jnp.array(traj_rewards, dtype=self.dtypes.reward),
-                terminated=jnp.array(traj_terminated, dtype=self.dtypes.terminated),
-                truncated=jnp.array(traj_truncated, dtype=self.dtypes.truncated),
-            )
-            self.state = self.buffer.add(self.state, traj_batch_seq)
+            self.state = self.buffer.add(self.state, batch_sequence)
 
     def sample(self):
-        with jax.default_device(self.cpu):
+        with self._rng_lock:
             self.rng_key, rng_key = jax.random.split(self.rng_key)
+        with jax.default_device(self.cpu):
             batch = self.buffer.sample(self.state, rng_key)
         return batch
 
