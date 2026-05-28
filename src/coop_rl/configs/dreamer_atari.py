@@ -85,7 +85,7 @@ def get_config():
     training_iterations_per_step = 1
 
     config.log_level = log_level
-    config.num_collectors = 1
+    config.num_collectors = 10 
     config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype

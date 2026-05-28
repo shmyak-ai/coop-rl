@@ -35,6 +35,7 @@ RUNTIME_ENV_GPU = {
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
         "RAY_DEDUP_LOGS": "0",
         "XLA_FLAGS": _XLA_GPU_PERF_FLAGS,
+        "TF_GPU_ALLOCATOR": "cuda_malloc_async",
         **TF_LOG_SUPPRESS_ENV_VARS,
     }
 }
@@ -54,6 +55,7 @@ RUNTIME_ENV_THREAD = {
     "env_vars": {
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
         "XLA_FLAGS": _XLA_GPU_PERF_FLAGS,
+        "TF_GPU_ALLOCATOR": "cuda_malloc_async",
         **TF_LOG_SUPPRESS_ENV_VARS,
     }
 }
