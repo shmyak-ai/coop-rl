@@ -265,7 +265,7 @@ class CollectorDreamerUniform:
                 "No GPU devices found. CollectorDreamerUniform requires at least one GPU."
             )
         self.gpu_device = gpu_devices[0]
-        self.rollout_length = 1000
+        self.rollout_length = 100
         self._env_steps = 0
         self._writer: _TBWriter | None = (
             _TBWriter(os.path.join(workdir, "tb")) if workdir is not None else None
@@ -282,6 +282,8 @@ class CollectorDreamerUniform:
         trajectory = []
         uuids = [elements.UUID() for _ in range(self.num_envs)]
         for index in range(self.rollout_length):
+            if self.controller.is_done():
+                break
             obs = self.env.step(self.action)
             obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
             self.flax_state, self.action, outs = self.select_action(self.flax_state, obs)
@@ -309,6 +311,8 @@ class CollectorDreamerUniform:
                 self.episode_reward["last"] = float(self.episode_reward["now"])
                 self.episode_reward["now"] = 0
 
+        if not trajectory:
+            return None
         trajectory = {k: np.stack([x[k] for x in trajectory], axis=1) for k in trajectory[0]}
         trajectory["consec"] = np.full(trajectory["is_first"].shape, 0, np.int32)
         return trajectory
@@ -322,6 +326,8 @@ class CollectorDreamerUniform:
     def _collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
+            if trajectory is None:
+                return
             self._env_steps += self.rollout_length * self.num_envs
 
             while True:

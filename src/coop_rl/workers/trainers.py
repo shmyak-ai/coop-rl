@@ -246,6 +246,7 @@ class Trainer(BufferKeeper):
                     f"GPU peak: {gpu_peak_gib:.2f} GiB."
                 )
                 _ = gc.collect()
+                jax.clear_caches()
                 self._writer.write_scalars(
                     int(self.flax_state.step),
                     {

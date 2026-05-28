@@ -85,7 +85,7 @@ def get_config():
     training_iterations_per_step = 1
 
     config.log_level = log_level
-    config.num_collectors = 5
+    config.num_collectors = 1
     config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -110,7 +110,7 @@ def get_config():
     config.args_buffer.sample_sequence_length = config.dreamer_config.batch_length
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
-    config.args_buffer.max_size = 1000000  # in transitions
+    config.args_buffer.max_size = 300000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.actions_shape = actions_shape
 
@@ -161,7 +161,7 @@ def get_config():
     config.args_collector.workdir = workdir
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
-    config.args_collector.report_period = 10  # per rollouts sampled
+    config.args_collector.report_period = 1  # per rollouts sampled
     config.args_collector.state_recover = state_recover
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env

@@ -669,7 +669,7 @@ def create_train_state(rng, config, obs_space, act_space):
     params = nj.init(agent.train)(params, carry, data, seed=0)
     _, carry_train = nj.pure(agent.init_train)(params, config.batch_size)
     policy_fn = jax.jit(nj.pure(agent.policy))
-    train_fn = jax.jit(nj.pure(agent.train), donate_argnums=0)
+    train_fn = jax.jit(nj.pure(agent.train), donate_argnums=(0, 1))
     flax_state = TrainState.create(
         agent=agent,
         key=rng,

@@ -238,6 +238,7 @@ def _run_thread_training(conf: Any) -> None:
                 future.result()
         except Exception:
             # Unblock all worker loops when one thread fails.
+            logging.getLogger(__name__).exception("Worker thread failed; stopping all workers.")
             _stop_thread_workers(controller, trainer)
             raise
         finally:
