@@ -661,7 +661,7 @@ def create_train_state(rng, config, obs_space, act_space):
     ext_space = agent.ext_space  # Extra inputs to train and report.
     spaces = dict(**obs_space, **act_space, **ext_space)
     params = {}
-    B = 1  # config.batch_size
+    B = 1
     _, carry = nj.pure(agent.init_policy)(params, B)
     T = config.batch_length
     C = config.replay_context

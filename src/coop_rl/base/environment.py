@@ -132,28 +132,33 @@ class HandlerEnvAtari:
 
 
 class HandlerEnvDreamerAtari:
-    def __init__(self, *, dreamer_config):
-        self._env = HandlerEnvDreamerAtari.make_env(dreamer_config)
+    def __init__(self, *, dreamer_config, num_envs=1):
+        self._envs = [HandlerEnvDreamerAtari.make_env(dreamer_config) for _ in range(num_envs)]
+        self._env = self._envs[0]
+        self.num_envs = num_envs
 
     def reset(self, *args, **kwargs):
         return None
 
     def step(self, action, *args, **kwargs):
-        return self._env.step(action)
+        results = [
+            env.step({k: v[i] for k, v in action.items()}) for i, env in enumerate(self._envs)
+        ]
+        return {k: np.stack([r[k] for r in results]) for k in results[0]}
 
     @staticmethod
     def make_env(config):
         suite, task = config.task.split("_", 1)
         kwargs = config.env.get(suite, {})
-        kwargs.update({})
         env = Atari(task, **kwargs)
         return wrap_env(env)
 
     def close(self):
-        self._env.close()
+        for env in self._envs:
+            env.close()
 
     @staticmethod
-    def check_env(*, dreamer_config):
+    def check_env(*, dreamer_config, num_envs=1):
         env = HandlerEnvDreamerAtari.make_env(dreamer_config)
         obs_space = {k: v for k, v in env.obs_space.items() if not k.startswith("log/")}
         act_space = {k: v for k, v in env.act_space.items() if k != "reset"}

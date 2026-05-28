@@ -64,6 +64,7 @@ def get_dreamer_config():
         replicas=config.replicas,
         task=config.task,
         env=config.env,
+        num_envs=config.run.envs,
     )
 
 
@@ -98,16 +99,17 @@ def get_config():
     config.env = env = HandlerEnvDreamerAtari
     config.args_env = args_env = ml_collections.ConfigDict()
     config.args_env.dreamer_config = dreamer_config
+    config.args_env.num_envs = config.dreamer_config.num_envs
 
     config.buffer = buffer = BufferTrajectoryDreamer
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.dreamer_config = dreamer_config
     config.args_buffer.buffer_seed = buffer_seed
-    config.args_buffer.add_batch_size = 1
+    config.args_buffer.add_batch_size = config.dreamer_config.num_envs
     config.args_buffer.sample_batch_size = config.dreamer_config.batch_size
     config.args_buffer.sample_sequence_length = config.dreamer_config.batch_length
     config.args_buffer.period = 1
-    config.args_buffer.min_length = 100
+    config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 1000000  # in transitions
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.actions_shape = actions_shape
@@ -135,7 +137,7 @@ def get_config():
     config.args_trainer.steps = steps
     config.args_trainer.training_iterations_per_step = training_iterations_per_step
     config.args_trainer.summary_writing_period = 100  # logging and reporting
-    config.args_trainer.save_period = 10000  # orbax checkpointing
+    config.args_trainer.save_period = 1000  # orbax checkpointing
     config.args_trainer.synchronization_period = 10  # send params to control actor
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
@@ -150,7 +152,7 @@ def get_config():
     config.args_trainer.args_get_update_epoch.buffer = None
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 100
+    config.args_trainer.num_samples_on_gpu_cache = 3
 
     config.collector = CollectorDreamerUniform
     config.args_collector = ml_collections.ConfigDict()
@@ -159,7 +161,7 @@ def get_config():
     config.args_collector.workdir = workdir
     config.args_collector.collectors_seed = collectors_seed
     config.args_collector.log_level = log_level
-    config.args_collector.report_period = 100  # per rollouts sampled
+    config.args_collector.report_period = 10  # per rollouts sampled
     config.args_collector.state_recover = state_recover
     config.args_collector.args_state_recover = args_state_recover
     config.args_collector.env = env

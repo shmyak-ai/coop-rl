@@ -242,6 +242,7 @@ class CollectorDreamerUniform:
         self.command_executor = CommandExecutor(max_workers=1)
 
         self.env = env(**args_env)
+        self.num_envs = self.env.num_envs
 
         self.collector_seed = collectors_seed
         args_state_recover["rng"] = jax.random.PRNGKey(collectors_seed)
@@ -250,9 +251,10 @@ class CollectorDreamerUniform:
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
         self.select_action = get_select_action_fn(self.flax_state)
         self.action = {
-            k: np.zeros((1,) + v.shape, v.dtype) for k, v in self.env._env.act_space.items()
+            k: np.zeros((self.num_envs,) + v.shape, v.dtype)
+            for k, v in self.env._env.act_space.items()
         }
-        self.action["reset"] = np.ones(1, bool)
+        self.action["reset"] = np.ones(self.num_envs, bool)
         self.episode_reward = {
             "now": 0,
             "last": float("nan"),
@@ -272,31 +274,21 @@ class CollectorDreamerUniform:
 
     def warmup(self) -> None:
         """Trigger JIT compilation of select_action in the calling thread."""
-        action = {k: v[0] for k, v in self.action.items()}
-        obs = self.env.step(action)
-        obs = {k: np.stack([obs[k]]) for k in obs if not k.startswith("log/")}
+        obs = self.env.step(self.action)
+        obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
         self.select_action(self.flax_state, obs)
 
     def run_rollout(self):
         trajectory = []
-        uuid = elements.UUID()
+        uuids = [elements.UUID() for _ in range(self.num_envs)]
         for index in range(self.rollout_length):
-            action = {k: v[0] for k, v in self.action.items()}
-            obs = self.env.step(action)
-            obs = {
-                k: np.stack(
-                    [
-                        obs[k],
-                    ]
-                )
-                for k in obs
-            }
+            obs = self.env.step(self.action)
             obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
             self.flax_state, self.action, outs = self.select_action(self.flax_state, obs)
             self.action = {**self.action, "reset": obs["is_last"].copy()}
 
-            step_id = np.expand_dims(
-                np.frombuffer(bytes(uuid) + index.to_bytes(4, "big"), np.uint8), axis=0
+            step_id = np.stack(
+                [np.frombuffer(bytes(u) + index.to_bytes(4, "big"), np.uint8) for u in uuids]
             )
             trajectory.append(
                 {
@@ -317,9 +309,9 @@ class CollectorDreamerUniform:
                 self.episode_reward["last"] = float(self.episode_reward["now"])
                 self.episode_reward["now"] = 0
 
-        trajectory = {k: np.concatenate([x[k] for x in trajectory], axis=0) for k in trajectory[0]}
+        trajectory = {k: np.stack([x[k] for x in trajectory], axis=1) for k in trajectory[0]}
         trajectory["consec"] = np.full(trajectory["is_first"].shape, 0, np.int32)
-        return {k: v[None] for k, v in trajectory.items()}
+        return trajectory
 
     def collecting(self):
         try:
@@ -330,7 +322,7 @@ class CollectorDreamerUniform:
     def _collecting(self):
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
-            self._env_steps += self.rollout_length
+            self._env_steps += self.rollout_length * self.num_envs
 
             while True:
                 training_done = self.command_executor.call(self.controller, "is_done")
