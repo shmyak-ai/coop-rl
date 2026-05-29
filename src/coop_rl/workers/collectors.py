@@ -255,10 +255,9 @@ class CollectorDreamerUniform:
             for k, v in self.env._env.act_space.items()
         }
         self.action["reset"] = np.ones(self.num_envs, bool)
-        self.episode_reward = {
-            "now": 0,
-            "last": float("nan"),
-        }
+        self.episode_reward_now = np.zeros(self.num_envs)
+        self.completed_returns: deque[float] = deque(maxlen=100)
+        self._params_received = 0
         gpu_devices = jax.devices("gpu")
         if not gpu_devices:
             raise RuntimeError(
@@ -305,11 +304,11 @@ class CollectorDreamerUniform:
                     "action": self.action["action"],
                 }
             )
-            self.episode_reward["now"] += obs["reward"][0]
-
-            if obs["is_terminal"][0] or obs["is_last"][0]:
-                self.episode_reward["last"] = float(self.episode_reward["now"])
-                self.episode_reward["now"] = 0
+            self.episode_reward_now += obs["reward"]
+            done = np.logical_or(obs["is_last"], obs["is_terminal"])
+            for i in np.where(done)[0]:
+                self.completed_returns.append(float(self.episode_reward_now[i]))
+                self.episode_reward_now[i] = 0.0
 
         if not trajectory:
             return None
@@ -355,23 +354,27 @@ class CollectorDreamerUniform:
                     self.flax_state.carry,
                     self.flax_state.carry_train,
                 )
+                self._params_received += 1
             self.futures_parameters = self.command_executor.submit(
                 self.controller,
                 "get_parameters",
             )
 
             if rollouts_count % self.report_period == 0:
-                r = self.episode_reward["last"]
                 self.logger.info(
-                    "Last episode reward: %s.",
-                    f"{r:.4f}" if not np.isnan(r) else "n/a",
+                    "Episode returns (%d): %s. Param updates: %d.",
+                    len(self.completed_returns),
+                    [f"{r:.1f}" for r in self.completed_returns],
+                    self._params_received,
                 )
-                if self._writer is not None and not np.isnan(r):
+                if self._writer is not None and self.completed_returns:
                     self._writer.write_scalars(
                         self._env_steps,
-                        {"collector/episode_reward": r},
+                        {"collector/mean_return": float(np.mean(self.completed_returns))},
                     )
                     self._writer.flush()
+                self.completed_returns.clear()
+                self._params_received = 0
 
     def close(self) -> None:
         """Release local helper resources after collection stops."""

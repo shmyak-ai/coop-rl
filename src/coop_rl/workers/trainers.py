@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import contextlib
-import gc
 import itertools
 import logging
 import os
@@ -245,8 +244,6 @@ class Trainer(BufferKeeper):
                     f"CPU: {cpu_pct:.1f}%  RSS: {rss_main:.2f} GiB  "
                     f"GPU peak: {gpu_peak_gib:.2f} GiB."
                 )
-                _ = gc.collect()
-                jax.clear_caches()
                 self._writer.write_scalars(
                     int(self.flax_state.step),
                     {

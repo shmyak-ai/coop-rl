@@ -611,7 +611,7 @@ class TrainState(struct.PyTreeNode):
       carry_train: Dreamer's train carry
     """
 
-    agent: Agent
+    agent: Agent = struct.field(pytree_node=False)
     key: jax.Array
     step: int | jax.Array
     policy_fn: Callable = struct.field(pytree_node=False)
