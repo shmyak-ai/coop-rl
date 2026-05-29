@@ -228,6 +228,7 @@ def _run_thread_training(conf: Any) -> None:
     max_workers = 1 + conf.num_samplers + conf.num_collectors
 
     executor = ThreadPoolExecutor(max_workers=max_workers)
+    _interrupted = False
     try:
         futures = [
             executor.submit(trainer.training),
@@ -238,6 +239,10 @@ def _run_thread_training(conf: Any) -> None:
         try:
             for future in as_completed(futures):
                 future.result()
+        except KeyboardInterrupt:
+            _interrupted = True
+            _stop_thread_workers(controller, trainer)
+            logging.getLogger(__name__).info("Interrupted; stopping workers.")
         except Exception:
             # Unblock all worker loops when one thread fails.
             logging.getLogger(__name__).exception("Worker thread failed; stopping all workers.")
@@ -246,7 +251,12 @@ def _run_thread_training(conf: Any) -> None:
         finally:
             _stop_thread_workers(controller, trainer)
     finally:
-        executor.shutdown(wait=True)
-        _close_thread_workers(trainer, collectors)
+        # On interrupt, don't wait for daemon threads (they may be stuck in a long
+        # JAX step and won't check is_done until it completes). Python will clean up
+        # daemon threads on process exit.
+        executor.shutdown(wait=not _interrupted, cancel_futures=_interrupted)
+        if not _interrupted:
+            _close_thread_workers(trainer, collectors)
 
-    time.sleep(3)
+    if not _interrupted:
+        time.sleep(3)
