@@ -716,7 +716,7 @@ def get_update_step(
 ) -> Callable:
     def _update_step(
         train_state: TrainState, buffer_sample: TrajectoryBufferSample
-    ) -> tuple[TrainState, dict]:
+    ) -> tuple[TrainState, dict, dict | None]:
         data = buffer_sample.experience
         train_state, seed = train_state.get_key()
         params, (carry_train, outs, mets) = train_state.apply_fn(
@@ -724,7 +724,7 @@ def get_update_step(
         )
         train_state = train_state.update_state(params, train_state.carry, carry_train)
         mets = {**mets, "loss": mets["opt/loss"]}
-        return train_state, mets
+        return train_state, mets, outs.get("replay")
 
     # _checked_update_step = checkify.checkify(
     #     _update_step, errors=checkify.float_checks
@@ -734,11 +734,17 @@ def get_update_step(
 
 
 def get_update_epoch(update_step_fn: Callable, buffer_lock, buffer) -> Callable:
-    def _update_epoch(train_state: TrainState, samples: list[TrajectoryBufferSample]):
-        for sample in samples:
-            # err, (train_state, info) = update_step_fn(train_state, sample)
-            # err.throw()
-            train_state, info = update_step_fn(train_state, sample)
+    def _update_epoch(train_state: TrainState, samples: list):
+        for buffer_sample, batch_indices, time_indices in samples:
+            train_state, info, replay_updates = update_step_fn(train_state, buffer_sample)
+            if replay_updates is not None and buffer is not None:
+                # Write the refreshed RSSM latents back to their original buffer slots so
+                # subsequent samples of the same window warm-start from up-to-date states.
+                replay_updates, batch_indices, time_indices = jax.device_get(
+                    (replay_updates, batch_indices, time_indices)
+                )
+                with buffer_lock.write():
+                    buffer.update(batch_indices, time_indices, replay_updates)
         return train_state, info
 
     return _update_epoch

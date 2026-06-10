@@ -12,14 +12,70 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import threading
 
 import flashbax as fbx
 import jax
 import jax.numpy as jnp
+from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 
 from coop_rl.agents.dreamer import Agent
 from coop_rl.base.base_types import TimeStepDQN
+
+
+def _sample_with_indices(state, rng_key, batch_size, sequence_length, period):
+    """Mirror flashbax trajectory_buffer.sample but also return the sampled slot indices.
+
+    Returns (sample, batch_indices, time_indices) so the trainer can later scatter
+    refreshed latent states back into exactly the slots that were drawn.
+    """
+    leaf = jax.tree_util.tree_leaves(state.experience)[0]
+    add_batch_size, max_length_time_axis = leaf.shape[0], leaf.shape[1]
+
+    max_time = jnp.where(state.is_full, max_length_time_axis, state.current_index)
+    head = jnp.where(state.is_full, state.current_index, 0)
+    max_start = max_time - sequence_length
+    num_valid_items = jnp.where(max_start >= 0, (max_start // period) + 1, 0)
+
+    rng_key, subkey_items = jax.random.split(rng_key)
+    rng_key, subkey_batch = jax.random.split(rng_key)
+    sampled_item_idx = jax.random.randint(subkey_items, (batch_size,), 0, num_valid_items)
+    logical_start = sampled_item_idx * period
+    physical_start = (head + logical_start) % max_length_time_axis
+    batch_indices = jax.random.randint(subkey_batch, (batch_size,), 0, add_batch_size)
+    time_indices = (physical_start[:, None] + jnp.arange(sequence_length)) % max_length_time_axis
+
+    experience = jax.tree.map(lambda x: x[batch_indices[:, None], time_indices], state.experience)
+    return TrajectoryBufferSample(experience=experience), batch_indices, time_indices
+
+
+def _update_latents(state, batch_indices, time_indices, replay_updates):
+    """Scatter refreshed latent entries back into their original buffer slots.
+
+    Only keys present in both ``replay_updates`` and the stored experience are written
+    (i.e. ``dyn/deter`` / ``dyn/stoch``); ``stepid`` is used solely as a guard. A slot is
+    written only if its stored ``stepid`` still matches the sampled one, so trajectories
+    overwritten by the ring buffer between sampling and write-back are left untouched.
+
+    The replay payload covers only the trained steps: with ``replay_context = K`` the first
+    K steps of each sampled window are consumed as warm-start context, so the entries span
+    the last ``T - K`` steps. We therefore align ``time_indices`` to the payload from the right.
+    """
+    rows = batch_indices[:, None]
+    time_indices = time_indices[:, -replay_updates["stepid"].shape[1] :]
+    stored_stepid = state.experience["stepid"][rows, time_indices]
+    match = jnp.all(stored_stepid == replay_updates["stepid"], axis=-1)  # (B, T)
+
+    experience = dict(state.experience)
+    for key, new_val in replay_updates.items():
+        if key == "stepid" or key not in experience:
+            continue
+        old_val = experience[key][rows, time_indices]
+        mask = jnp.expand_dims(match, axis=tuple(range(match.ndim, new_val.ndim)))
+        merged = jnp.where(mask, new_val, old_val)
+        experience[key] = experience[key].at[rows, time_indices].set(merged)
+    return state.replace(experience=experience)
 
 
 class BufferFlat:
@@ -136,6 +192,15 @@ class BufferTrajectoryDreamer:
                 sample=jax.jit(self.buffer.sample),
                 can_sample=jax.jit(self.buffer.can_sample),
             )
+            self._sample_with_indices = jax.jit(
+                functools.partial(
+                    _sample_with_indices,
+                    batch_size=sample_batch_size,
+                    sequence_length=sample_sequence_length,
+                    period=period,
+                )
+            )
+            self._update_latents = jax.jit(_update_latents, donate_argnums=0)
             self.dummy_timestep = {
                 "image": jnp.ones(
                     observation_shape["image"].shape, dtype=observation_shape["image"].dtype
@@ -177,8 +242,14 @@ class BufferTrajectoryDreamer:
         with self._rng_lock:
             self.rng_key, rng_key = jax.random.split(self.rng_key)
         with jax.default_device(self.cpu):
-            batch = self.buffer.sample(self.state, rng_key)
-        return batch
+            batch, batch_indices, time_indices = self._sample_with_indices(self.state, rng_key)
+        return batch, batch_indices, time_indices
+
+    def update(self, batch_indices, time_indices, replay_updates):
+        with jax.default_device(self.cpu):
+            self.state = self._update_latents(
+                self.state, batch_indices, time_indices, replay_updates
+            )
 
     def can_sample(self):
         return self.buffer.can_sample(self.state)
