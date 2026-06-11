@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 
-from coop_rl.agents.dreamer import Agent
+from coop_rl.agents.dreamer import ext_space as dreamer_ext_space
 from coop_rl.base.base_types import TimeStepDQN
 
 
@@ -164,7 +164,7 @@ class BufferTrajectoryDQN:
 class BufferTrajectoryDreamer:
     def __init__(
         self,
-        dreamer_config,
+        args_network,
         buffer_seed,
         add_batch_size,
         sample_batch_size,
@@ -175,7 +175,7 @@ class BufferTrajectoryDreamer:
         observation_shape,
         actions_shape,
     ):
-        ext_space = Agent(observation_shape, actions_shape, dreamer_config).ext_space
+        ext_space = dreamer_ext_space(args_network, observation_shape, actions_shape)
         self.cpu = jax.devices("cpu")[0]
         with jax.default_device(self.cpu):
             self.buffer = fbx.make_trajectory_buffer(

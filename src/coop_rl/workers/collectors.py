@@ -250,11 +250,8 @@ class CollectorDreamerUniform:
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
         self.select_action = get_select_action_fn(self.flax_state)
-        self.action = {
-            k: np.zeros((self.num_envs,) + v.shape, v.dtype)
-            for k, v in self.env._env.act_space.items()
-        }
-        self.action["reset"] = np.ones(self.num_envs, bool)
+        self.obs = None
+        self.prev_done = np.zeros(self.num_envs, bool)
         self.episode_reward_now = np.zeros(self.num_envs)
         self.completed_returns: deque[float] = deque(maxlen=100)
         self._params_received = 0
@@ -271,39 +268,64 @@ class CollectorDreamerUniform:
         )
         self._closed = False
 
+    def _reset_obs(self) -> None:
+        img, _ = self.env.reset(seed=self.collector_seed)
+        self.obs = {
+            "image": img,
+            "is_first": np.ones(self.num_envs, bool),
+            "is_last": np.zeros(self.num_envs, bool),
+            "is_terminal": np.zeros(self.num_envs, bool),
+            "reward": np.zeros(self.num_envs, np.float32),
+        }
+        self.prev_done = np.zeros(self.num_envs, bool)
+
     def warmup(self) -> None:
         """Trigger JIT compilation of select_action in the calling thread."""
-        obs = self.env.step(self.action)
-        obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
-        self.select_action(self.flax_state, obs)
+        self._reset_obs()
+        self.select_action(self.flax_state, self.obs)
 
     def run_rollout(self):
         trajectory = []
         uuids = [elements.UUID() for _ in range(self.num_envs)]
         for index in range(self.rollout_length):
-            obs = self.env.step(self.action)
-            obs = {k: v for k, v in obs.items() if not k.startswith("log/")}
-            self.flax_state, self.action, outs = self.select_action(self.flax_state, obs)
-            self.action = {**self.action, "reset": obs["is_last"].copy()}
+            self.flax_state, action, outs = self.select_action(self.flax_state, self.obs)
+            act = np.asarray(action["action"], dtype=np.int32)
 
             step_id = np.stack(
                 [np.frombuffer(bytes(u) + index.to_bytes(4, "big"), np.uint8) for u in uuids]
             )
             trajectory.append(
                 {
-                    "image": obs["image"],
-                    "is_first": obs["is_first"],
-                    "is_last": obs["is_last"],
-                    "is_terminal": obs["is_terminal"],
-                    "reward": obs["reward"],
+                    "image": self.obs["image"],
+                    "is_first": self.obs["is_first"],
+                    "is_last": self.obs["is_last"],
+                    "is_terminal": self.obs["is_terminal"],
+                    "reward": self.obs["reward"],
                     "stepid": step_id,
                     "dyn/deter": outs["dyn/deter"],
                     "dyn/stoch": outs["dyn/stoch"],
-                    "action": self.action["action"],
+                    "action": act,
                 }
             )
-            self.episode_reward_now += obs["reward"]
-            done = np.logical_or(obs["is_last"], obs["is_terminal"])
+
+            # NEXT_STEP autoreset: the step that finishes an episode returns the
+            # terminal obs (done=True); the following step returns the fresh reset
+            # obs (action ignored). So the new obs is a first-of-episode frame
+            # exactly for the envs that were done on the previous step.
+            next_img, reward, terminated, truncated, _ = self.env.step(act)
+            done = np.logical_or(terminated, truncated)
+            is_first = self.prev_done
+            reward = np.where(is_first, 0.0, reward).astype(np.float32)
+            self.obs = {
+                "image": next_img,
+                "is_first": is_first,
+                "is_last": done,
+                "is_terminal": done,
+                "reward": reward,
+            }
+            self.prev_done = done
+
+            self.episode_reward_now += reward
             for i in np.where(done)[0]:
                 self.completed_returns.append(float(self.episode_reward_now[i]))
                 self.episode_reward_now[i] = 0.0
@@ -319,6 +341,8 @@ class CollectorDreamerUniform:
             self.close()
 
     def _collecting(self):
+        if self.obs is None:
+            self._reset_obs()
         for rollouts_count in itertools.count(start=1, step=1):
             trajectory = self.run_rollout()
             self._env_steps += self.rollout_length * self.num_envs

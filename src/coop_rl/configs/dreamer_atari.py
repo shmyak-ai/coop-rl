@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from pathlib import Path
-
-import elements
 import ml_collections
-import ruamel.yaml as yaml
 from ml_collections import config_dict
 
 from coop_rl.agents.dreamer import (
+    build_model,
     get_select_action_fn,
     get_update_epoch,
     get_update_step,
@@ -27,45 +24,103 @@ from coop_rl.agents.dreamer import (
 )
 from coop_rl.base.buffers import BufferTrajectoryDreamer
 from coop_rl.base.environment import HandlerEnvDreamerAtari
+from coop_rl.base.utils import make_dreamer_optimizer
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import CollectorDreamerUniform
 from coop_rl.workers.trainers import Trainer
 
-DREAMER_CONFIG_PATH = Path(__file__).resolve().parent / "dreamer.yaml"
-DREAMER_ARGV = [
-    "--configs",
-    "size1m",
-    "--logdir",
-    "/home/sia/dreamer_results/atari",
-    "--task",
-    "atari_pong",
-]
+cd = ml_collections.ConfigDict
 
 
-def get_dreamer_config():
-    configs = elements.Path(DREAMER_CONFIG_PATH).read()
-    configs = yaml.YAML(typ="safe").load(configs)
-    parsed, other = elements.Flags(configs=["defaults"]).parse_known(DREAMER_ARGV)
-    config = elements.Config(configs["defaults"])
-    for name in parsed.configs:
-        config = config.update(configs[name])
-    config = elements.Flags(config).parse(other)
-    config = config.update(logdir=(config.logdir.format(timestamp=elements.timestamp())))
-    return elements.Config(
-        **config.agent,
-        logdir=config.logdir,
-        seed=config.seed,
-        jax=config.jax,
-        batch_size=config.batch_size,
-        batch_length=config.batch_length,
-        replay_context=config.replay_context,
-        report_length=config.report_length,
-        replica=config.replica,
-        replicas=config.replicas,
-        task=config.task,
-        env=config.env,
-        num_envs=config.run.envs,
+def _args_network():
+    """DreamerV3 'size1m' model + actor-critic hyperparameters (Atari path).
+
+    Consumed by ``build_model(args_network, obs_space, act_space)``. These are the
+    upstream ``dreamer.yaml`` defaults with the ``size1m`` overrides applied
+    (rssm deter=512/hidden=64/classes=4, depth=4, units=64).
+    """
+    c = ml_collections.ConfigDict()
+
+    c.replay_context = 1
+
+    # World model.
+    c.dyn = ml_collections.ConfigDict()
+    c.dyn.rssm = cd(
+        dict(
+            deter=512,
+            hidden=64,
+            stoch=32,
+            classes=4,
+            act="silu",
+            norm="rms",
+            unimix=0.01,
+            outscale=1.0,
+            imglayers=2,
+            obslayers=1,
+            dynlayers=1,
+            blocks=8,
+            free_nats=1.0,
+        )
     )
+    c.enc = ml_collections.ConfigDict()
+    c.enc.simple = cd(
+        dict(depth=4, mults=(2, 3, 4, 4), layers=3, units=64, act="silu", norm="rms", kernel=5)
+    )
+    c.dec = ml_collections.ConfigDict()
+    c.dec.simple = cd(
+        dict(
+            depth=4,
+            mults=(2, 3, 4, 4),
+            layers=3,
+            units=64,
+            act="silu",
+            norm="rms",
+            outscale=1.0,
+            kernel=5,
+            bspace=8,
+        )
+    )
+
+    # Heads.
+    c.rewhead = cd(dict(layers=1, units=64, act="silu", norm="rms", bins=255, outscale=0.0))
+    c.conhead = cd(dict(layers=1, units=64, act="silu", norm="rms", outscale=1.0))
+    c.value = cd(dict(layers=3, units=64, act="silu", norm="rms", bins=255, outscale=0.0))
+    c.policy = cd(
+        dict(
+            layers=3,
+            units=64,
+            act="silu",
+            norm="rms",
+            minstd=0.1,
+            maxstd=1.0,
+            outscale=0.01,
+            unimix=0.01,
+        )
+    )
+    c.policy_dist_disc = "categorical"
+    c.policy_dist_cont = "bounded_normal"
+
+    # Loss weights.
+    c.loss_scales = cd(
+        dict(rec=1.0, rew=1.0, con=1.0, dyn=1.0, rep=0.1, policy=1.0, value=1.0, repval=0.3)
+    )
+
+    # Actor-critic.
+    c.ac_grads = False
+    c.contdisc = True
+    c.horizon = 333
+    c.imag_length = 15
+    c.imag_last = 0
+    c.reward_grad = True
+    c.repval_loss = True
+    c.repval_grad = True
+    c.imag_loss = cd(dict(slowtar=False, lam=0.95, actent=3e-4, slowreg=1.0))
+    c.repl_loss = cd(dict(slowtar=False, lam=0.95, slowreg=1.0))
+    c.retnorm = cd(dict(impl="perc", rate=0.01, limit=1.0, perclo=5.0, perchi=95.0, debias=False))
+    c.valnorm = cd(dict(impl="none", rate=0.01, limit=1e-8))
+    c.advnorm = cd(dict(impl="none", rate=0.01, limit=1e-8))
+
+    return c
 
 
 def get_config():
@@ -77,37 +132,56 @@ def get_config():
     actions_shape = config_dict.FieldReference(None, field_type=dict)
     workdir = config_dict.FieldReference(None, field_type=str)
     checkpointdir = config_dict.FieldReference(None, field_type=str)
-    dreamer_config = config_dict.FieldReference(None, field_type=elements.config.Config)
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
     steps = 3000000
     training_iterations_per_step = 1
 
+    # Run / batching.
+    num_envs = 16
+    batch_size = 16
+    batch_length = 64
+    slow_rate = 0.02  # slow-critic EMA rate (upstream slowvalue.rate)
+
     config.log_level = log_level
-    config.num_collectors = 10 
+    config.num_collectors = 10
     config.num_samplers = 3
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
     config.workdir = workdir
-    config.dreamer_config = dreamer_config
-    config.dreamer_config = (
-        get_dreamer_config()
-    )  # only to prevent type change of elements.config.Config
+
+    config.network = network = build_model
+    config.args_network = args_network = _args_network()
+
+    config.optimizer = optimizer = make_dreamer_optimizer
+    config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
+    config.args_optimizer.lr = 4e-5
+    config.args_optimizer.agc = 0.3
+    config.args_optimizer.eps = 1e-20
+    config.args_optimizer.beta1 = 0.9
+    config.args_optimizer.beta2 = 0.999
+    config.args_optimizer.momentum = True
+    config.args_optimizer.wd = 0.0
+    config.args_optimizer.schedule = "const"
+    config.args_optimizer.warmup = 1000
+    config.args_optimizer.anneal = 0
 
     config.env = env = HandlerEnvDreamerAtari
     config.args_env = args_env = ml_collections.ConfigDict()
-    config.args_env.dreamer_config = dreamer_config
-    config.args_env.num_envs = config.dreamer_config.num_envs
+    config.args_env.env_name = "ale_py:ALE/Pong-v5"
+    config.args_env.num_envs = num_envs
+    config.args_env.screen_size = 96
+    config.args_env.sticky = True
 
     config.buffer = buffer = BufferTrajectoryDreamer
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
-    config.args_buffer.dreamer_config = dreamer_config
+    config.args_buffer.args_network = args_network
     config.args_buffer.buffer_seed = buffer_seed
-    config.args_buffer.add_batch_size = config.dreamer_config.num_envs
-    config.args_buffer.sample_batch_size = config.dreamer_config.batch_size
-    config.args_buffer.sample_sequence_length = config.dreamer_config.batch_length
+    config.args_buffer.add_batch_size = num_envs
+    config.args_buffer.sample_batch_size = batch_size
+    config.args_buffer.sample_sequence_length = batch_length
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
     config.args_buffer.max_size = 300000  # in transitions
@@ -117,12 +191,16 @@ def get_config():
     config.state_recover = state_recover = restore_dreamer_flax_state
     config.args_state_recover = args_state_recover = ml_collections.ConfigDict()
     config.args_state_recover.rng = None
-    config.args_state_recover.dreamer_config = dreamer_config
+    config.args_state_recover.network = network
+    config.args_state_recover.args_network = args_network
+    config.args_state_recover.optimizer = optimizer
+    config.args_state_recover.args_optimizer = args_optimizer
     config.args_state_recover.observation_shape = observation_shape
     config.args_state_recover.actions_shape = actions_shape
+    config.args_state_recover.batch_size = batch_size
+    config.args_state_recover.batch_length = batch_length
+    config.args_state_recover.slow_rate = slow_rate
     config.args_state_recover.checkpointdir = checkpointdir
-
-    config.agent_params = agent_params = None
 
     config.controller = Controller
     config.args_controller = ml_collections.ConfigDict()
@@ -144,7 +222,6 @@ def get_config():
     config.args_trainer.get_update_step = get_update_step
     config.args_trainer.args_get_update_step = ml_collections.ConfigDict()
     config.args_trainer.args_get_update_step.apply_fn = None
-    config.args_trainer.args_get_update_step.config = agent_params
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
     config.args_trainer.args_get_update_epoch.update_step_fn = None

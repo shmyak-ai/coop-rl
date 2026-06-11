@@ -11,8 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# DreamerV3 agent on flax/optax (no ninjax). The world model (RSSM, encoder,
+# decoder), heads and distributions live under coop_rl.networks / coop_rl.base;
+# this module wires them into one composite flax module and exposes the coop_rl
+# agent contract (TrainState, create/restore, get_select_action_fn,
+# get_update_step, get_update_epoch). The algorithm math (imag_loss, repl_loss,
+# lambda_return, KL balancing) is a faithful port of the original.
 
-import re
 from collections.abc import Callable
 from typing import Any
 
@@ -20,238 +26,226 @@ import chex
 import elements
 import jax
 import jax.numpy as jnp
-import ml_collections
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
-from flax import core, struct
-from typing_extensions import NamedTuple
+from flax import linen as nn
+from flax import struct
 
-from coop_rl import dreamer
-from coop_rl.dreamer import nets as nn
-from coop_rl.dreamer import ninjax as nj
-from coop_rl.dreamer import rssm
+from coop_rl.networks.dreamer_nn import COMPUTE_DTYPE, cast
+from coop_rl.networks.dreamer_nn import where as nn_where
+from coop_rl.networks.heads import DictMLPHead, HeadSpec, MLPHead
+from coop_rl.networks.rssm import RSSM, Decoder, Encoder
 
 f32 = jnp.float32
 i32 = jnp.int32
-
-
-def take_outs(outs):
-    outs = jax.tree.map(lambda x: x.__array__(), outs)
-    outs = jax.tree.map(lambda x: np.float32(x) if x.dtype == jnp.bfloat16 else x, outs)
-    return outs
 
 
 def sg(xs, skip=False):
     return xs if skip else jax.lax.stop_gradient(xs)
 
 
-def sample(xs):
-    return jax.tree.map(lambda x: x.sample(nj.seed()), xs)
+def concat(xs, axis):
+    return jax.tree.map(lambda *x: jnp.concatenate(x, axis), *xs)
 
 
-def prefix(xs, p):
-    return {f"{p}/{k}": v for k, v in xs.items()}
+def take_outs(outs_tree):
+    outs_tree = jax.tree.map(lambda x: x.__array__(), outs_tree)
+    outs_tree = jax.tree.map(lambda x: np.float32(x) if x.dtype == jnp.bfloat16 else x, outs_tree)
+    return outs_tree
 
 
-def concat(xs, a):
-    return jax.tree.map(lambda *x: jnp.concatenate(x, a), *xs)
+# ---------------------------------------------------------------------------
+# Running normalizer (return / value / advantage). Stateful via the flax
+# 'stats' mutable collection. Port of embodied.jax.utils.Normalize (single
+# device, so the cross-host pmean is dropped).
+# ---------------------------------------------------------------------------
 
 
-def isimage(s):
-    return s.dtype == np.uint8 and len(s.shape) == 3
+class Normalize(nn.Module):
+    impl: str
+    rate: float = 0.01
+    limit: float = 1e-8
+    perclo: float = 5.0
+    perchi: float = 95.0
+    debias: bool = True
+
+    def setup(self):
+        if self.debias and self.impl != "none":
+            self.corr = self.variable("stats", "corr", lambda: jnp.zeros((), f32))
+        if self.impl == "meanstd":
+            self.mean = self.variable("stats", "mean", lambda: jnp.zeros((), f32))
+            self.sqrs = self.variable("stats", "sqrs", lambda: jnp.zeros((), f32))
+        elif self.impl == "perc":
+            self.lo = self.variable("stats", "lo", lambda: jnp.zeros((), f32))
+            self.hi = self.variable("stats", "hi", lambda: jnp.zeros((), f32))
+        elif self.impl != "none":
+            raise NotImplementedError(self.impl)
+
+    def __call__(self, x, update):
+        if update:
+            self.update(x)
+        return self.stats()
+
+    def update(self, x):
+        x = sg(f32(x))
+        if self.impl == "meanstd":
+            self._ema(self.mean, x.mean())
+            self._ema(self.sqrs, jnp.square(x).mean())
+        elif self.impl == "perc":
+            self._ema(self.lo, jnp.percentile(x, self.perclo))
+            self._ema(self.hi, jnp.percentile(x, self.perchi))
+        if self.debias and self.impl != "none":
+            self._ema(self.corr, 1.0)
+
+    def stats(self):
+        corr = 1.0
+        if self.debias and self.impl != "none":
+            corr = corr / jnp.maximum(self.rate, self.corr.value)
+        if self.impl == "none":
+            return 0.0, 1.0
+        elif self.impl == "meanstd":
+            mean = self.mean.value * corr
+            std = jnp.sqrt(jax.nn.relu(self.sqrs.value * corr - mean**2))
+            std = jnp.maximum(self.limit, std)
+            return mean, std
+        elif self.impl == "perc":
+            lo, hi = self.lo.value * corr, self.hi.value * corr
+            return sg(lo), sg(jnp.maximum(self.limit, hi - lo))
+        else:
+            raise NotImplementedError(self.impl)
+
+    def _ema(self, var, val):
+        var.value = (1 - self.rate) * var.value + self.rate * sg(val)
 
 
-class Agent:
-    banner = [
-        r"---  ___                           __   ______ ---",
-        r"--- |   \ _ _ ___ __ _ _ __  ___ _ \ \ / /__ / ---",
-        r"--- | |) | '_/ -_) _` | '  \/ -_) '/\ V / |_ \ ---",
-        r"--- |___/|_| \___\__,_|_|_|_\___|_|  \_/ |___/ ---",
-    ]
+# ---------------------------------------------------------------------------
+# Composite world-model + actor-critic module.
+# ---------------------------------------------------------------------------
 
-    def __init__(self, obs_space, act_space, config):
-        self.obs_space = obs_space = dict(obs_space)
-        self.act_space = act_space = dict(act_space)
-        self.config = config
 
-        exclude = ("is_first", "is_last", "is_terminal", "reward")
-        enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
-        dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
-        self.enc = {
-            "simple": rssm.Encoder,
-        }[config.enc.typ](enc_space, **config.enc[config.enc.typ], name="enc")
-        self.dyn = {
-            "rssm": rssm.RSSM,
-        }[config.dyn.typ](act_space, **config.dyn[config.dyn.typ], name="dyn")
-        self.dec = {
-            "simple": rssm.Decoder,
-        }[config.dec.typ](dec_space, **config.dec[config.dec.typ], name="dec")
+class DreamerModel(nn.Module):
+    enc: Encoder
+    dyn: RSSM
+    dec: Decoder
+    rew: MLPHead
+    con: MLPHead
+    pol: DictMLPHead
+    val: MLPHead
+    slowval: MLPHead
+    retnorm: Normalize
+    valnorm: Normalize
+    advnorm: Normalize
 
-        self.feat2tensor = lambda x: jnp.concatenate(
-            [nn.cast(x["deter"]), nn.cast(x["stoch"].reshape((*x["stoch"].shape[:-2], -1)))], -1
-        )
+    act_keys: tuple[str, ...]
+    act_classes: tuple[int, ...]
+    img_keys: tuple[str, ...]
+    contdisc: bool
+    horizon: int
+    imag_length: int
+    imag_last: int
+    ac_grads: bool
+    reward_grad: bool
+    repval_loss: bool
+    repval_grad: bool
+    replay_context: int
+    loss_scales: tuple[tuple[str, float], ...]
+    imag_lam: float
+    imag_actent: float
+    imag_slowreg: float
+    imag_slowtar: bool
+    repl_lam: float
+    repl_slowreg: float
+    repl_slowtar: bool
 
-        scalar = elements.Space(np.float32, ())
-        binary = elements.Space(bool, (), 0, 2)
-        self.rew = dreamer.MLPHead(scalar, **config.rewhead, name="rew")
-        self.con = dreamer.MLPHead(binary, **config.conhead, name="con")
+    def feat2tensor(self, x):
+        stoch = x["stoch"].reshape((*x["stoch"].shape[:-2], -1))
+        return jnp.concatenate([cast(x["deter"]), cast(stoch)], -1)
 
-        d1, d2 = config.policy_dist_disc, config.policy_dist_cont
-        outs = {k: d1 if v.discrete else d2 for k, v in act_space.items()}
-        self.pol = dreamer.MLPHead(act_space, outs, **config.policy, name="pol")
+    def _embed_action(self, action):
+        parts = []
+        for k, cls in zip(self.act_keys, self.act_classes, strict=True):
+            a = action[k].astype(jnp.int32)
+            parts.append(jax.nn.one_hot(a, cls, dtype=COMPUTE_DTYPE))
+        return jnp.concatenate(parts, -1)
 
-        self.val = dreamer.MLPHead(scalar, **config.value, name="val")
-        self.slowval = dreamer.SlowModel(
-            dreamer.MLPHead(scalar, **config.value, name="slowval"),
-            source=self.val,
-            **config.slowvalue,
-        )
+    def initial_carry(self, batch_size):
+        enc_carry = {}
+        dyn_carry = self.dyn.initial(batch_size)
+        dec_carry = {}
+        prevact = {k: jnp.zeros((batch_size,), i32) for k in self.act_keys}
+        return (enc_carry, dyn_carry, dec_carry, prevact)
 
-        self.retnorm = dreamer.Normalize(**config.retnorm, name="retnorm")
-        self.valnorm = dreamer.Normalize(**config.valnorm, name="valnorm")
-        self.advnorm = dreamer.Normalize(**config.advnorm, name="advnorm")
-
-        self.modules = [self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
-        self.opt = dreamer.Optimizer(
-            self.modules, self._make_opt(**config.opt), summary_depth=1, name="opt"
-        )
-
-        scales = self.config.loss_scales.copy()
-        rec = scales.pop("rec")
-        scales.update({k: rec for k in dec_space})
-        self.scales = scales
-
-    @property
-    def policy_keys(self):
-        return "^(enc|dyn|dec|pol)/"
-
-    @property
-    def ext_space(self):
-        spaces = {}
-        spaces["consec"] = elements.Space(np.int32)
-        spaces["stepid"] = elements.Space(np.uint8, 20)
-        if self.config.replay_context:
-            spaces.update(
-                elements.tree.flatdict(
-                    dict(
-                        enc=self.enc.entry_space, dyn=self.dyn.entry_space, dec=self.dec.entry_space
-                    )
-                )
-            )
-        return spaces
-
-    def init_policy(self, batch_size):
-        def zeros(x):
-            return jnp.zeros((batch_size, *x.shape), x.dtype)
-
-        return (
-            self.enc.initial(batch_size),
-            self.dyn.initial(batch_size),
-            self.dec.initial(batch_size),
-            jax.tree.map(zeros, self.act_space),
-        )
-
-    def init_train(self, batch_size):
-        return self.init_policy(batch_size)
-
-    def init_report(self, batch_size):
-        return self.init_policy(batch_size)
-
-    def policy(self, carry, obs, mode="train"):
-        (enc_carry, dyn_carry, dec_carry, prevact) = carry
-        kw = dict(training=False, single=True)
+    def policy(self, carry, obs):
+        enc_carry, dyn_carry, dec_carry, prevact = carry
         reset = obs["is_first"]
-        enc_carry, enc_entry, tokens = self.enc(enc_carry, obs, reset, **kw)
-        dyn_carry, dyn_entry, feat = self.dyn.observe(dyn_carry, tokens, prevact, reset, **kw)
-        dec_entry = {}
-        if dec_carry:
-            dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
-        policy = self.pol(self.feat2tensor(feat), bdims=1)
-        act = sample(policy)
-        out = {}
-        out["finite"] = elements.tree.flatdict(
-            jax.tree.map(
-                lambda x: jnp.isfinite(x).all(range(1, x.ndim)),
-                dict(obs=obs, carry=carry, tokens=tokens, feat=feat, act=act),
-            )
-        )
+        tokens = self.enc(obs, reset)
+        action_emb = self._embed_action(prevact)
+        dyn_carry, (dyn_entry, feat) = self.dyn.observe_step(dyn_carry, tokens, action_emb, reset)
+        polout = self.pol(self.feat2tensor(feat), 1)
+        act = {k: v.sample(self.make_rng("sample")) for k, v in polout.items()}
+        out = elements.tree.flatdict({"dyn": dyn_entry})
         carry = (enc_carry, dyn_carry, dec_carry, act)
-        if self.config.replay_context:
-            out.update(elements.tree.flatdict(dict(enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
         return carry, act, out
 
-    def train(self, carry, data):
-        carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
-        metrics, (carry, entries, outs, mets) = self.opt(
-            self.loss, carry, obs, prevact, training=True, has_aux=True
+    def _imagine(self, start_carry, length):
+        def step(mdl, carry, _):
+            feat = sg(carry)
+            polout = mdl.pol(mdl.feat2tensor(feat), 1)
+            act = {k: v.sample(mdl.make_rng("sample")) for k, v in polout.items()}
+            act_emb = mdl._embed_action(act)
+            new_carry, newfeat = mdl.dyn.imagine_step(carry, act_emb)
+            return new_carry, (newfeat, act)
+
+        scan = nn.scan(
+            step,
+            variable_broadcast="params",
+            split_rngs={"sample": True, "params": False},
+            in_axes=0,
+            out_axes=1,
         )
-        metrics.update(mets)
-        self.slowval.update()
-        outs = {}
-        if self.config.replay_context:
-            updates = elements.tree.flatdict(
-                dict(stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2])
-            )
-            B, T = obs["is_first"].shape
-            assert all(x.shape[:2] == (B, T) for x in updates.values()), (
-                (B, T),
-                {k: v.shape for k, v in updates.items()},
-            )
-            outs["replay"] = updates
-        # if self.config.replay.fracs.priority > 0:
-        #   outs['replay']['priority'] = losses['model']
-        carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
-        return carry, outs, metrics
+        _, (feat, act) = scan(self, start_carry, jnp.arange(length))
+        return feat, act
 
     def loss(self, carry, obs, prevact, training):
         enc_carry, dyn_carry, dec_carry = carry
         reset = obs["is_first"]
-        B, T = reset.shape
+        b, t = reset.shape
         losses = {}
         metrics = {}
 
-        # World model
-        enc_carry, enc_entries, tokens = self.enc(enc_carry, obs, reset, training)
+        # World model.
+        tokens = self.enc(obs, reset)
+        action_emb = self._embed_action(prevact)
         dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
-            dyn_carry, tokens, prevact, reset, training
+            dyn_carry, tokens, action_emb, reset
         )
         losses.update(los)
         metrics.update(mets)
-        dec_carry, dec_entries, recons = self.dec(dec_carry, repfeat, reset, training)
-        inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
-        losses["rew"] = self.rew(inp, 2).loss(obs["reward"])
-        con = f32(~obs["is_terminal"])
-        if self.config.contdisc:
-            con *= 1 - 1 / self.config.horizon
+        recons = self.dec(repfeat, reset)
+        inp = sg(self.feat2tensor(repfeat), skip=self.reward_grad)
+        losses["rew"] = self.rew(inp, 2).loss(obs["reward"].astype(f32))
+        con = (~obs["is_terminal"]).astype(f32)
+        if self.contdisc:
+            con *= 1 - 1 / self.horizon
         losses["con"] = self.con(self.feat2tensor(repfeat), 2).loss(con)
-        for key, recon in recons.items():
-            space, value = self.obs_space[key], obs[key]
-            assert value.dtype == space.dtype, (key, space, value.dtype)
-            target = f32(value) / 255 if isimage(space) else value
-            losses[key] = recon.loss(sg(target))
+        for key in self.img_keys:
+            target = obs[key].astype(f32) / 255
+            losses[key] = recons[key].loss(sg(target))
 
-        B, T = reset.shape
-        shapes = {k: v.shape for k, v in losses.items()}
-        assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
-
-        # Imagination
-        K = min(self.config.imag_last or T, T)
-        H = self.config.imag_length
-        starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-
-        def policyfn(feat):
-            return sample(self.pol(self.feat2tensor(feat), 1))
-
-        _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
-        first = jax.tree.map(lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
-        imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
-        lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
+        # Imagination.
+        k = min(self.imag_last or t, t)
+        h = self.imag_length
+        starts = self.dyn.starts(dyn_entries, dyn_carry, k)
+        imgfeat_s, imgact_s = self._imagine(starts, h)
+        first = jax.tree.map(lambda x: x[:, -k:].reshape((b * k, 1, *x.shape[2:])), repfeat)
+        imgfeat = concat([sg(first, skip=self.ac_grads), sg(imgfeat_s)], 1)
+        lastfeat = jax.tree.map(lambda x: x[:, -1], imgfeat)
+        lastpol = self.pol(self.feat2tensor(lastfeat), 1)
+        lastact = {key: v.sample(self.make_rng("sample")) for key, v in lastpol.items()}
         lastact = jax.tree.map(lambda x: x[:, None], lastact)
-        imgact = concat([imgprevact, lastact], 1)
-        assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
-        assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
+        imgact = concat([imgact_s, lastact], 1)
         inp = self.feat2tensor(imgfeat)
         los, imgloss_out, mets = imag_loss(
             imgact,
@@ -264,23 +258,26 @@ class Agent:
             self.valnorm,
             self.advnorm,
             update=training,
-            contdisc=self.config.contdisc,
-            horizon=self.config.horizon,
-            **self.config.imag_loss,
+            contdisc=self.contdisc,
+            horizon=self.horizon,
+            slowtar=self.imag_slowtar,
+            lam=self.imag_lam,
+            actent=self.imag_actent,
+            slowreg=self.imag_slowreg,
         )
-        losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
+        losses.update({key: v.mean(1).reshape((b, k)) for key, v in los.items()})
         metrics.update(mets)
 
-        # Replay
-        if self.config.repval_loss:
-            feat = sg(repfeat, skip=self.config.repval_grad)
-            last, term, rew = [obs[k] for k in ("is_last", "is_terminal", "reward")]
-            boot = imgloss_out["ret"][:, 0].reshape(B, K)
+        # Replay value loss.
+        if self.repval_loss:
+            feat = sg(repfeat, skip=self.repval_grad)
+            last, term, rew = obs["is_last"], obs["is_terminal"], obs["reward"].astype(f32)
+            boot = imgloss_out["ret"][:, 0].reshape(b, k)
             feat, last, term, rew, boot = jax.tree.map(
-                lambda x: x[:, -K:], (feat, last, term, rew, boot)
+                lambda x: x[:, -k:], (feat, last, term, rew, boot)
             )
             inp = self.feat2tensor(feat)
-            los, reploss_out, mets = repl_loss(
+            los, _, mets = repl_loss(
                 last,
                 term,
                 rew,
@@ -289,180 +286,81 @@ class Agent:
                 self.slowval(inp, 2),
                 self.valnorm,
                 update=training,
-                horizon=self.config.horizon,
-                **self.config.repl_loss,
+                horizon=self.horizon,
+                slowtar=self.repl_slowtar,
+                lam=self.repl_lam,
+                slowreg=self.repl_slowreg,
             )
             losses.update(los)
-            metrics.update(prefix(mets, "reploss"))
 
-        assert set(losses.keys()) == set(self.scales.keys()), (
+        scales = dict(self.loss_scales)
+        assert set(losses.keys()) == set(scales.keys()), (
             sorted(losses.keys()),
-            sorted(self.scales.keys()),
+            sorted(scales.keys()),
         )
-        metrics.update({f"loss/{k}": v.mean() for k, v in losses.items()})
-        loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
+        metrics.update({f"loss/{key}": v.mean() for key, v in losses.items()})
+        loss = sum([v.mean() * scales[key] for key, v in losses.items()])
 
         carry = (enc_carry, dyn_carry, dec_carry)
-        entries = (enc_entries, dyn_entries, dec_entries)
-        outs = {"tokens": tokens, "repfeat": repfeat, "losses": losses}
-        return loss, (carry, entries, outs, metrics)
+        entries = ({}, dyn_entries, {})
+        out = {"losses": losses}
+        return loss, (carry, entries, out, metrics)
 
-    def report(self, carry, data):
-        if not self.config.report:
-            return carry, {}
-
-        carry, obs, prevact, _ = self._apply_replay_context(carry, data)
-        (enc_carry, dyn_carry, dec_carry) = carry
-        B, T = obs["is_first"].shape
-        RB = min(6, B)
-        metrics = {}
-
-        # Train metrics
-        _, (new_carry, entries, outs, mets) = self.loss(carry, obs, prevact, training=False)
-        mets.update(mets)
-
-        # Grad norms
-        if self.config.report_gradnorms:
-            for key in self.scales:
-                try:
-                    lossfn = lambda data, carry: self.loss(  # noqa: E731
-                        carry, obs, prevact, training=False
-                    )[1][2]["losses"][key].mean()  # noqa: B023
-                    grad = nj.grad(lossfn, self.modules)(data, carry)[-1]
-                    metrics[f"gradnorm/{key}"] = optax.global_norm(grad)
-                except KeyError:
-                    print(f"Skipping gradnorm summary for missing loss: {key}")
-
-        # Open loop
-        def firsthalf(xs):
-            return jax.tree.map(lambda x: x[:RB, : T // 2], xs)
-
-        def secondhalf(xs):
-            return jax.tree.map(lambda x: x[:RB, T // 2 :], xs)
-
-        dyn_carry = jax.tree.map(lambda x: x[:RB], dyn_carry)
-        dec_carry = jax.tree.map(lambda x: x[:RB], dec_carry)
-        dyn_carry, _, obsfeat = self.dyn.observe(
-            dyn_carry,
-            firsthalf(outs["tokens"]),
-            firsthalf(prevact),
-            firsthalf(obs["is_first"]),
-            training=False,
-        )
-        _, imgfeat, _ = self.dyn.imagine(
-            dyn_carry, secondhalf(prevact), length=T - T // 2, training=False
-        )
-        dec_carry, _, obsrecons = self.dec(
-            dec_carry, obsfeat, firsthalf(obs["is_first"]), training=False
-        )
-        dec_carry, _, imgrecons = self.dec(
-            dec_carry, imgfeat, jnp.zeros_like(secondhalf(obs["is_first"])), training=False
-        )
-
-        # Video preds
-        for key in self.dec.imgkeys:
-            assert obs[key].dtype == jnp.uint8
-            true = obs[key][:RB]
-            pred = jnp.concatenate([obsrecons[key].pred(), imgrecons[key].pred()], 1)
-            pred = jnp.clip(pred * 255, 0, 255).astype(jnp.uint8)
-            error = ((i32(pred) - i32(true) + 255) / 2).astype(np.uint8)
-            video = jnp.concatenate([true, pred, error], 2)
-
-            video = jnp.pad(video, [[0, 0], [0, 0], [2, 2], [2, 2], [0, 0]])
-            mask = jnp.zeros(video.shape, bool).at[:, :, 2:-2, 2:-2, :].set(True)
-            border = jnp.full((T, 3), jnp.array([0, 255, 0]), jnp.uint8)
-            border = border.at[T // 2 :].set(jnp.array([255, 0, 0], jnp.uint8))
-            video = jnp.where(mask, video, border[None, :, None, None, :])
-            video = jnp.concatenate([video, 0 * video[:, :10]], 1)
-
-            B, T, H, W, C = video.shape
-            grid = video.transpose((1, 2, 0, 3, 4)).reshape((T, H, B * W, C))
-            metrics[f"openloop/{key}"] = grid
-
-        carry = (*new_carry, {k: data[k][:, -1] for k in self.act_space})
-        return carry, metrics
+    def train_loss(self, carry, data, training=True):
+        carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
+        loss, (carry, entries, _, metrics) = self.loss(carry, obs, prevact, training)
+        out = {}
+        if self.replay_context:
+            out["replay"] = elements.tree.flatdict(
+                {"stepid": stepid, "enc": entries[0], "dyn": entries[1], "dec": entries[2]}
+            )
+        carry = (*carry, {key: data[key][:, -1] for key in self.act_keys})
+        return loss, (carry, out, metrics)
 
     def _apply_replay_context(self, carry, data):
-        (enc_carry, dyn_carry, dec_carry, prevact) = carry
+        enc_carry, dyn_carry, dec_carry, prevact = carry
         carry = (enc_carry, dyn_carry, dec_carry)
         stepid = data["stepid"]
-        obs = {k: data[k] for k in self.obs_space}
+        obs = {k: data[k] for k in (*self.img_keys, "is_first", "is_last", "is_terminal", "reward")}
 
         def prepend(x, y):
             return jnp.concatenate([x[:, None], y[:, :-1]], 1)
 
-        prevact = {k: prepend(prevact[k], data[k]) for k in self.act_space}
-        if not self.config.replay_context:
+        prevact = {k: prepend(prevact[k], data[k]) for k in self.act_keys}
+        if not self.replay_context:
             return carry, obs, prevact, stepid
 
-        K = self.config.replay_context
+        c = self.replay_context
         nested = elements.tree.nestdict(data)
         entries = [nested.get(k, {}) for k in ("enc", "dyn", "dec")]
 
         def lhs(xs):
-            return jax.tree.map(lambda x: x[:, :K], xs)
+            return jax.tree.map(lambda x: x[:, :c], xs)
 
         def rhs(xs):
-            return jax.tree.map(lambda x: x[:, K:], xs)
+            return jax.tree.map(lambda x: x[:, c:], xs)
 
         rep_carry = (
-            self.enc.truncate(lhs(entries[0]), enc_carry),
+            {},
             self.dyn.truncate(lhs(entries[1]), dyn_carry),
-            self.dec.truncate(lhs(entries[2]), dec_carry),
+            {},
         )
-        rep_obs = {k: rhs(data[k]) for k in self.obs_space}
-        rep_prevact = {k: data[k][:, K - 1 : -1] for k in self.act_space}
+        rep_obs = {k: rhs(obs[k]) for k in obs}
+        rep_prevact = {k: data[k][:, c - 1 : -1] for k in self.act_keys}
         rep_stepid = rhs(stepid)
 
         first_chunk = data["consec"][:, 0] == 0
         carry, obs, prevact, stepid = jax.tree.map(
-            lambda normal, replay: nn.where(first_chunk, replay, normal),
+            lambda normal, replay: nn_where(first_chunk, replay, normal),
             (carry, rhs(obs), rhs(prevact), rhs(stepid)),
             (rep_carry, rep_obs, rep_prevact, rep_stepid),
         )
         return carry, obs, prevact, stepid
 
-    def _make_opt(
-        self,
-        lr: float = 4e-5,
-        agc: float = 0.3,
-        eps: float = 1e-20,
-        beta1: float = 0.9,
-        beta2: float = 0.999,
-        momentum: bool = True,
-        nesterov: bool = False,
-        wd: float = 0.0,
-        wdregex: str = r"/kernel$",
-        schedule: str = "const",
-        warmup: int = 1000,
-        anneal: int = 0,
-    ):
-        chain = []
-        chain.append(dreamer.opt.clip_by_agc(agc))
-        chain.append(dreamer.opt.scale_by_rms(beta2, eps))
-        chain.append(dreamer.opt.scale_by_momentum(beta1, nesterov))
-        if wd:
-            assert not wdregex[0].isnumeric(), wdregex
-            pattern = re.compile(wdregex)
 
-            def wdmask(params):
-                return {k: bool(pattern.search(k)) for k in params}
-
-            chain.append(optax.add_decayed_weights(wd, wdmask))
-        assert anneal > 0 or schedule == "const"
-        if schedule == "const":
-            sched = optax.constant_schedule(lr)
-        elif schedule == "linear":
-            sched = optax.linear_schedule(lr, 0.1 * lr, anneal - warmup)
-        elif schedule == "cosine":
-            sched = optax.cosine_decay_schedule(lr, anneal - warmup, 0.1 * lr)
-        else:
-            raise NotImplementedError(schedule)
-        if warmup:
-            ramp = optax.linear_schedule(0.0, lr, warmup)
-            sched = optax.join_schedules([ramp, sched], [warmup])
-        chain.append(optax.scale_by_learning_rate(sched))
-        return optax.chain(*chain)
+# ---------------------------------------------------------------------------
+# Actor-critic losses (verbatim pure port of dreamerv3.agent).
+# ---------------------------------------------------------------------------
 
 
 def imag_loss(
@@ -515,27 +413,16 @@ def imag_loss(
 
     ret_normed = (ret - roffset) / rscale
     metrics["adv"] = adv.mean()
-    metrics["adv_std"] = adv.std()
-    metrics["adv_mag"] = jnp.abs(adv).mean()
     metrics["rew"] = rew.mean()
     metrics["con"] = con.mean()
     metrics["ret"] = ret_normed.mean()
     metrics["val"] = val.mean()
-    metrics["tar"] = tar_normed.mean()
     metrics["weight"] = weight.mean()
-    metrics["slowval"] = slowval.mean()
-    metrics["ret_min"] = ret_normed.min()
-    metrics["ret_max"] = ret_normed.max()
-    metrics["ret_rate"] = (jnp.abs(ret_normed) >= 1.0).mean()
     for k in act:
         metrics[f"ent/{k}"] = ents[k].mean()
-        if hasattr(policy[k], "minent"):
-            lo, hi = policy[k].minent, policy[k].maxent
-            metrics[f"rand/{k}"] = (ents[k].mean() - lo) / (hi - lo)
 
-    outs = {}
-    outs["ret"] = ret
-    return losses, outs, metrics
+    out = {"ret": ret}
+    return losses, out, metrics
 
 
 def repl_loss(
@@ -570,11 +457,9 @@ def repl_loss(
         * (value.loss(sg(ret_padded)) + slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
     )
 
-    outs = {}
-    outs["ret"] = ret
+    out = {"ret": ret}
     metrics = {}
-
-    return losses, outs, metrics
+    return losses, out, metrics
 
 
 def lambda_return(last, term, rew, val, boot, disc, lam):
@@ -588,158 +473,402 @@ def lambda_return(last, term, rew, val, boot, disc, lam):
     return jnp.stack(list(reversed(rets))[:-1], 1)
 
 
-class Transition(NamedTuple):
-    obs: chex.ArrayTree
-    action: chex.Array
-    reward: chex.Array
-    done: chex.Array
-    next_obs: chex.Array
-    info: dict
+# ---------------------------------------------------------------------------
+# Model construction from a (dreamer) config + obs/act spaces.
+# ---------------------------------------------------------------------------
+
+
+def build_model(config, obs_space, act_space):
+    exclude = ("is_first", "is_last", "is_terminal", "reward")
+    enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
+    img_keys = tuple(sorted(k for k, s in enc_space.items() if len(s.shape) == 3))
+    s0 = enc_space[img_keys[0]]
+    img_res = (int(s0.shape[0]), int(s0.shape[1]))
+    img_channels = tuple(int(enc_space[k].shape[-1]) for k in img_keys)
+
+    r, e, d = config.dyn.rssm, config.enc.simple, config.dec.simple
+    enc = Encoder(
+        img_keys=img_keys,
+        depth=int(e.depth),
+        mults=tuple(e.mults),
+        kernel=int(e.kernel),
+        act=e.act,
+        norm=e.norm,
+    )
+    dyn = RSSM(
+        deter=int(r.deter),
+        hidden=int(r.hidden),
+        stoch=int(r.stoch),
+        classes=int(r.classes),
+        norm=r.norm,
+        act=r.act,
+        unimix=float(r.unimix),
+        outscale=float(r.outscale),
+        imglayers=int(r.imglayers),
+        obslayers=int(r.obslayers),
+        dynlayers=int(r.dynlayers),
+        blocks=int(r.blocks),
+        free_nats=float(r.free_nats),
+    )
+    dec = Decoder(
+        img_keys=img_keys,
+        img_res=img_res,
+        img_channels=img_channels,
+        units=int(d.units),
+        depth=int(d.depth),
+        mults=tuple(d.mults),
+        kernel=int(d.kernel),
+        bspace=int(d.bspace),
+        act=d.act,
+        norm=d.norm,
+        outscale=float(d.outscale),
+    )
+
+    rh, ch, vh, ph = config.rewhead, config.conhead, config.value, config.policy
+    rew = MLPHead(
+        int(rh.layers),
+        int(rh.units),
+        rh.act,
+        rh.norm,
+        HeadSpec("symexp_twohot", (), bins=int(rh.bins), outscale=float(rh.outscale)),
+    )
+    con = MLPHead(
+        int(ch.layers),
+        int(ch.units),
+        ch.act,
+        ch.norm,
+        HeadSpec("binary", (), outscale=float(ch.outscale)),
+    )
+    val = MLPHead(
+        int(vh.layers),
+        int(vh.units),
+        vh.act,
+        vh.norm,
+        HeadSpec("symexp_twohot", (), bins=int(vh.bins), outscale=float(vh.outscale)),
+    )
+    slowval = MLPHead(
+        int(vh.layers),
+        int(vh.units),
+        vh.act,
+        vh.norm,
+        HeadSpec("symexp_twohot", (), bins=int(vh.bins), outscale=float(vh.outscale)),
+    )
+
+    act_keys = tuple(sorted(act_space.keys()))
+    act_classes = tuple(int(np.asarray(act_space[k].classes).max()) for k in act_keys)
+    specs = tuple(
+        HeadSpec(
+            config.policy_dist_disc,
+            (),
+            classes=c,
+            unimix=float(ph.unimix),
+            minstd=float(ph.minstd),
+            maxstd=float(ph.maxstd),
+            outscale=float(ph.outscale),
+        )
+        for c in act_classes
+    )
+    pol = DictMLPHead(int(ph.layers), int(ph.units), ph.act, ph.norm, keys=act_keys, specs=specs)
+
+    rn, vn, an = config.retnorm, config.valnorm, config.advnorm
+    retnorm = Normalize(
+        rn.impl,
+        rate=float(rn.rate),
+        limit=float(rn.limit),
+        perclo=float(rn.perclo),
+        perchi=float(rn.perchi),
+        debias=bool(rn.debias),
+    )
+    valnorm = Normalize(vn.impl, rate=float(vn.rate), limit=float(vn.limit))
+    advnorm = Normalize(an.impl, rate=float(an.rate), limit=float(an.limit))
+
+    scales = dict(config.loss_scales)
+    rec = scales.pop("rec")
+    for k in img_keys:
+        scales[k] = rec
+    loss_scales = tuple(sorted((k, float(v)) for k, v in scales.items()))
+
+    il, rl = config.imag_loss, config.repl_loss
+    return DreamerModel(
+        enc=enc,
+        dyn=dyn,
+        dec=dec,
+        rew=rew,
+        con=con,
+        pol=pol,
+        val=val,
+        slowval=slowval,
+        retnorm=retnorm,
+        valnorm=valnorm,
+        advnorm=advnorm,
+        act_keys=act_keys,
+        act_classes=act_classes,
+        img_keys=img_keys,
+        contdisc=bool(config.contdisc),
+        horizon=int(config.horizon),
+        imag_length=int(config.imag_length),
+        imag_last=int(config.imag_last),
+        ac_grads=bool(config.ac_grads),
+        reward_grad=bool(config.reward_grad),
+        repval_loss=bool(config.repval_loss),
+        repval_grad=bool(config.repval_grad),
+        replay_context=int(config.replay_context),
+        loss_scales=loss_scales,
+        imag_lam=float(il.lam),
+        imag_actent=float(il.actent),
+        imag_slowreg=float(il.slowreg),
+        imag_slowtar=bool(il.slowtar),
+        repl_lam=float(rl.lam),
+        repl_slowreg=float(rl.slowreg),
+        repl_slowtar=bool(rl.slowtar),
+    )
+
+
+def ext_space(config, obs_space, act_space):
+    """Extra buffer columns (replay-context latents + ids). Mirrors the original
+    Agent.ext_space used by BufferTrajectoryDreamer."""
+    spaces = {}
+    spaces["consec"] = elements.Space(np.int32)
+    spaces["stepid"] = elements.Space(np.uint8, 20)
+    if int(config.replay_context):
+        r = config.dyn.rssm
+        spaces["dyn/deter"] = elements.Space(np.float32, int(r.deter))
+        spaces["dyn/stoch"] = elements.Space(np.float32, (int(r.stoch), int(r.classes)))
+    return spaces
+
+
+# ---------------------------------------------------------------------------
+# Train state + agent contract.
+# ---------------------------------------------------------------------------
 
 
 class TrainState(struct.PyTreeNode):
-    """
-    Args:
-      agent: Dreamer agent object
-      key: jax rng key
-      step: Counter starts at 0 and is incremented by every call to
-        ``.apply_gradients()``.
-      policy_fn: Similar to ``model.apply()``, Dreamer nj pure policy method
-      train_fn: Dreamer nj pure training method
-      params: The parameters to be updated by ``tx`` and used by ``apply_fn``.
-      carry: Dreamer's carry
-      carry_train: Dreamer's train carry
-    """
-
-    agent: Agent = struct.field(pytree_node=False)
-    key: jax.Array
-    step: int | jax.Array
+    model: DreamerModel = struct.field(pytree_node=False)
+    tx: Any = struct.field(pytree_node=False)
     policy_fn: Callable = struct.field(pytree_node=False)
     apply_fn: Callable = struct.field(pytree_node=False)
-    params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    carry: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-    carry_train: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
-
-    def update_state(self, params, carry, carry_train, **kwargs):
-        return self.replace(
-            step=self.step + 1,
-            params=params,
-            carry=carry,
-            carry_train=carry_train,
-            **kwargs,
-        )
+    key: jax.Array
+    step: int | jax.Array
+    params: Any = struct.field(pytree_node=True)
+    stats: Any = struct.field(pytree_node=True)
+    opt_state: Any = struct.field(pytree_node=True)
+    carry: Any = struct.field(pytree_node=True)
+    carry_train: Any = struct.field(pytree_node=True)
 
     def get_key(self):
         in_key, out_key = jax.random.split(self.key)
         return self.replace(key=in_key), out_key
 
+    def update_state(self, params, carry, carry_train, **kwargs):
+        # Kept for collector compatibility (params/carry sync from controller).
+        return self.replace(params=params, carry=carry, carry_train=carry_train, **kwargs)
+
+    def update_after_train(self, params, stats, opt_state, carry_train):
+        return self.replace(
+            step=self.step + 1,
+            params=params,
+            stats=stats,
+            opt_state=opt_state,
+            carry_train=carry_train,
+        )
+
     @classmethod
-    def create(cls, *, agent, key, policy_fn, apply_fn, params, carry, carry_train, **kwargs):
-        """Creates a new instance with ``step=0``."""
+    def create(
+        cls, *, model, tx, policy_fn, apply_fn, key, params, stats, opt_state, carry, carry_train
+    ):
         return cls(
-            agent=agent,
-            key=key,
-            step=0,
+            model=model,
+            tx=tx,
             policy_fn=policy_fn,
             apply_fn=apply_fn,
+            key=key,
+            step=0,
             params=params,
+            stats=stats,
+            opt_state=opt_state,
             carry=carry,
             carry_train=carry_train,
-            **kwargs,
         )
 
 
-def zeros(spaces, batch_shape):
-    data = {k: np.zeros(v.shape, v.dtype) for k, v in spaces.items()}
-    for dim in reversed(batch_shape):
-        data = {k: np.repeat(v[None], dim, axis=0) for k, v in data.items()}
-    return data
+def _ema_slow(params, rate):
+    slow = optax.incremental_update(params["val"], params["slowval"], rate)
+    return {**params, "slowval": slow}
 
 
-def create_train_state(rng, config, obs_space, act_space):
-    agent = Agent(obs_space, act_space, config)
-    ext_space = agent.ext_space  # Extra inputs to train and report.
-    spaces = dict(**obs_space, **act_space, **ext_space)
-    params = {}
-    B = 1
-    _, carry = nj.pure(agent.init_policy)(params, B)
-    T = config.batch_length
-    C = config.replay_context
-    data = zeros(spaces, (B, T + C))
-    params = nj.init(agent.train)(params, carry, data, seed=0)
-    _, carry_train = nj.pure(agent.init_train)(params, config.batch_size)
-    policy_fn = jax.jit(nj.pure(agent.policy))
-    train_fn = jax.jit(nj.pure(agent.train), donate_argnums=(0, 1))
-    flax_state = TrainState.create(
-        agent=agent,
-        key=rng,
+def _make_policy_fn(model):
+    @jax.jit
+    def policy_fn(params, carry, obs, rng):
+        return model.apply(
+            {"params": params}, carry, obs, rngs={"sample": rng}, method=DreamerModel.policy
+        )
+
+    return policy_fn
+
+
+def _make_train_fn(model, tx, slow_rate):
+    @jax.jit
+    def train_fn(params, stats, opt_state, carry_train, data, rng):
+        def loss_fn(p):
+            (loss, (carry, out, mets)), new_vars = model.apply(
+                {"params": p, "stats": stats},
+                carry_train,
+                data,
+                rngs={"sample": rng},
+                method=DreamerModel.train_loss,
+                mutable=["stats"],
+            )
+            return loss, (carry, out, mets, new_vars.get("stats", stats))
+
+        (loss, (carry, out, mets, new_stats)), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            params
+        )
+        updates, opt_state = tx.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        params = _ema_slow(params, slow_rate)
+        mets = {**mets, "loss": loss, "grad_norm": optax.global_norm(grads)}
+        return params, new_stats, opt_state, carry, out, mets
+
+    return train_fn
+
+
+def create_train_state(
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    obs_space,
+    act_space,
+    batch_size,
+    batch_length,
+    slow_rate,
+):
+    obs_space = dict(obs_space)
+    act_space = dict(act_space)
+    model = network(args_network, obs_space, act_space)
+
+    init_rng, state_rng = jax.random.split(rng)
+    params_rng, sample_rng = jax.random.split(init_rng)
+    batch = 1
+    t = int(batch_length) + int(args_network.replay_context)
+    carry = model.apply({}, batch, method=DreamerModel.initial_carry)
+    data = _dummy_data(args_network, obs_space, act_space, batch, t)
+    variables = model.init(
+        {"params": params_rng, "sample": sample_rng},
+        carry,
+        data,
+        method=DreamerModel.train_loss,
+    )
+    params = dict(variables["params"])
+    stats = variables.get("stats", {})
+    params["slowval"] = jax.tree.map(lambda x: x, params["val"])
+
+    tx = optimizer(**dict(args_optimizer))
+    opt_state = tx.init(params)
+
+    policy_fn = _make_policy_fn(model)
+    train_fn = _make_train_fn(model, tx, float(slow_rate))
+    carry_train = model.apply({}, int(batch_size), method=DreamerModel.initial_carry)
+
+    return TrainState.create(
+        model=model,
+        tx=tx,
         policy_fn=policy_fn,
         apply_fn=train_fn,
+        key=state_rng,
         params=params,
+        stats=stats,
+        opt_state=opt_state,
         carry=carry,
         carry_train=carry_train,
     )
-    return flax_state
+
+
+def _dummy_data(args_network, obs_space, act_space, batch, t):
+    spaces = dict(**obs_space, **act_space, **ext_space(args_network, obs_space, act_space))
+    data = {}
+    for k, v in spaces.items():
+        data[k] = jnp.zeros((batch, t, *v.shape), _np_dtype(v.dtype))
+    return data
+
+
+def _np_dtype(dtype):
+    return jnp.dtype(dtype)
 
 
 def restore_dreamer_flax_state(
-    rng, dreamer_config, observation_shape, actions_shape, checkpointdir
+    *,
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    observation_shape,
+    actions_shape,
+    batch_size,
+    batch_length,
+    slow_rate,
+    checkpointdir,
 ):
-    state = create_train_state(rng, dreamer_config, observation_shape, actions_shape)
+    state = create_train_state(
+        rng,
+        network,
+        args_network,
+        optimizer,
+        args_optimizer,
+        observation_shape,
+        actions_shape,
+        batch_size,
+        batch_length,
+        slow_rate,
+    )
     if checkpointdir is None:
         return state
     orbax_checkpointer = ocp.StandardCheckpointer()
-    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
-    return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
+    abstract = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+    return orbax_checkpointer.restore(checkpointdir, abstract)
 
 
 def get_select_action_fn(flax_state: TrainState):
-    pattern = re.compile(flax_state.agent.policy_keys)
-    policy_keys = [k for k in flax_state.params if pattern.search(k)]
-
     def select_action(flax_state: TrainState, observation: chex.ArrayTree):
-        policy_params = {k: flax_state.params[k].copy() for k in policy_keys}
         flax_state, seed = flax_state.get_key()
-        _, (carry, acts, outs) = flax_state.policy_fn(
-            policy_params, flax_state.carry, observation, seed=seed
+        carry, acts, out = flax_state.policy_fn(
+            flax_state.params, flax_state.carry, observation, seed
         )
         flax_state = flax_state.update_state(flax_state.params, carry, flax_state.carry_train)
-        acts, outs = take_outs((acts, outs))
-        _ = outs.pop("finite", {})
-        return flax_state, acts, outs
+        acts, out = take_outs((acts, out))
+        return flax_state, acts, out
 
     return select_action
 
 
-def get_update_step(
-    apply_fn: None = None, config: ml_collections.ConfigDict | None = None
-) -> Callable:
+def get_update_step(apply_fn=None, config=None) -> Callable:
     def _update_step(
         train_state: TrainState, buffer_sample: TrajectoryBufferSample
     ) -> tuple[TrainState, dict, dict | None]:
         data = buffer_sample.experience
         train_state, seed = train_state.get_key()
-        params, (carry_train, outs, mets) = train_state.apply_fn(
-            train_state.params, train_state.carry_train, data, seed=seed
+        params, stats, opt_state, carry_train, out, mets = train_state.apply_fn(
+            train_state.params,
+            train_state.stats,
+            train_state.opt_state,
+            train_state.carry_train,
+            data,
+            seed,
         )
-        train_state = train_state.update_state(params, train_state.carry, carry_train)
-        mets = {**mets, "loss": mets["opt/loss"]}
-        return train_state, mets, outs.get("replay")
+        train_state = train_state.update_after_train(params, stats, opt_state, carry_train)
+        return train_state, mets, out.get("replay")
 
-    # _checked_update_step = checkify.checkify(
-    #     _update_step, errors=checkify.float_checks
-    # )
-    # return _checked_update_step
     return _update_step
 
 
 def get_update_epoch(update_step_fn: Callable, buffer_lock, buffer) -> Callable:
     def _update_epoch(train_state: TrainState, samples: list):
+        info = {}
         for buffer_sample, batch_indices, time_indices in samples:
             train_state, info, replay_updates = update_step_fn(train_state, buffer_sample)
             if replay_updates is not None and buffer is not None:
-                # Write the refreshed RSSM latents back to their original buffer slots so
-                # subsequent samples of the same window warm-start from up-to-date states.
                 replay_updates, batch_indices, time_indices = jax.device_get(
                     (replay_updates, batch_indices, time_indices)
                 )

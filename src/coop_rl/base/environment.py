@@ -1,25 +1,11 @@
 from functools import partial
 
+import elements
 import gymnasium as gym
 import numpy as np
 from gymnasium import ObservationWrapper
 from gymnasium.spaces import Box
 from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
-
-import coop_rl.dreamer.wrappers as wrappers
-from coop_rl.dreamer.envs.atari import Atari
-
-
-def wrap_env(env):
-    for name, space in env.act_space.items():
-        if not space.discrete:
-            env = wrappers.NormalizeAction(env, name)
-    env = wrappers.UnifyDtypes(env)
-    env = wrappers.CheckSpaces(env)
-    for name, space in env.act_space.items():
-        if not space.discrete:
-            env = wrappers.ClipAction(env, name)
-    return env
 
 
 class FirstDimToLast(ObservationWrapper):
@@ -69,13 +55,31 @@ class HandlerEnv:
         )
 
 
-def _make_atari_env(env_name, stack_size, kwargs):
+def _make_atari_env(
+    env_name,
+    stack_size,
+    kwargs,
+    *,
+    screen_size=84,
+    grayscale=True,
+    add_channel=False,
+    repeat_action_probability=0.0,
+):
     """Module-level factory for VectorEnv (must be picklable)."""
     import ale_py
 
     ale_py.ALEInterface.setLoggerMode(ale_py.LoggerMode.Error)
-    env = gym.make(env_name, frameskip=1, repeat_action_probability=0, **kwargs)
-    env = AtariPreprocessing(env, terminal_on_life_loss=False, grayscale_obs=True, scale_obs=False)
+    env = gym.make(
+        env_name, frameskip=1, repeat_action_probability=repeat_action_probability, **kwargs
+    )
+    env = AtariPreprocessing(
+        env,
+        screen_size=screen_size,
+        terminal_on_life_loss=False,
+        grayscale_obs=grayscale,
+        grayscale_newaxis=add_channel,
+        scale_obs=False,
+    )
     if stack_size > 1:
         env = FrameStackObservation(env, stack_size)
         env = FirstDimToLast(env)
@@ -132,40 +136,71 @@ class HandlerEnvAtari:
 
 
 class HandlerEnvDreamerAtari:
-    def __init__(self, *, dreamer_config, num_envs=1):
-        self._envs = [HandlerEnvDreamerAtari.make_env(dreamer_config) for _ in range(num_envs)]
-        self._env = self._envs[0]
+    """Gymnasium-based Atari env handler for DreamerV3.
+
+    Single grayscale frame ``(screen_size, screen_size, 1)`` uint8, NEXT_STEP
+    autoreset (the done step returns the terminal obs, the next step returns the
+    fresh reset obs) so the collector can mark ``is_first`` from the previous
+    step's done flag. ``check_env`` returns the dict-of-Spaces obs/act contract
+    the Dreamer buffer and world model expect.
+    """
+
+    def __init__(self, *, env_name, num_envs=1, screen_size=96, sticky=True):
+        rap = 0.25 if sticky else 0.0
+        factory = partial(
+            _make_atari_env,
+            env_name,
+            1,
+            {},
+            screen_size=screen_size,
+            grayscale=True,
+            add_channel=True,
+            repeat_action_probability=rap,
+        )
+        autoreset_mode = gym.vector.AutoresetMode.NEXT_STEP
+        if num_envs > 1:
+            self._env = gym.vector.AsyncVectorEnv(
+                [factory] * num_envs, context="forkserver", autoreset_mode=autoreset_mode
+            )
+        else:
+            self._env = gym.vector.SyncVectorEnv([factory], autoreset_mode=autoreset_mode)
         self.num_envs = num_envs
 
-    def reset(self, *args, **kwargs):
-        return None
+    def reset(self, *, seed=None, **kwargs):
+        obs, info = self._env.reset(seed=seed, **kwargs)
+        return obs, info  # (num_envs, screen_size, screen_size, 1)
 
-    def step(self, action, *args, **kwargs):
-        results = [
-            env.step({k: v[i] for k, v in action.items()}) for i, env in enumerate(self._envs)
-        ]
-        return {k: np.stack([r[k] for r in results]) for k in results[0]}
+    def step(self, actions):  # actions: (num_envs,)
+        return self._env.step(actions)  # obs, rewards, terminated, truncated, infos
 
     @staticmethod
-    def make_env(config):
-        suite, task = config.task.split("_", 1)
-        kwargs = config.env.get(suite, {})
-        env = Atari(task, **kwargs)
-        return wrap_env(env)
+    def make_env(env_name, screen_size=96, sticky=True):
+        rap = 0.25 if sticky else 0.0
+        return _make_atari_env(
+            env_name,
+            1,
+            {},
+            screen_size=screen_size,
+            grayscale=True,
+            add_channel=True,
+            repeat_action_probability=rap,
+        )
 
     def close(self):
-        for env in self._envs:
-            env.close()
+        self._env.close()
 
     @staticmethod
-    def check_env(*, dreamer_config, num_envs=1):
-        env = HandlerEnvDreamerAtari.make_env(dreamer_config)
-        obs_space = {k: v for k, v in env.obs_space.items() if not k.startswith("log/")}
-        act_space = {k: v for k, v in env.act_space.items() if k != "reset"}
+    def check_env(*, env_name, num_envs=1, screen_size=96, sticky=True):
+        env = HandlerEnvDreamerAtari.make_env(env_name, screen_size=screen_size, sticky=sticky)
+        shape = env.observation_space.shape
+        n_actions = env.action_space.n
         env.close()
-
-        return (
-            obs_space,
-            None,
-            act_space,
-        )
+        obs_space = {
+            "image": elements.Space(np.uint8, shape),
+            "reward": elements.Space(np.float32),
+            "is_first": elements.Space(bool),
+            "is_last": elements.Space(bool),
+            "is_terminal": elements.Space(bool),
+        }
+        act_space = {"action": elements.Space(np.int32, (), 0, int(n_actions))}
+        return obs_space, None, act_space
