@@ -145,8 +145,8 @@ def get_config():
     slow_rate = 0.02  # slow-critic EMA rate (upstream slowvalue.rate)
 
     config.log_level = log_level
-    config.num_collectors = 10
-    config.num_samplers = 3
+    config.num_collectors = 3
+    config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
