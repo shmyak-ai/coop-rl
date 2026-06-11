@@ -1,7 +1,3 @@
-#
-# from Stoix https://github.com/EdanToledo/Stoix
-#
-
 import chex
 import jax
 import jax.numpy as jnp

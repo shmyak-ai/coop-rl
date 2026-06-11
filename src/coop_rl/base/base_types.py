@@ -1,7 +1,3 @@
-#
-# from Stoix https://github.com/EdanToledo/Stoix
-#
-
 from collections.abc import Callable
 from typing import Any, TypeAlias
 
