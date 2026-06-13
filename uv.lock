@@ -630,6 +630,7 @@ dependencies = [
     { name = "jupyter-client" },
     { name = "matplotlib" },
     { name = "ml-collections" },
+    { name = "mlagents-envs" },
     { name = "numpy" },
     { name = "optax" },
     { name = "pandas" },
@@ -659,6 +660,7 @@ requires-dist = [
     { name = "jupyter-client" },
     { name = "matplotlib" },
     { name = "ml-collections" },
+    { name = "mlagents-envs", specifier = ">=0.28.0" },
     { name = "numpy" },
     { name = "optax" },
     { name = "pandas" },
@@ -2069,6 +2071,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/79/2b/a826ba18d2179a56e144aef69e57fb2ab7c464ef0b2111940ee8a3a223a2/ml_dtypes-0.5.4-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0d2ffd05a2575b1519dc928c0b93c06339eb67173ff53acb00724502cda231cf", size = 5366332, upload-time = "2025-11-17T22:32:21.193Z" },
     { url = "https://files.pythonhosted.org/packages/84/44/f4d18446eacb20ea11e82f133ea8f86e2bf2891785b67d9da8d0ab0ef525/ml_dtypes-0.5.4-cp314-cp314t-win_amd64.whl", hash = "sha256:4381fe2f2452a2d7589689693d3162e876b3ddb0a832cde7a414f8e1adf7eab1", size = 236612, upload-time = "2025-11-17T22:32:22.579Z" },
     { url = "https://files.pythonhosted.org/packages/ad/3f/3d42e9a78fe5edf792a83c074b13b9b770092a4fbf3462872f4303135f09/ml_dtypes-0.5.4-cp314-cp314t-win_arm64.whl", hash = "sha256:11942cbf2cf92157db91e5022633c0d9474d4dfd813a909383bd23ce828a4b7d", size = 168825, upload-time = "2025-11-17T22:32:23.766Z" },
+]
+
+[[package]]
+name = "mlagents-envs"
+version = "0.28.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "grpcio" },
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "protobuf" },
+    { name = "pyyaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/d4/1eb7754c386c30776a6c29d19ad1f74e8a0e128ce44bb3515c69ca9804e7/mlagents_envs-0.28.0.tar.gz", hash = "sha256:7b1ddc993fab19b10def3a7dbb77c788e209d793a83d17fb75a35823ba4afb91", size = 46428, upload-time = "2022-01-14T20:56:56.971Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/78/eb4dd13ac89e99c289cf78783a84867642c6d53147c030a60e533e96c4df/mlagents_envs-0.28.0-py3-none-any.whl", hash = "sha256:29be1e0bef0d00c20b1cdb20156546dc9d2c6426c436fcada60ed9d92e9ed190", size = 77385, upload-time = "2022-01-14T20:56:55.687Z" },
 ]
 
 [[package]]
