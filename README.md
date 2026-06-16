@@ -13,16 +13,6 @@ source .venv/bin/activate
 
 > JAX with CUDA 12 support is included as a dependency. Make sure the matching CUDA toolkit is available on your system.
 
-### Unity (ML-Agents) environments
-
-`HandlerUnityEnv` depends on `mlagents-envs`, which ships protobuf stubs built for `protobuf<3.21`. This project pins `protobuf` 6.x (required by ray/tensorflow/tensorboard/orbax), so a freshly installed `mlagents-envs` fails to `import mlagents_envs`. Regenerate its stubs for the installed protobuf/grpcio:
-
-```bash
-scripts/regen_mlagents_protos.sh
-```
-
-Set `MLAGENTS_PROTO_DIR` if your ml-agents `.proto` sources are not at the script's default path. The regenerated stubs live in the virtualenv, so **re-run this script after any `uv sync`** that reinstalls `mlagents-envs`.
-
 ## Running training
 
 Install the package, then use the `coop-rl-train` entry point with `--config` set to the config module name.

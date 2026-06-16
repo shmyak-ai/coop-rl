@@ -32,7 +32,6 @@ dependencies = [
     "einops",
     "ruff",
     "jupyter_client",
-    "mlagents-envs>=0.28.0",
 ]
 
 [project.scripts]
