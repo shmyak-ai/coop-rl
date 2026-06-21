@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 import ml_collections
 from ml_collections import config_dict
 
@@ -138,15 +140,17 @@ def get_config():
     steps = 3000000
     training_iterations_per_step = 1
 
-    # Run / batching. The Godot game has one AIController, so num_envs is 1, and
-    # Python is the TCP server (one editor instance), so a single collector.
-    num_envs = 1
+    # Run / batching. Topology is K collectors x N in-process agents. Each Bridge
+    # process hosts num_envs (N) AIController agents (--n_envs); num_collectors (K)
+    # processes run in parallel, each on its own port. Tune both to your hardware;
+    # use --backend ray for K > 1. Total parallel envs = K * N.
+    num_envs = 8
     batch_size = 16
     batch_length = 64
     slow_rate = 0.02  # slow-critic EMA rate (upstream slowvalue.rate)
 
     config.log_level = log_level
-    config.num_collectors = 1
+    config.num_collectors = 4
     config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -171,20 +175,21 @@ def get_config():
 
     config.env = env = HandlerGodotEnv
     config.args_env = args_env = ml_collections.ConfigDict()
-    # env_path None => connect to a running Godot editor (press Play after the
-    # trainer starts, since Python binds the port first). Set a built-player path
-    # for headless runs; combine with speedup > 1 to run the game faster.
-    config.args_env.env_path = config_dict.placeholder(str)
-    config.args_env.num_envs = num_envs
+    # Built headless binary (no suffix; .x86_64 is appended on Linux). Required for
+    # num_collectors > 1 (editor mode is single-process). Set env_path=None instead
+    # to connect to a running editor (press Play), single process only.
+    config.args_env.env_path = os.path.expanduser("~/Godot/Bridge/build/bridge")
+    config.args_env.num_envs = num_envs  # N agents per process (--n_envs)
+    # Base TCP port; runtime.training assigns collector i the port base + i.
     config.args_env.port = 11008
     config.args_env.show_window = False
-    config.args_env.speedup = 1
-    config.args_env.seed = seed + 37
+    config.args_env.speedup = 8  # faster headless collection
+    config.args_env.seed = seed + 37  # base env seed; offset per collector at launch
     # 25x25 map zero-padded to 48x48 so it fits the 16x-downsampling conv encoder.
     config.args_env.pad_to = 48
     # Fixed Bridge schema (build_system IMG_CHANNELS, controller get_action_space).
     # Declared here so check_env builds the space contract without opening a Godot
-    # connection; the collector's single live env validates the game against these.
+    # connection; each collector's live env validates the game against these.
     config.args_env.image_channels = 6
     config.args_env.num_actions = 8
 

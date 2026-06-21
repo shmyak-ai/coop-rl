@@ -23,7 +23,15 @@ scripts/install_godot_rl.sh
 
 The script installs from a local clone of `godot_rl_agents` (default `~/Godot/godot_rl_agents`, override with `GODOT_RL_DIR`) — the upstream repo's Godot-side plugin is an SSH git submodule that a direct `git+https` install cannot fetch. The install lives in the virtualenv, so **re-run this script after any `uv sync`** that reinstalls or cleans it.
 
-Python is the TCP **server**: start the trainer first (it binds the port and blocks), then press **Play** in the Godot editor — or set `args_env.env_path` to a built player for headless runs.
+**Multi-env topology (K × N).** A single Bridge process hosts `N` in-process agents (`args_env.num_envs`, sent to the binary as `--n_envs`); `K` collectors (`config.num_collectors`) each launch their own headless process, for `K × N` parallel environments. Each collector gets a distinct TCP port (`args_env.port + i`) and env seed automatically. Use `--backend ray` for `K > 1`.
+
+Build the Bridge binary first (see the Bridge project's README), then point `dreamer_godot` at it via `config.args_env.env_path` (default `/home/sia/Godot/Bridge/build/bridge`):
+
+```bash
+coop-rl-train --config dreamer_godot --backend ray --workdir ~/coop-rl_results
+```
+
+For single-process debugging set `args_env.env_path = None` to connect to a running editor instead: Python is the TCP **server**, so start the trainer first (it binds the port), then press **Play** in the Godot editor (`num_collectors` must be 1).
 
 ## Running training
 

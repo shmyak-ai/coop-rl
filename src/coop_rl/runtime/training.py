@@ -130,8 +130,16 @@ def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
     conf.args_collector.controller = controller
     conf.args_collector.trainer = trainer
     collectors = []
-    for _ in range(conf.num_collectors):
+    has_port = "args_env" in conf.args_collector and "port" in conf.args_collector.args_env
+    base_port = conf.args_collector.args_env.port if has_port else 0
+    base_seed = conf.args_collector.args_env.seed if has_port else 0
+    for i in range(conf.num_collectors):
         conf.args_collector.collectors_seed += 1
+        if has_port:
+            # Each collector launches its own env process; give it a distinct port
+            # and env seed (e.g. one Godot binary per collector).
+            conf.args_collector.args_env.port = base_port + i
+            conf.args_collector.args_env.seed = base_seed + i
         collector = conf.collector.remote(**conf.args_collector)
         collectors.append(collector)
 
@@ -193,8 +201,16 @@ def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
     collectors = []
     conf.args_collector.controller = controller
     conf.args_collector.trainer = trainer
-    for _ in range(conf.num_collectors):
+    has_port = "args_env" in conf.args_collector and "port" in conf.args_collector.args_env
+    base_port = conf.args_collector.args_env.port if has_port else 0
+    base_seed = conf.args_collector.args_env.seed if has_port else 0
+    for i in range(conf.num_collectors):
         conf.args_collector.collectors_seed += 1
+        if has_port:
+            # Each collector launches its own env process; give it a distinct port
+            # and env seed (e.g. one Godot binary per collector).
+            conf.args_collector.args_env.port = base_port + i
+            conf.args_collector.args_env.seed = base_seed + i
         collector = conf.collector(**conf.args_collector)
         collectors.append(collector)
 

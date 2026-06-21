@@ -206,15 +206,17 @@ class HandlerEnvDreamerAtari:
         return obs_space, None, act_space
 
 
-def _make_godot_env(env_path, port, show_window, speedup, seed):
-    """Connect to a Godot godot_rl environment.
+def _make_godot_env(env_path, port, show_window, speedup, seed, num_envs):
+    """Connect to a Godot godot_rl environment hosting ``num_envs`` agents.
 
     Imports ``godot_rl`` lazily so this module stays importable without the
     optional dependency (mirrors ``_make_atari_env`` / ``_make_unity_env``).
     Python is the TCP *server*: with ``env_path=None`` this blocks on ``accept()``
     until you press Play in the Godot editor; with a built binary path GodotEnv
-    launches the game itself. ``convert_action_space=False`` keeps the action as
-    the dict the game reports (e.g. ``{'act': Discrete(8)}``).
+    launches the game itself. ``n_envs`` is forwarded as ``--n_envs=N`` to the
+    binary (ignored in editor mode, where the scene's own count applies);
+    ``convert_action_space=False`` keeps the action as the dict the game reports
+    (e.g. ``{'act': Discrete(8)}``).
     """
     from godot_rl.core.godot_env import GodotEnv
 
@@ -224,6 +226,7 @@ def _make_godot_env(env_path, port, show_window, speedup, seed):
         show_window=show_window,
         speedup=speedup,
         seed=seed,
+        n_envs=num_envs,
         convert_action_space=False,
     )
 
@@ -265,32 +268,36 @@ def _godot_image(obs_chw, pad_to):
 
 
 class HandlerGodotEnv:
-    """godot_rl env handler for the DreamerV3 pipeline (single agent).
+    """godot_rl env handler for the DreamerV3 pipeline (vector of N agents).
 
     Wraps one ``GodotEnv`` connected to a Godot game embedding the
-    ``godot_rl_agents`` plugin. The single 3-D uint8 observation (channel-first,
-    e.g. ``map_2d`` (6, 25, 25)) is transposed to channels-last and zero-padded
-    to ``(pad_to, pad_to, C)`` so it fits the Dreamer conv encoder (which needs an
-    even resolution divisible by 16). The game has one ``AIController`` so
-    ``num_envs`` is 1.
+    ``godot_rl_agents`` plugin. A single process hosts ``num_envs`` ``AIController``
+    agents (Bridge: ``voxel_terrain.gd::NUM_ENVS`` / ``--n_envs``), so obs, reward
+    and done arrive as length-N arrays. Each agent's 3-D uint8 observation
+    (channel-first, e.g. ``map_2d`` (6, 25, 25)) is transposed to channels-last and
+    zero-padded to ``(pad_to, pad_to, C)`` so it fits the Dreamer conv encoder
+    (which needs an even resolution divisible by 16), then stacked to
+    ``(N, pad_to, pad_to, C)``. Scale to K×N by running K collectors, each on its
+    own port (see ``runtime.training``).
 
     Python is the TCP *server*: with ``env_path=None`` construction blocks until
-    you press Play in the Godot editor; with a built binary path GodotEnv launches
-    the game itself.
+    you press Play in the Godot editor (single process only); with a built binary
+    path GodotEnv launches the game itself headless.
 
-    The plugin requires an explicit ``reset`` on ``done`` (no in-engine
-    autoreset), so this handler emulates gymnasium NEXT_STEP autoreset: the step
-    that ends an episode returns the terminal obs with ``done=True``; the next step
-    calls ``reset`` and returns the fresh first obs (its action ignored), matching
-    what ``CollectorDreamerUniform`` expects. godot_rl reports a single ``done`` as
-    both ``terminated`` and ``truncated``; both are passed through unchanged.
+    Bridge auto-resets each sub-env internally the moment that agent reports
+    ``done`` (no Python-side reset), so this handler passes obs/reward/done
+    straight through and the collector treats it as a gymnasium auto-resetting
+    vector env. godot_rl reports a single ``done`` as both ``terminated`` and
+    ``truncated``; both are passed through unchanged. (godot_rl does not preserve a
+    distinct terminal observation across the internal reset — a known plugin
+    limitation, see the Bridge trainer-wrapper doc.)
     """
 
     def __init__(
         self,
         *,
         env_path=None,
-        num_envs=1,
+        num_envs,
         port=11008,
         show_window=False,
         speedup=1,
@@ -299,17 +306,14 @@ class HandlerGodotEnv:
         image_channels,
         num_actions,
     ):
-        if num_envs != 1:
-            raise ValueError(
-                f"HandlerGodotEnv is single-agent; num_envs must be 1, got {num_envs}."
-            )
-        self.num_envs = 1
         self.pad_to = pad_to
-        self._env = _make_godot_env(env_path, port, show_window, speedup, seed)
-        if self._env.num_envs != 1:
+        self._env = _make_godot_env(env_path, port, show_window, speedup, seed, num_envs)
+        if self._env.num_envs != num_envs:
             raise ValueError(
-                f"Godot scene reports {self._env.num_envs} agents; HandlerGodotEnv supports one."
+                f"Godot scene reports {self._env.num_envs} agents but config num_envs={num_envs}; "
+                "they must match (the buffer add_batch_size is sized from num_envs)."
             )
+        self.num_envs = num_envs
         self._image_key = _single_image_key(self._env.observation_space)
         live_channels = int(self._env.observation_space[self._image_key].shape[0])
         live_actions = _single_discrete_n(self._env.action_spaces[0])
@@ -319,36 +323,22 @@ class HandlerGodotEnv:
                 f"{live_channels}, num_actions={live_actions} vs configured "
                 f"image_channels={image_channels}, num_actions={num_actions}."
             )
-        self._needs_reset = False
+
+    def _images(self, obs):
+        return np.stack([_godot_image(o[self._image_key], self.pad_to) for o in obs])
 
     def reset(self, *, seed=None, **kwargs):
         obs, _ = self._env.reset(seed=seed)
-        self._needs_reset = False
-        image = _godot_image(obs[0][self._image_key], self.pad_to)
-        return image[None], {}  # (1, pad_to, pad_to, C)
+        return self._images(obs), {}  # (N, pad_to, pad_to, C)
 
     def step(self, actions):
-        if self._needs_reset:
-            obs, _ = self._env.reset()
-            self._needs_reset = False
-            image = _godot_image(obs[0][self._image_key], self.pad_to)
-            return (
-                image[None],
-                np.zeros(1, np.float32),
-                np.zeros(1, bool),
-                np.zeros(1, bool),
-                {},
-            )
-        a = int(np.asarray(actions).reshape(-1)[0])
-        obs, reward, terminated, truncated, _ = self._env.step([[a]])
-        term, trunc = bool(terminated[0]), bool(truncated[0])
-        self._needs_reset = term or trunc
-        image = _godot_image(obs[0][self._image_key], self.pad_to)
+        acts = [int(a) for a in np.asarray(actions).reshape(-1)]  # one head, N agents
+        obs, reward, terminated, truncated, _ = self._env.step([acts])
         return (
-            image[None],
-            np.asarray([reward[0]], np.float32),
-            np.asarray([term], bool),
-            np.asarray([trunc], bool),
+            self._images(obs),
+            np.asarray(reward, np.float32),
+            np.asarray(terminated, bool),
+            np.asarray(truncated, bool),
             {},
         )
 
