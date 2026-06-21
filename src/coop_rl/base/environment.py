@@ -4,7 +4,7 @@ import elements
 import gymnasium as gym
 import numpy as np
 from gymnasium import ObservationWrapper
-from gymnasium.spaces import Box
+from gymnasium.spaces import Box, Discrete
 from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
 
 
@@ -203,4 +203,182 @@ class HandlerEnvDreamerAtari:
             "is_terminal": elements.Space(bool),
         }
         act_space = {"action": elements.Space(np.int32, (), 0, int(n_actions))}
+        return obs_space, None, act_space
+
+
+def _make_godot_env(env_path, port, show_window, speedup, seed):
+    """Connect to a Godot godot_rl environment.
+
+    Imports ``godot_rl`` lazily so this module stays importable without the
+    optional dependency (mirrors ``_make_atari_env`` / ``_make_unity_env``).
+    Python is the TCP *server*: with ``env_path=None`` this blocks on ``accept()``
+    until you press Play in the Godot editor; with a built binary path GodotEnv
+    launches the game itself. ``convert_action_space=False`` keeps the action as
+    the dict the game reports (e.g. ``{'act': Discrete(8)}``).
+    """
+    from godot_rl.core.godot_env import GodotEnv
+
+    return GodotEnv(
+        env_path=env_path,
+        port=port,
+        show_window=show_window,
+        speedup=speedup,
+        seed=seed,
+        convert_action_space=False,
+    )
+
+
+def _single_image_key(observation_space) -> str:
+    keys = [
+        k
+        for k, s in observation_space.spaces.items()
+        if isinstance(s, Box) and len(s.shape) == 3 and s.dtype == np.uint8
+    ]
+    if len(keys) != 1:
+        raise ValueError(
+            f"HandlerGodotEnv requires exactly one 3-D uint8 image observation; found {keys}."
+        )
+    return keys[0]
+
+
+def _single_discrete_n(action_space) -> int:
+    heads = list(action_space.spaces.items())
+    if len(heads) != 1 or not isinstance(heads[0][1], Discrete):
+        raise ValueError(
+            f"HandlerGodotEnv supports a single discrete action head; got {action_space}."
+        )
+    return int(heads[0][1].n)
+
+
+def _godot_image(obs_chw, pad_to):
+    """Channel-first uint8 ``(C, H, W)`` -> channels-last ``(pad_to, pad_to, C)``.
+
+    The Godot map is channel-major (e.g. ``map_2d`` (6, 25, 25)); Dreamer's conv
+    encoder wants channels-last and a resolution that is even and divisible by 16,
+    so the grid is placed top-left and zero-padded (0 == empty per the env schema).
+    """
+    img = np.transpose(obs_chw, (1, 2, 0))  # (H, W, C)
+    h, w = img.shape[:2]
+    if h > pad_to or w > pad_to:
+        raise ValueError(f"image {img.shape} larger than pad_to={pad_to}.")
+    return np.pad(img, ((0, pad_to - h), (0, pad_to - w), (0, 0))).astype(np.uint8)
+
+
+class HandlerGodotEnv:
+    """godot_rl env handler for the DreamerV3 pipeline (single agent).
+
+    Wraps one ``GodotEnv`` connected to a Godot game embedding the
+    ``godot_rl_agents`` plugin. The single 3-D uint8 observation (channel-first,
+    e.g. ``map_2d`` (6, 25, 25)) is transposed to channels-last and zero-padded
+    to ``(pad_to, pad_to, C)`` so it fits the Dreamer conv encoder (which needs an
+    even resolution divisible by 16). The game has one ``AIController`` so
+    ``num_envs`` is 1.
+
+    Python is the TCP *server*: with ``env_path=None`` construction blocks until
+    you press Play in the Godot editor; with a built binary path GodotEnv launches
+    the game itself.
+
+    The plugin requires an explicit ``reset`` on ``done`` (no in-engine
+    autoreset), so this handler emulates gymnasium NEXT_STEP autoreset: the step
+    that ends an episode returns the terminal obs with ``done=True``; the next step
+    calls ``reset`` and returns the fresh first obs (its action ignored), matching
+    what ``CollectorDreamerUniform`` expects. godot_rl reports a single ``done`` as
+    both ``terminated`` and ``truncated``; both are passed through unchanged.
+    """
+
+    def __init__(
+        self,
+        *,
+        env_path=None,
+        num_envs=1,
+        port=11008,
+        show_window=False,
+        speedup=1,
+        seed=0,
+        pad_to=48,
+        image_channels,
+        num_actions,
+    ):
+        if num_envs != 1:
+            raise ValueError(
+                f"HandlerGodotEnv is single-agent; num_envs must be 1, got {num_envs}."
+            )
+        self.num_envs = 1
+        self.pad_to = pad_to
+        self._env = _make_godot_env(env_path, port, show_window, speedup, seed)
+        if self._env.num_envs != 1:
+            raise ValueError(
+                f"Godot scene reports {self._env.num_envs} agents; HandlerGodotEnv supports one."
+            )
+        self._image_key = _single_image_key(self._env.observation_space)
+        live_channels = int(self._env.observation_space[self._image_key].shape[0])
+        live_actions = _single_discrete_n(self._env.action_spaces[0])
+        if live_channels != image_channels or live_actions != num_actions:
+            raise ValueError(
+                "Godot game schema does not match config: live image_channels="
+                f"{live_channels}, num_actions={live_actions} vs configured "
+                f"image_channels={image_channels}, num_actions={num_actions}."
+            )
+        self._needs_reset = False
+
+    def reset(self, *, seed=None, **kwargs):
+        obs, _ = self._env.reset(seed=seed)
+        self._needs_reset = False
+        image = _godot_image(obs[0][self._image_key], self.pad_to)
+        return image[None], {}  # (1, pad_to, pad_to, C)
+
+    def step(self, actions):
+        if self._needs_reset:
+            obs, _ = self._env.reset()
+            self._needs_reset = False
+            image = _godot_image(obs[0][self._image_key], self.pad_to)
+            return (
+                image[None],
+                np.zeros(1, np.float32),
+                np.zeros(1, bool),
+                np.zeros(1, bool),
+                {},
+            )
+        a = int(np.asarray(actions).reshape(-1)[0])
+        obs, reward, terminated, truncated, _ = self._env.step([[a]])
+        term, trunc = bool(terminated[0]), bool(truncated[0])
+        self._needs_reset = term or trunc
+        image = _godot_image(obs[0][self._image_key], self.pad_to)
+        return (
+            image[None],
+            np.asarray([reward[0]], np.float32),
+            np.asarray([term], bool),
+            np.asarray([trunc], bool),
+            {},
+        )
+
+    def close(self):
+        self._env.close()
+
+    @staticmethod
+    def check_env(
+        *,
+        image_channels,
+        num_actions,
+        pad_to=48,
+        env_path=None,
+        num_envs=1,
+        port=11008,
+        show_window=False,
+        speedup=1,
+        seed=0,
+    ):
+        # Build the space contract from the fixed Bridge schema (image_channels,
+        # num_actions) WITHOUT opening a GodotEnv. A live connection here would
+        # consume the single editor Play session (close() quits the game), leaving
+        # nothing for the collector's env to connect to. The connection-time params
+        # (env_path/port/...) are accepted to share **args_env but unused.
+        obs_space = {
+            "image": elements.Space(np.uint8, (pad_to, pad_to, image_channels)),
+            "reward": elements.Space(np.float32),
+            "is_first": elements.Space(bool),
+            "is_last": elements.Space(bool),
+            "is_terminal": elements.Space(bool),
+        }
+        act_space = {"action": elements.Space(np.int32, (), 0, num_actions)}
         return obs_space, None, act_space
