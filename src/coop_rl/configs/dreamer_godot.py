@@ -191,7 +191,7 @@ def get_config():
     # Declared here so check_env builds the space contract without opening a Godot
     # connection; each collector's live env validates the game against these.
     config.args_env.image_channels = 6
-    config.args_env.num_actions = 8
+    config.args_env.num_actions = 6
 
     config.buffer = buffer = BufferTrajectoryDreamer
     config.args_buffer = args_buffer = ml_collections.ConfigDict()

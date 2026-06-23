@@ -216,7 +216,7 @@ def _make_godot_env(env_path, port, show_window, speedup, seed, num_envs):
     launches the game itself. ``n_envs`` is forwarded as ``--n_envs=N`` to the
     binary (ignored in editor mode, where the scene's own count applies);
     ``convert_action_space=False`` keeps the action as the dict the game reports
-    (e.g. ``{'act': Discrete(8)}``).
+    (e.g. ``{'act': Discrete(6)}``).
     """
     from godot_rl.core.godot_env import GodotEnv
 
