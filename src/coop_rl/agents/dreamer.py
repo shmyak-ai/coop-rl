@@ -473,73 +473,75 @@ def lambda_return(last, term, rew, val, boot, disc, lam):
 
 
 # ---------------------------------------------------------------------------
-# Model construction from a (dreamer) config + obs/act spaces.
+# Model construction: pure assembly of config callables, called as
+# network(**args_network) — all arguments are literal in the config.
 # ---------------------------------------------------------------------------
 
 
-def build_model(config, obs_space, act_space):
-    exclude = ("is_first", "is_last", "is_terminal", "reward")
-    enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
-    img_keys = tuple(sorted(k for k, s in enc_space.items() if len(s.shape) == 3))
-    s0 = enc_space[img_keys[0]]
-    img_res = (int(s0.shape[0]), int(s0.shape[1]))
-    img_channels = tuple(int(enc_space[k].shape[-1]) for k in img_keys)
-
-    enc = config.enc(img_keys=img_keys, **dict(config.args_enc))
-    dyn = config.dyn(**dict(config.args_dyn))
-    dec = config.dec(
-        img_keys=img_keys,
-        img_res=img_res,
-        img_channels=img_channels,
-        **dict(config.args_dec),
-    )
-
-    rew = config.rewhead(**dict(config.args_rewhead))
-    con = config.conhead(**dict(config.args_conhead))
-    val = config.value(**dict(config.args_value))
-    slowval = config.value(**dict(config.args_value))
-
-    act_keys = tuple(sorted(act_space.keys()))
-    act_classes = tuple(int(np.asarray(act_space[k].classes).max()) for k in act_keys)
-    specs = tuple(config.policy_spec._replace(classes=c) for c in act_classes)
-    pol = config.policy(keys=act_keys, specs=specs, **dict(config.args_policy))
-
-    retnorm = config.retnorm(**dict(config.args_retnorm))
-    valnorm = config.valnorm(**dict(config.args_valnorm))
-    advnorm = config.advnorm(**dict(config.args_advnorm))
-
-    scales = dict(config.loss_scales)
-    rec = scales.pop("rec")
-    for k in img_keys:
-        scales[k] = rec
-    loss_scales = tuple(sorted((k, float(v)) for k, v in scales.items()))
-
-    il, rl = config.imag_loss, config.repl_loss
+def build_model(
+    *,
+    replay_context,
+    img_keys,
+    act_keys,
+    act_classes,
+    enc,
+    args_enc,
+    dyn,
+    args_dyn,
+    dec,
+    args_dec,
+    rewhead,
+    args_rewhead,
+    conhead,
+    args_conhead,
+    value,
+    args_value,
+    policy,
+    args_policy,
+    retnorm,
+    args_retnorm,
+    valnorm,
+    args_valnorm,
+    advnorm,
+    args_advnorm,
+    loss_scales,
+    ac_grads,
+    contdisc,
+    horizon,
+    imag_length,
+    imag_last,
+    reward_grad,
+    repval_loss,
+    repval_grad,
+    imag_loss,
+    repl_loss,
+):
+    il, rl = imag_loss, repl_loss
     return DreamerModel(
-        enc=enc,
-        dyn=dyn,
-        dec=dec,
-        rew=rew,
-        con=con,
-        pol=pol,
-        val=val,
-        slowval=slowval,
-        retnorm=retnorm,
-        valnorm=valnorm,
-        advnorm=advnorm,
-        act_keys=act_keys,
-        act_classes=act_classes,
-        img_keys=img_keys,
-        contdisc=bool(config.contdisc),
-        horizon=int(config.horizon),
-        imag_length=int(config.imag_length),
-        imag_last=int(config.imag_last),
-        ac_grads=bool(config.ac_grads),
-        reward_grad=bool(config.reward_grad),
-        repval_loss=bool(config.repval_loss),
-        repval_grad=bool(config.repval_grad),
-        replay_context=int(config.replay_context),
-        loss_scales=loss_scales,
+        enc=enc(**dict(args_enc)),
+        dyn=dyn(**dict(args_dyn)),
+        dec=dec(**dict(args_dec)),
+        rew=rewhead(**dict(args_rewhead)),
+        con=conhead(**dict(args_conhead)),
+        pol=policy(**dict(args_policy)),
+        val=value(**dict(args_value)),
+        slowval=value(**dict(args_value)),
+        retnorm=retnorm(**dict(args_retnorm)),
+        valnorm=valnorm(**dict(args_valnorm)),
+        advnorm=advnorm(**dict(args_advnorm)),
+        act_keys=tuple(act_keys),
+        act_classes=tuple(int(c) for c in act_classes),
+        img_keys=tuple(img_keys),
+        contdisc=bool(contdisc),
+        horizon=int(horizon),
+        imag_length=int(imag_length),
+        imag_last=int(imag_last),
+        ac_grads=bool(ac_grads),
+        reward_grad=bool(reward_grad),
+        repval_loss=bool(repval_loss),
+        repval_grad=bool(repval_grad),
+        replay_context=int(replay_context),
+        loss_scales=tuple(sorted((k, float(v)) for k, v in dict(loss_scales).items())),
         imag_lam=float(il.lam),
         imag_actent=float(il.actent),
         imag_slowreg=float(il.slowreg),
@@ -672,7 +674,7 @@ def create_train_state(
 ):
     obs_space = dict(obs_space)
     act_space = dict(act_space)
-    model = network(args_network, obs_space, act_space)
+    model = network(**args_network)
 
     init_rng, state_rng = jax.random.split(rng)
     params_rng, sample_rng = jax.random.split(init_rng)

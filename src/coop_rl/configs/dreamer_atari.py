@@ -44,11 +44,22 @@ def _args_network():
     """
     c = ml_collections.ConfigDict()
 
+    img_keys = ("image",)
+    act_keys = ("action",)
+    num_actions = 6  # ALE/Pong-v5
+
     c.replay_context = 1
+
+    # Space contract (must match the env handler's check_env spaces).
+    c.img_keys = img_keys
+    c.act_keys = act_keys
+    c.act_classes = (num_actions,)
 
     # World model.
     c.enc = EncoderImage
-    c.args_enc = cd(dict(depth=4, mults=(2, 3, 4, 4), kernel=5, act="silu", norm="rms"))
+    c.args_enc = cd(
+        dict(img_keys=img_keys, depth=4, mults=(2, 3, 4, 4), kernel=5, act="silu", norm="rms")
+    )
     c.dyn = RSSM
     c.args_dyn = cd(
         dict(
@@ -70,6 +81,9 @@ def _args_network():
     c.dec = DecoderImage
     c.args_dec = cd(
         dict(
+            img_keys=img_keys,
+            img_res=(96, 96),  # screen_size
+            img_channels=(1,),  # grayscale
             units=64,
             depth=4,
             mults=(2, 3, 4, 4),
@@ -107,13 +121,30 @@ def _args_network():
         )
     )
     c.policy = DictMLPHead
-    c.args_policy = cd(dict(layers=3, units=64, act="silu", norm="rms"))
-    # Per-action HeadSpec template; build_model fills in classes from act_space.
-    c.policy_spec = HeadSpec("categorical", (), unimix=0.01, minstd=0.1, maxstd=1.0, outscale=0.01)
+    c.args_policy = cd(
+        dict(
+            layers=3,
+            units=64,
+            act="silu",
+            norm="rms",
+            keys=act_keys,
+            specs=(
+                HeadSpec(
+                    "categorical",
+                    (),
+                    classes=num_actions,
+                    unimix=0.01,
+                    minstd=0.1,
+                    maxstd=1.0,
+                    outscale=0.01,
+                ),
+            ),
+        )
+    )
 
     # Loss weights.
     c.loss_scales = cd(
-        dict(rec=1.0, rew=1.0, con=1.0, dyn=1.0, rep=0.1, policy=1.0, value=1.0, repval=0.3)
+        dict(image=1.0, rew=1.0, con=1.0, dyn=1.0, rep=0.1, policy=1.0, value=1.0, repval=0.3)
     )
 
     # Actor-critic.
