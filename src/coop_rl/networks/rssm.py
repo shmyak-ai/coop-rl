@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# DreamerV3 world model: RSSM, image Encoder, image Decoder. Flax port of the
+# DreamerV3 world model: RSSM, EncoderImage, DecoderImage. Flax port of the
 # original ninjax implementation (dreamerv3.rssm). The recurrence math (block
 # GRU core, prior/posterior, OneHot KL) is preserved unchanged. Actions are
 # embedded by the caller (the agent owns the action space); the RSSM consumes
@@ -199,7 +199,7 @@ class RSSM(nn.Module):
         return outs.Agg(outs.OneHot(logits, self.unimix), 1, jnp.sum)
 
 
-class Encoder(nn.Module):
+class EncoderImage(nn.Module):
     """Image-only encoder (DreamerV3 'simple' encoder, Atari path)."""
 
     img_keys: tuple[str, ...]
@@ -233,7 +233,7 @@ class Encoder(nn.Module):
         return tokens
 
 
-class Decoder(nn.Module):
+class DecoderImage(nn.Module):
     """Image-only decoder (DreamerV3 'simple' decoder, Atari path)."""
 
     img_keys: tuple[str, ...]

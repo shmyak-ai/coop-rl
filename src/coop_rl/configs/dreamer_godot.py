@@ -18,6 +18,7 @@ import ml_collections
 from ml_collections import config_dict
 
 from coop_rl.agents.dreamer import (
+    Normalize,
     build_model,
     get_select_action_fn,
     get_update_epoch,
@@ -27,6 +28,8 @@ from coop_rl.agents.dreamer import (
 from coop_rl.base.buffers import BufferTrajectoryDreamer
 from coop_rl.base.environment import HandlerGodotEnv
 from coop_rl.base.utils import make_dreamer_optimizer
+from coop_rl.networks.heads import DictMLPHead, HeadSpec, MLPHead
+from coop_rl.networks.rssm import RSSM, DecoderImage, EncoderImage
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import CollectorDreamerUniform
 from coop_rl.workers.trainers import Trainer
@@ -46,8 +49,10 @@ def _args_network():
     c.replay_context = 1
 
     # World model.
-    c.dyn = ml_collections.ConfigDict()
-    c.dyn.rssm = cd(
+    c.enc = EncoderImage
+    c.args_enc = cd(dict(depth=4, mults=(2, 3, 4, 4), kernel=5, act="silu", norm="rms"))
+    c.dyn = RSSM
+    c.args_dyn = cd(
         dict(
             deter=512,
             hidden=64,
@@ -64,43 +69,49 @@ def _args_network():
             free_nats=1.0,
         )
     )
-    c.enc = ml_collections.ConfigDict()
-    c.enc.simple = cd(
-        dict(depth=4, mults=(2, 3, 4, 4), layers=3, units=64, act="silu", norm="rms", kernel=5)
-    )
-    c.dec = ml_collections.ConfigDict()
-    c.dec.simple = cd(
+    c.dec = DecoderImage
+    c.args_dec = cd(
         dict(
+            units=64,
             depth=4,
             mults=(2, 3, 4, 4),
-            layers=3,
-            units=64,
+            kernel=5,
+            bspace=8,
             act="silu",
             norm="rms",
             outscale=1.0,
-            kernel=5,
-            bspace=8,
         )
     )
 
     # Heads.
-    c.rewhead = cd(dict(layers=1, units=64, act="silu", norm="rms", bins=255, outscale=0.0))
-    c.conhead = cd(dict(layers=1, units=64, act="silu", norm="rms", outscale=1.0))
-    c.value = cd(dict(layers=3, units=64, act="silu", norm="rms", bins=255, outscale=0.0))
-    c.policy = cd(
+    c.rewhead = MLPHead
+    c.args_rewhead = cd(
+        dict(
+            layers=1,
+            units=64,
+            act="silu",
+            norm="rms",
+            spec=HeadSpec("symexp_twohot", (), bins=255, outscale=0.0),
+        )
+    )
+    c.conhead = MLPHead
+    c.args_conhead = cd(
+        dict(layers=1, units=64, act="silu", norm="rms", spec=HeadSpec("binary", (), outscale=1.0))
+    )
+    c.value = MLPHead
+    c.args_value = cd(
         dict(
             layers=3,
             units=64,
             act="silu",
             norm="rms",
-            minstd=0.1,
-            maxstd=1.0,
-            outscale=0.01,
-            unimix=0.01,
+            spec=HeadSpec("symexp_twohot", (), bins=255, outscale=0.0),
         )
     )
-    c.policy_dist_disc = "categorical"
-    c.policy_dist_cont = "bounded_normal"
+    c.policy = DictMLPHead
+    c.args_policy = cd(dict(layers=3, units=64, act="silu", norm="rms"))
+    # Per-action HeadSpec template; build_model fills in classes from act_space.
+    c.policy_spec = HeadSpec("categorical", (), unimix=0.01, minstd=0.1, maxstd=1.0, outscale=0.01)
 
     # Loss weights.
     c.loss_scales = cd(
@@ -118,9 +129,14 @@ def _args_network():
     c.repval_grad = True
     c.imag_loss = cd(dict(slowtar=False, lam=0.95, actent=3e-4, slowreg=1.0))
     c.repl_loss = cd(dict(slowtar=False, lam=0.95, slowreg=1.0))
-    c.retnorm = cd(dict(impl="perc", rate=0.01, limit=1.0, perclo=5.0, perchi=95.0, debias=False))
-    c.valnorm = cd(dict(impl="none", rate=0.01, limit=1e-8))
-    c.advnorm = cd(dict(impl="none", rate=0.01, limit=1e-8))
+    c.retnorm = Normalize
+    c.args_retnorm = cd(
+        dict(impl="perc", rate=0.01, limit=1.0, perclo=5.0, perchi=95.0, debias=False)
+    )
+    c.valnorm = Normalize
+    c.args_valnorm = cd(dict(impl="none", rate=0.01, limit=1e-8))
+    c.advnorm = Normalize
+    c.args_advnorm = cd(dict(impl="none", rate=0.01, limit=1e-8))
 
     return c
 

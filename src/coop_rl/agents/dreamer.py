@@ -35,8 +35,7 @@ from flax import struct
 
 from coop_rl.networks.dreamer_nn import COMPUTE_DTYPE, cast
 from coop_rl.networks.dreamer_nn import where as nn_where
-from coop_rl.networks.heads import DictMLPHead, HeadSpec, MLPHead
-from coop_rl.networks.rssm import RSSM, Decoder, Encoder
+from coop_rl.networks.rssm import RSSM
 
 f32 = jnp.float32
 i32 = jnp.int32
@@ -126,14 +125,14 @@ class Normalize(nn.Module):
 
 
 class DreamerModel(nn.Module):
-    enc: Encoder
+    enc: nn.Module
     dyn: RSSM
-    dec: Decoder
-    rew: MLPHead
-    con: MLPHead
-    pol: DictMLPHead
-    val: MLPHead
-    slowval: MLPHead
+    dec: nn.Module
+    rew: nn.Module
+    con: nn.Module
+    pol: nn.Module
+    val: nn.Module
+    slowval: nn.Module
     retnorm: Normalize
     valnorm: Normalize
     advnorm: Normalize
@@ -486,101 +485,28 @@ def build_model(config, obs_space, act_space):
     img_res = (int(s0.shape[0]), int(s0.shape[1]))
     img_channels = tuple(int(enc_space[k].shape[-1]) for k in img_keys)
 
-    r, e, d = config.dyn.rssm, config.enc.simple, config.dec.simple
-    enc = Encoder(
-        img_keys=img_keys,
-        depth=int(e.depth),
-        mults=tuple(e.mults),
-        kernel=int(e.kernel),
-        act=e.act,
-        norm=e.norm,
-    )
-    dyn = RSSM(
-        deter=int(r.deter),
-        hidden=int(r.hidden),
-        stoch=int(r.stoch),
-        classes=int(r.classes),
-        norm=r.norm,
-        act=r.act,
-        unimix=float(r.unimix),
-        outscale=float(r.outscale),
-        imglayers=int(r.imglayers),
-        obslayers=int(r.obslayers),
-        dynlayers=int(r.dynlayers),
-        blocks=int(r.blocks),
-        free_nats=float(r.free_nats),
-    )
-    dec = Decoder(
+    enc = config.enc(img_keys=img_keys, **dict(config.args_enc))
+    dyn = config.dyn(**dict(config.args_dyn))
+    dec = config.dec(
         img_keys=img_keys,
         img_res=img_res,
         img_channels=img_channels,
-        units=int(d.units),
-        depth=int(d.depth),
-        mults=tuple(d.mults),
-        kernel=int(d.kernel),
-        bspace=int(d.bspace),
-        act=d.act,
-        norm=d.norm,
-        outscale=float(d.outscale),
+        **dict(config.args_dec),
     )
 
-    rh, ch, vh, ph = config.rewhead, config.conhead, config.value, config.policy
-    rew = MLPHead(
-        int(rh.layers),
-        int(rh.units),
-        rh.act,
-        rh.norm,
-        HeadSpec("symexp_twohot", (), bins=int(rh.bins), outscale=float(rh.outscale)),
-    )
-    con = MLPHead(
-        int(ch.layers),
-        int(ch.units),
-        ch.act,
-        ch.norm,
-        HeadSpec("binary", (), outscale=float(ch.outscale)),
-    )
-    val = MLPHead(
-        int(vh.layers),
-        int(vh.units),
-        vh.act,
-        vh.norm,
-        HeadSpec("symexp_twohot", (), bins=int(vh.bins), outscale=float(vh.outscale)),
-    )
-    slowval = MLPHead(
-        int(vh.layers),
-        int(vh.units),
-        vh.act,
-        vh.norm,
-        HeadSpec("symexp_twohot", (), bins=int(vh.bins), outscale=float(vh.outscale)),
-    )
+    rew = config.rewhead(**dict(config.args_rewhead))
+    con = config.conhead(**dict(config.args_conhead))
+    val = config.value(**dict(config.args_value))
+    slowval = config.value(**dict(config.args_value))
 
     act_keys = tuple(sorted(act_space.keys()))
     act_classes = tuple(int(np.asarray(act_space[k].classes).max()) for k in act_keys)
-    specs = tuple(
-        HeadSpec(
-            config.policy_dist_disc,
-            (),
-            classes=c,
-            unimix=float(ph.unimix),
-            minstd=float(ph.minstd),
-            maxstd=float(ph.maxstd),
-            outscale=float(ph.outscale),
-        )
-        for c in act_classes
-    )
-    pol = DictMLPHead(int(ph.layers), int(ph.units), ph.act, ph.norm, keys=act_keys, specs=specs)
+    specs = tuple(config.policy_spec._replace(classes=c) for c in act_classes)
+    pol = config.policy(keys=act_keys, specs=specs, **dict(config.args_policy))
 
-    rn, vn, an = config.retnorm, config.valnorm, config.advnorm
-    retnorm = Normalize(
-        rn.impl,
-        rate=float(rn.rate),
-        limit=float(rn.limit),
-        perclo=float(rn.perclo),
-        perchi=float(rn.perchi),
-        debias=bool(rn.debias),
-    )
-    valnorm = Normalize(vn.impl, rate=float(vn.rate), limit=float(vn.limit))
-    advnorm = Normalize(an.impl, rate=float(an.rate), limit=float(an.limit))
+    retnorm = config.retnorm(**dict(config.args_retnorm))
+    valnorm = config.valnorm(**dict(config.args_valnorm))
+    advnorm = config.advnorm(**dict(config.args_advnorm))
 
     scales = dict(config.loss_scales)
     rec = scales.pop("rec")
@@ -631,7 +557,7 @@ def ext_space(config, obs_space, act_space):
     spaces["consec"] = elements.Space(np.int32)
     spaces["stepid"] = elements.Space(np.uint8, 20)
     if int(config.replay_context):
-        r = config.dyn.rssm
+        r = config.args_dyn
         spaces["dyn/deter"] = elements.Space(np.float32, int(r.deter))
         spaces["dyn/stoch"] = elements.Space(np.float32, (int(r.stoch), int(r.classes)))
     return spaces

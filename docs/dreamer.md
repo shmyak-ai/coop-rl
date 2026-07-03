@@ -16,7 +16,7 @@ reference was fixed in passing. Everything else is either an equivalent refactor
 
 | coop-rl (port) | original dreamerv3 |
 |---|---|
-| `src/coop_rl/networks/rssm.py` — RSSM, Encoder, Decoder | `dreamerv3/rssm.py` |
+| `src/coop_rl/networks/rssm.py` — RSSM, EncoderImage, DecoderImage | `dreamerv3/rssm.py` |
 | `src/coop_rl/networks/dreamer_nn.py` — NN primitives | `embodied/jax/nets.py` |
 | `src/coop_rl/networks/heads.py` — Head/MLPHead/DictMLPHead | `embodied/jax/heads.py` |
 | `src/coop_rl/agents/dreamer.py` — model, losses, train step | `dreamerv3/agent.py` + `embodied/jax/agent.py`, `embodied/jax/utils.py` |
