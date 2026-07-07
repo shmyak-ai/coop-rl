@@ -152,6 +152,7 @@ def get_config():
     config.args_trainer.args_get_update_step = ml_collections.ConfigDict()
     config.args_trainer.args_get_update_step.apply_fn = None
     config.args_trainer.args_get_update_step.burn_in_length = burn_in_length
+    config.args_trainer.args_get_update_step.n_steps = 3  # n-step TD targets, < learn_length
     config.args_trainer.args_get_update_step.gamma = 0.99
     config.args_trainer.args_get_update_step.entropy_temperature = 0.03
     config.args_trainer.args_get_update_step.munchausen_coefficient = 0.9

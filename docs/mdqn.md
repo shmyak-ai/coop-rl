@@ -189,14 +189,23 @@ to the window assembly in `agents/dqn.py` and `agents/rainbow.py`.
 `hidden_state_dim = 512`), R2D2-style: the buffer stores the per-step hidden state, and
 each sampled 30-step sequence is split into a 10-step **burn-in** (hidden state warmed up
 from the stored value under stop-gradient, separately for online and target networks) and
-a 20-step **learn** window (`get_recurrent_rollout`). The loss computes a **1-step
-Munchausen TD error at every learn step** (R2D2-style dense targets, and 1-step matches
-the paper): `q_online[:, t]` regresses onto
-`r̃_t + γ(1−term_t)·τ·logsumexp(q_target[:, t+1]/τ)`. The last learn step has no
-successor Q-values inside the window and is dropped; truncated steps have no valid
-successor observation and are masked out of the mean (the `weights` argument of
-`munchausen_q_learning`). Each 30-step sequence therefore yields 19 TD errors instead
-of one.
+a 20-step **learn** window (`get_recurrent_rollout`). The loss
+(`munchausen_q_learning_n_step` in `base/loss.py`) computes an **n-step Munchausen TD
+error at every learn step** that has n successor steps inside the window (R2D2-style
+dense targets; `n_steps` is configurable, default 3): `q_online[:, t]` regresses onto
+
+```
+Σ_{i<n} γ^i·r̃_{t+i} + γ^n·τ·logsumexp(q_target[:, t+n]/τ)
+```
+
+where `r̃ = r + α·clip(τ ln π(a|s), l₀, 0)` is the Munchausen-shaped reward, applied to
+every step. An interior termination stops the sum after that step's reward (no
+bootstrap); an interior truncation at offset k bootstraps `γᵏ·softV` from the truncated
+step; truncated anchors are masked out of the mean. Each 30-step sequence yields
+`learn_length − n_steps` TD errors (17 at n = 3). Note n = 1 matches the paper's 1-step
+operator exactly; n > 1 is a practical R2D2-style extension — the paper's
+KL-regularization theory is derived for 1-step, and n-step replay targets carry the
+usual uncorrected off-policy bias (benign for small n).
 
 ### Differences from the paper
 
@@ -204,7 +213,7 @@ Deliberate or benign deviations in the coop-rl configs:
 
 | coop-rl | Paper | Impact |
 |---|---|---|
-| 4-step returns (feedforward config; recurrent uses 1-step) | 1-step only | the paper's headline result avoids n-step; here every reward in the window gets its own Munchausen bonus (reward shaping), keeping the n-step target consistent |
+| n-step returns (4-step ff; configurable `n_steps` = 3 rec) | 1-step only | the paper's headline result avoids n-step; here every reward in the window gets its own Munchausen bonus (reward shaping), keeping the n-step target consistent; recurrent `n_steps = 1` recovers the paper's operator |
 | L2 loss (`huber_loss_parameter = 0.0`) | Huber | heavier tails on TD errors get more gradient weight |
 | `max_abs_reward = 1000` → effectively unclipped | rewards clipped to [−1, 1] | τ = 0.03 and l₀ = −1 were tuned against clipped rewards; with raw-scale rewards the Munchausen bonus (∈ [−0.9, 0]) is relatively much smaller |
 | Polyak target update, τ = 0.005 per step | hard copy every 8000 steps | modern smooth-target choice, similar effective timescale |

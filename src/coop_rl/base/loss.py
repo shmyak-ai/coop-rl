@@ -65,7 +65,6 @@ def munchausen_q_learning(
     munchausen_coefficient: chex.Array,
     clip_value_min: chex.Array,
     huber_loss_parameter: chex.Array,
-    weights: chex.Array | None = None,
 ) -> chex.Array:
     action_one_hot = jax.nn.one_hot(a_tm1, q_tm1.shape[-1])
     q_tm1_a = jnp.sum(q_tm1 * action_one_hot, axis=-1)
@@ -87,6 +86,64 @@ def munchausen_q_learning(
         batch_loss = rlax.huber_loss(td_error, huber_loss_parameter)
     else:
         batch_loss = rlax.l2_loss(td_error)
-    if weights is None:
-        return jnp.mean(batch_loss)
+    batch_loss = jnp.mean(batch_loss)
+    return batch_loss
+
+
+def munchausen_q_learning_n_step(
+    q_online: chex.Array,
+    q_target: chex.Array,
+    a_t: chex.Array,
+    r_t: chex.Array,
+    terminated: chex.Array,
+    truncated: chex.Array,
+    gamma: float,
+    n_steps: int,
+    entropy_temperature: chex.Array,
+    munchausen_coefficient: chex.Array,
+    clip_value_min: chex.Array,
+    huber_loss_parameter: chex.Array,
+) -> chex.Array:
+    """N-step Munchausen Q-learning over (batch, time, ...) learn-window sequences.
+
+    Every timestep t in [0, T - n_steps) anchors an n-step target
+    sum_{i<n} gamma^i * shaped_r[t+i] + gamma^n * soft_v[t+n], where the
+    Munchausen bonus is reward shaping applied to every step's reward. An
+    interior termination stops the sum after that step's reward (no bootstrap);
+    an interior truncation at offset k bootstraps gamma^k * soft_v from the
+    truncated step. Truncated anchors are masked out of the mean.
+    """
+    action_one_hot = jax.nn.one_hot(a_t, q_target.shape[-1])
+    # Munchausen reward shaping: r + alpha * clip(tau * ln pi(a|s), l0, 0).
+    munchausen_term = entropy_temperature * jax.nn.log_softmax(
+        q_target / entropy_temperature, axis=-1
+    )
+    munchausen_term_a = jnp.sum(action_one_hot * munchausen_term, axis=-1)
+    munchausen_term_a = jnp.clip(munchausen_term_a, clip_value_min, 0.0)
+    shaped_r = r_t + munchausen_coefficient * munchausen_term_a
+
+    # Soft state value used for every bootstrap.
+    soft_v = entropy_temperature * jax.nn.logsumexp(q_target / entropy_temperature, axis=-1)
+
+    terminated = terminated.astype(jnp.float32)
+    truncated = truncated.astype(jnp.float32)
+    # Backward recursion: G(t, 0) = soft_v[t]; a truncated step's reward and
+    # successor are unusable, so bootstrap there instead.
+    target_q = soft_v
+    for h in range(1, n_steps + 1):
+        target_q = jnp.where(
+            truncated[:, :-h] == 1,
+            soft_v[:, :-h],
+            shaped_r[:, :-h] + gamma * (1.0 - terminated[:, :-h]) * target_q[:, 1:],
+        )
+    target_q = jax.lax.stop_gradient(target_q)
+
+    anchors = q_online.shape[1] - n_steps
+    q_t_a = jnp.sum(q_online[:, :anchors] * action_one_hot[:, :anchors], axis=-1)
+    td_error = target_q - q_t_a
+    if huber_loss_parameter > 0.0:
+        batch_loss = rlax.huber_loss(td_error, huber_loss_parameter)
+    else:
+        batch_loss = rlax.l2_loss(td_error)
+    weights = 1.0 - truncated[:, :anchors]
     return jnp.sum(batch_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)

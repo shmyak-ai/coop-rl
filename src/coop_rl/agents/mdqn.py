@@ -32,7 +32,7 @@ from coop_rl.base.base_types import (
     TimeStepDQNRecurrent,
 )
 from coop_rl.base.buffers import TimeStepDQN
-from coop_rl.base.loss import munchausen_q_learning
+from coop_rl.base.loss import munchausen_q_learning, munchausen_q_learning_n_step
 from coop_rl.base.multistep import batch_discounted_returns
 from coop_rl.networks.base import ScannedRNN
 
@@ -393,6 +393,7 @@ def get_update_step_recurrent(
     *,
     apply_fn: ActorApply,
     burn_in_length: int,
+    n_steps: int,
     gamma: float,
     entropy_temperature: float,
     munchausen_coefficient: float,
@@ -404,11 +405,12 @@ def get_update_step_recurrent(
 ) -> Callable:
     """DQN-step half of the recurrent DQN step: consumes a rollout's Q-value sequences.
 
-    Computes a 1-step Munchausen TD error at every learn-window timestep
-    (R2D2-style), sourcing the Q-value sequences from a recurrent_rollout_fn.
-    The last learn step has no successor Q-values in the window and is dropped;
-    truncated steps have no valid successor observation and are masked out.
+    Computes an n-step Munchausen TD error at every learn-window timestep that
+    has n successor steps inside the window (R2D2-style), sourcing the Q-value
+    sequences from a recurrent_rollout_fn. Each sequence yields
+    learn_length - n_steps TD errors; truncated anchors are masked out.
     """
+    assert n_steps >= 1, "n_steps must be at least 1"
     _rollout_fn = recurrent_rollout_fn or get_recurrent_rollout(
         apply_fn=apply_fn, burn_in_length=burn_in_length, obs_preprocess_fn=obs_preprocess_fn
     )
@@ -423,33 +425,21 @@ def get_update_step_recurrent(
         ) -> tuple[jnp.ndarray, dict]:
             rollout = _rollout_fn(q_params, target_q_params, sample)
 
-            # 1-step Munchausen TD error at every learn step but the last one,
-            # whose successor Q-values lie outside the window.
-            q_tm1 = rollout.q_online[:, :-1]
-            q_tm1_target = rollout.q_target[:, :-1]
-            q_t_target = rollout.q_target[:, 1:]
-            a_tm1 = rollout.action[:, :-1]
+            r_t = jnp.clip(rollout.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
 
-            terminated = (rollout.terminated[:, :-1] == 1).astype(jnp.float32)
-            d_t = (1.0 - terminated) * gamma
-            r_t = jnp.clip(
-                rollout.reward[:, :-1].astype(jnp.float32), -max_abs_reward, max_abs_reward
-            )
-            # A truncated step's successor observation belongs to the next episode.
-            weights = 1.0 - (rollout.truncated[:, :-1] == 1).astype(jnp.float32)
-
-            batch_loss = munchausen_q_learning(
-                q_tm1,
-                q_tm1_target,
-                a_tm1,
+            batch_loss = munchausen_q_learning_n_step(
+                rollout.q_online,
+                rollout.q_target,
+                rollout.action,
                 r_t,
-                d_t,
-                q_t_target,
+                rollout.terminated,
+                rollout.truncated,
+                gamma,
+                n_steps,
                 entropy_temperature,
                 munchausen_coefficient,
                 clip_value_min,
                 huber_loss_parameter,
-                weights=weights,
             )
 
             loss_info = {
