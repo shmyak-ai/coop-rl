@@ -37,15 +37,6 @@ from coop_rl.base.multistep import batch_discounted_returns
 from coop_rl.networks.base import ScannedRNN
 
 
-class Transition(NamedTuple):
-    obs: chex.ArrayTree
-    action: chex.Array
-    reward: chex.Array
-    done: chex.Array
-    next_obs: chex.Array
-    info: dict
-
-
 class RecurrentRolloutSample(NamedTuple):
     q_online: chex.Array  # (batch, learn_length, num_actions)
     q_target: chex.Array  # (batch, learn_length, num_actions)
@@ -251,28 +242,64 @@ def get_update_step(
         def _q_loss_fn(
             q_params: FrozenDict,
             target_q_params: FrozenDict,
-            transitions: Transition,
+            sample: TimeStepDQN,
         ) -> tuple[jnp.ndarray, dict]:
-            q_tm1 = apply_fn(q_params, transitions.obs).preferences.astype(jnp.float32)
-            q_tm1_target = apply_fn(target_q_params, transitions.obs).preferences.astype(
-                jnp.float32
-            )
-            q_t_target = apply_fn(target_q_params, transitions.next_obs).preferences.astype(
-                jnp.float32
-            )
+            obs = _preprocess(sample.obs)
+            q_tm1 = apply_fn(q_params, obs[:, 0]).preferences.astype(jnp.float32)
+            q_target_seq = apply_fn(target_q_params, obs).preferences.astype(jnp.float32)
 
-            # Cast and clip rewards.
-            discount = 1.0 - transitions.done.astype(jnp.float32)
-            d_t = (discount * gamma).astype(jnp.float32)
-            r_t = jnp.clip(transitions.reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
-            a_tm1 = transitions.action
+            # The first done transition cuts the window: it caps the reward sum and
+            # provides the bootstrap observation (default: the last transition).
+            length_batch, length_traj = sample.action.shape[:2]
+            mask_done = jnp.logical_or(sample.truncated == 1, sample.terminated == 1)
+            indices_done = jnp.argmax(mask_done, axis=1)
+            has_one = jnp.any(mask_done, axis=1)
+            indices_done = jnp.where(has_one, indices_done, length_traj - 1)
+            batch_indices = jnp.arange(length_batch)
+            # Bootstrapping is skipped only if the cut transition itself terminated;
+            # a truncated episode is still bootstrapped from its last observation.
+            terminated_at_cut = sample.terminated[batch_indices, indices_done] == 1
 
-            # Compute Q-learning loss.
+            q_tm1_target = q_target_seq[:, 0]
+            q_t_target = q_target_seq[batch_indices, indices_done]
+            a_tm1 = sample.action[:, 0]
+
+            # Munchausen reward shaping for the intermediate steps: each reward gets
+            # its own alpha * clip(tau * ln pi(a|s), l0, 0) bonus. Step 0's bonus is
+            # added inside munchausen_q_learning.
+            log_pi = entropy_temperature * jax.nn.log_softmax(
+                q_target_seq / entropy_temperature, axis=-1
+            )
+            action_one_hot = jax.nn.one_hot(sample.action, q_target_seq.shape[-1])
+            munchausen_bonus = jnp.clip(
+                jnp.sum(action_one_hot * log_pi, axis=-1), clip_value_min, 0.0
+            )
+            step_positions = jnp.arange(length_traj)[jnp.newaxis, :]
+            r_seq = jnp.clip(sample.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
+            r_seq = r_seq + munchausen_coefficient * munchausen_bonus * (
+                step_positions >= 1
+            ).astype(jnp.float32)
+            # The cut transition's reward is part of the bootstrap value, unless it
+            # terminated the episode (then it is the final reward, with no bootstrap).
+            cut_mask = (step_positions == indices_done[:, jnp.newaxis]) & ~terminated_at_cut[
+                :, jnp.newaxis
+            ]
+            r_seq = jnp.where(cut_mask, 0.0, r_seq)
+
+            discounts = 1.0 - mask_done.astype(jnp.float32)
+            n_step_reward = batch_discounted_returns(
+                r_seq,
+                discounts * gamma,
+                jnp.zeros_like(discounts),
+            )[:, 0]
+            # The bootstrap is n steps away from step 0, so it is discounted gamma**n.
+            d_t = (1.0 - terminated_at_cut.astype(jnp.float32)) * gamma**indices_done
+
             batch_loss = munchausen_q_learning(
                 q_tm1,
                 q_tm1_target,
                 a_tm1,
-                r_t,
+                n_step_reward,
                 d_t,
                 q_t_target,
                 entropy_temperature,
@@ -289,43 +316,12 @@ def get_update_step(
 
         sample: TimeStepDQN = buffer_sample.experience
 
-        # Get indices of the last observation
-        length_batch, length_traj = sample.obs.shape[:2]
-        mask_done = jnp.logical_or(sample.truncated == 1, sample.terminated == 1)
-        indices_done = jnp.argmax(mask_done, axis=1)
-        has_one = jnp.any(mask_done, axis=1)
-        indices_done = jnp.where(has_one, indices_done, length_traj - 1)
-        batch_indices = jnp.arange(length_batch)
-
-        # Extract the first and last observations.
-        step_0_obs = jax.tree_util.tree_map(lambda x: x[:, 0], sample).obs
-        step_0_actions = sample.action[:, 0]
-        step_n_obs = jax.tree_util.tree_map(lambda x: x[batch_indices, indices_done], sample).obs
-        # check if any of the transitions are done - this will be used to decide
-        # if bootstrapping is needed
-        n_step_done = jnp.any(sample.terminated == 1, axis=-1)
-        # Calculate the n-step rewards and select the first one.
-        discounts = 1.0 - mask_done.astype(jnp.float32)
-        n_step_reward = batch_discounted_returns(
-            sample.reward.astype(jnp.float32),
-            discounts * gamma,
-            jnp.zeros_like(discounts),
-        )[:, 0]
-        transitions = Transition(
-            obs=_preprocess(step_0_obs),
-            action=step_0_actions,
-            reward=n_step_reward,
-            done=n_step_done,
-            next_obs=_preprocess(step_n_obs),
-            info={},
-        )
-
         # CALCULATE Q LOSS
         q_grad_fn = jax.grad(_q_loss_fn, has_aux=True)
         q_grads, q_loss_info = q_grad_fn(
             train_state.params,
             train_state.target_params,
-            transitions,
+            sample,
         )
         train_state = train_state.apply_gradients(grads=q_grads)
 
@@ -408,9 +404,10 @@ def get_update_step_recurrent(
 ) -> Callable:
     """DQN-step half of the recurrent DQN step: consumes a rollout's Q-value sequences.
 
-    Mirrors get_update_step's n-step Munchausen Q-learning math exactly, only
-    sourcing q_tm1/q_tm1_target/q_t_target from a recurrent_rollout_fn's rolled-out
-    sequences instead of two isolated feedforward apply_fn calls.
+    Computes a 1-step Munchausen TD error at every learn-window timestep
+    (R2D2-style), sourcing the Q-value sequences from a recurrent_rollout_fn.
+    The last learn step has no successor Q-values in the window and is dropped;
+    truncated steps have no valid successor observation and are masked out.
     """
     _rollout_fn = recurrent_rollout_fn or get_recurrent_rollout(
         apply_fn=apply_fn, burn_in_length=burn_in_length, obs_preprocess_fn=obs_preprocess_fn
@@ -426,29 +423,20 @@ def get_update_step_recurrent(
         ) -> tuple[jnp.ndarray, dict]:
             rollout = _rollout_fn(q_params, target_q_params, sample)
 
-            length_batch, length_learn = rollout.action.shape[:2]
-            mask_done = jnp.logical_or(rollout.truncated == 1, rollout.terminated == 1)
-            indices_done = jnp.argmax(mask_done, axis=1)
-            has_one = jnp.any(mask_done, axis=1)
-            indices_done = jnp.where(has_one, indices_done, length_learn - 1)
-            batch_indices = jnp.arange(length_batch)
+            # 1-step Munchausen TD error at every learn step but the last one,
+            # whose successor Q-values lie outside the window.
+            q_tm1 = rollout.q_online[:, :-1]
+            q_tm1_target = rollout.q_target[:, :-1]
+            q_t_target = rollout.q_target[:, 1:]
+            a_tm1 = rollout.action[:, :-1]
 
-            q_tm1 = rollout.q_online[:, 0]
-            q_tm1_target = rollout.q_target[:, 0]
-            q_t_target = rollout.q_target[batch_indices, indices_done]
-            a_tm1 = rollout.action[:, 0]
-
-            n_step_done = jnp.any(rollout.terminated == 1, axis=-1)
-            discounts = 1.0 - mask_done.astype(jnp.float32)
-            n_step_reward = batch_discounted_returns(
-                rollout.reward.astype(jnp.float32),
-                discounts * gamma,
-                jnp.zeros_like(discounts),
-            )[:, 0]
-
-            discount = 1.0 - n_step_done.astype(jnp.float32)
-            d_t = (discount * gamma).astype(jnp.float32)
-            r_t = jnp.clip(n_step_reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
+            terminated = (rollout.terminated[:, :-1] == 1).astype(jnp.float32)
+            d_t = (1.0 - terminated) * gamma
+            r_t = jnp.clip(
+                rollout.reward[:, :-1].astype(jnp.float32), -max_abs_reward, max_abs_reward
+            )
+            # A truncated step's successor observation belongs to the next episode.
+            weights = 1.0 - (rollout.truncated[:, :-1] == 1).astype(jnp.float32)
 
             batch_loss = munchausen_q_learning(
                 q_tm1,
@@ -461,6 +449,7 @@ def get_update_step_recurrent(
                 munchausen_coefficient,
                 clip_value_min,
                 huber_loss_parameter,
+                weights=weights,
             )
 
             loss_info = {

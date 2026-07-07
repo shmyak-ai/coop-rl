@@ -65,6 +65,7 @@ def munchausen_q_learning(
     munchausen_coefficient: chex.Array,
     clip_value_min: chex.Array,
     huber_loss_parameter: chex.Array,
+    weights: chex.Array | None = None,
 ) -> chex.Array:
     action_one_hot = jax.nn.one_hot(a_tm1, q_tm1.shape[-1])
     q_tm1_a = jnp.sum(q_tm1 * action_one_hot, axis=-1)
@@ -86,5 +87,6 @@ def munchausen_q_learning(
         batch_loss = rlax.huber_loss(td_error, huber_loss_parameter)
     else:
         batch_loss = rlax.l2_loss(td_error)
-    batch_loss = jnp.mean(batch_loss)
-    return batch_loss
+    if weights is None:
+        return jnp.mean(batch_loss)
+    return jnp.sum(batch_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)

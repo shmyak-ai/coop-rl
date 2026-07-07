@@ -39,7 +39,7 @@ class Transition(NamedTuple):
     obs: chex.ArrayTree
     action: chex.Array
     reward: chex.Array
-    done: chex.Array
+    discount: chex.Array
     next_obs: chex.Array
     info: dict
 
@@ -197,8 +197,7 @@ def get_update_step(
             q_t_selector = q_t_selector_dist.preferences
 
             # Cast and clip rewards.
-            discount = 1.0 - transitions.done.astype(jnp.float32)
-            d_t = (discount * gamma).astype(jnp.float32)
+            d_t = transitions.discount.astype(jnp.float32)
             r_t = jnp.clip(transitions.reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
             a_tm1 = transitions.action
 
@@ -225,33 +224,43 @@ def get_update_step(
 
         sample: TimeStepDQN = buffer_sample.experience
 
-        # Get indices of the last observation
+        # The first done transition cuts the window: it caps the reward sum and
+        # provides the bootstrap observation (default: the last transition).
         length_batch, length_traj = sample.obs.shape[:2]
         mask_done = jnp.logical_or(sample.truncated == 1, sample.terminated == 1)
         indices_done = jnp.argmax(mask_done, axis=1)
         has_one = jnp.any(mask_done, axis=1)
         indices_done = jnp.where(has_one, indices_done, length_traj - 1)
         batch_indices = jnp.arange(length_batch)
+        # Bootstrapping is skipped only if the cut transition itself terminated;
+        # a truncated episode is still bootstrapped from its last observation.
+        terminated_at_cut = sample.terminated[batch_indices, indices_done] == 1
 
-        # Extract the first and last observations.
+        # Extract the first and bootstrap observations.
         step_0_obs = jax.tree_util.tree_map(lambda x: x[:, 0], sample).obs
         step_0_actions = sample.action[:, 0]
         step_n_obs = jax.tree_util.tree_map(lambda x: x[batch_indices, indices_done], sample).obs
-        # check if any of the transitions are done - this will be used to decide
-        # if bootstrapping is needed
-        n_step_done = jnp.any(sample.terminated == 1, axis=-1)
+        # The cut transition's reward is part of the bootstrap value, unless it
+        # terminated the episode (then it is the final reward, with no bootstrap).
+        step_positions = jnp.arange(length_traj)[jnp.newaxis, :]
+        cut_mask = (step_positions == indices_done[:, jnp.newaxis]) & ~terminated_at_cut[
+            :, jnp.newaxis
+        ]
+        r_seq = jnp.where(cut_mask, 0.0, sample.reward.astype(jnp.float32))
         # Calculate the n-step rewards and select the first one.
         discounts = 1.0 - mask_done.astype(jnp.float32)
         n_step_reward = batch_discounted_returns(
-            sample.reward.astype(jnp.float32),
+            r_seq,
             discounts * gamma,
             jnp.zeros_like(discounts),
         )[:, 0]
+        # The bootstrap is n steps away from step 0, so it is discounted gamma**n.
+        n_step_discount = (1.0 - terminated_at_cut.astype(jnp.float32)) * gamma**indices_done
         transitions = Transition(
             obs=_preprocess(step_0_obs),
             action=step_0_actions,
             reward=n_step_reward,
-            done=n_step_done,
+            discount=n_step_discount,
             next_obs=_preprocess(step_n_obs),
             info={},
         )
