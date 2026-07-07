@@ -264,7 +264,7 @@ class CollectorDQNRecurrentUniform:
         flax_state = state_recover(**args_state_recover)
 
         # online params are to prevent dqn algs from freezing
-        self.online_params = deque(maxlen=10)
+        self.online_params = deque(maxlen=3)
         self.online_params.append(flax_state.params)
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
@@ -312,13 +312,15 @@ class CollectorDQNRecurrentUniform:
         hidden_state_list: list[np.ndarray] = []
         reset_mask_list: list[np.ndarray] = []
 
+        params = self._random.choice(self.online_params)
+
         for _ in range(self.steps_per_rollout):
             hidden_state_before = self.hidden_state
             reset_mask_before = self.reset_mask
 
             self._rng, self.hidden_state, action_jnp = self.select_action(
                 self._rng,
-                self._random.choice(self.online_params),
+                params,
                 self.hidden_state,
                 self.obs,
                 self.reset_mask,
