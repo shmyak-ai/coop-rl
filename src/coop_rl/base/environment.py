@@ -96,7 +96,9 @@ class HandlerEnvAtari:
     """
 
     def __init__(self, env_name, *, stack_size=1, num_envs=1, **kwargs):
-        factory = partial(_make_atari_env, env_name, stack_size, kwargs)
+        factory = partial(
+            _make_atari_env, env_name, stack_size, kwargs, add_channel=(stack_size <= 1)
+        )
         # DISABLED mode: env.step() never auto-resets sub-environments.
         # The collector resets done envs explicitly, preventing cross-episode
         # transitions from being stored in the replay buffer (which happens
@@ -124,7 +126,7 @@ class HandlerEnvAtari:
 
     @staticmethod
     def check_env(env_name, stack_size, num_envs=1, **kwargs):
-        env = _make_atari_env(env_name, stack_size, kwargs)
+        env = _make_atari_env(env_name, stack_size, kwargs, add_channel=(stack_size <= 1))
         shape = env.observation_space.shape
         dtype = env.observation_space.dtype
         n_actions = env.action_space.n
