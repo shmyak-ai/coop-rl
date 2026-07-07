@@ -255,17 +255,21 @@ class CollectorDQNRecurrentUniform:
 
         self.hidden_state_dim = hidden_state_dim
         self.cell_type = cell_type
+        carry = ScannedRNN(hidden_state_dim, cell_type).initialize_carry(1)
+        if not isinstance(carry, jax.Array):
+            raise ValueError(
+                f"cell_type '{cell_type}' has a non-array carry; TimeStepDQNRecurrent "
+                "only supports single-array carries (e.g. GRU)."
+            )
 
         self.collector_seed = collectors_seed
-        self._random = random.Random(collectors_seed)
         self._rng = jax.random.PRNGKey(collectors_seed)
         self._rng, rng = jax.random.split(self._rng)
         args_state_recover.rng = rng
         flax_state = state_recover(**args_state_recover)
 
-        # online params are to prevent dqn algs from freezing
-        self.online_params = deque(maxlen=1)
-        self.online_params.append(flax_state.params)
+        # latest params only: stale params would clash with the stored hidden states
+        self.online_params = flax_state.params
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
 
@@ -299,7 +303,7 @@ class CollectorDQNRecurrentUniform:
         """Trigger JIT compilation of select_action in the calling thread."""
         self._reset_obs()
         self.select_action(
-            self._rng, self.online_params[0], self.hidden_state, self.obs, self.reset_mask
+            self._rng, self.online_params, self.hidden_state, self.obs, self.reset_mask
         )
 
     def run_rollout(self) -> TimeStepDQNRecurrent:
@@ -312,7 +316,7 @@ class CollectorDQNRecurrentUniform:
         hidden_state_list: list[np.ndarray] = []
         reset_mask_list: list[np.ndarray] = []
 
-        params = self._random.choice(self.online_params)
+        params = self.online_params
 
         for _ in range(self.steps_per_rollout):
             hidden_state_before = self.hidden_state
@@ -389,12 +393,12 @@ class CollectorDQNRecurrentUniform:
             trajectories = self.run_rollout()
             self._env_steps += self.steps_per_rollout * self.num_envs
 
-            training_done = self.command_executor.call(self.controller, "is_done")
-            if training_done:
-                self.logger.info("Done signal received; finishing.")
-                return
-
             while True:
+                training_done = self.command_executor.call(self.controller, "is_done")
+                if training_done:
+                    self.logger.info("Done signal received; finishing.")
+                    return
+
                 adding_traj_done = self.command_executor.call(
                     self.trainer,
                     "add_traj_seq",
@@ -407,7 +411,7 @@ class CollectorDQNRecurrentUniform:
 
             parameters = self.command_executor.resolve(self.futures_parameters)
             if parameters is not None:
-                self.online_params.append(parameters)
+                self.online_params = jax.device_put(parameters)
                 self._params_received += 1
             self.futures_parameters = self.command_executor.submit(
                 self.controller,
