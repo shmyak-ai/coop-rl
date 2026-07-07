@@ -53,7 +53,7 @@ def get_config():
 
     hidden_state_dim = 512
     cell_type = "gru"
-    burn_in_length = 20
+    burn_in_length = 10
     learn_length = 20
     sample_sequence_length = burn_in_length + learn_length
 
@@ -76,12 +76,12 @@ def get_config():
     config.args_network.args_pre_torso.strides = [4, 2, 1]
     config.args_network.args_pre_torso.use_layer_norm = False
     config.args_network.args_pre_torso.dtype = jnp.bfloat16
-    config.args_network.args_pre_torso.width = 256
+    config.args_network.args_pre_torso.width = 512
     config.args_network.args_pre_torso.depth = 0  # CNN + linear bridge only, no residual stack
     config.args_network.post_torso = DeepResidualTorso
     config.args_network.args_post_torso = ml_collections.ConfigDict()
     config.args_network.args_post_torso.width = 256
-    config.args_network.args_post_torso.depth = 16  # half of the feedforward config's depth=32
+    config.args_network.args_post_torso.depth = 8
     config.args_network.args_post_torso.activation = "swish"
     config.args_network.args_post_torso.dtype = jnp.bfloat16
     config.args_network.head = DiscreteQNetworkHead
@@ -109,7 +109,7 @@ def get_config():
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
     config.args_buffer.buffer_seed = buffer_seed
     config.args_buffer.add_batch_size = config.args_env.num_envs
-    config.args_buffer.sample_batch_size = 512
+    config.args_buffer.sample_batch_size = 16
     config.args_buffer.sample_sequence_length = sample_sequence_length
     config.args_buffer.period = learn_length  # non-overlapping learn windows
     config.args_buffer.min_length = 1000

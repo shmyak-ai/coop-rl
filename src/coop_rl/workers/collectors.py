@@ -264,7 +264,7 @@ class CollectorDQNRecurrentUniform:
         flax_state = state_recover(**args_state_recover)
 
         # online params are to prevent dqn algs from freezing
-        self.online_params = deque(maxlen=3)
+        self.online_params = deque(maxlen=1)
         self.online_params.append(flax_state.params)
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
