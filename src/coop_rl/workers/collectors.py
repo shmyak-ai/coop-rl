@@ -23,7 +23,8 @@ import elements
 import jax
 import numpy as np
 
-from coop_rl.base.base_types import TimeStepDQN
+from coop_rl.base.base_types import TimeStepDQN, TimeStepDQNRecurrent
+from coop_rl.networks.base import ScannedRNN
 from coop_rl.workers.auxiliary import CommandExecutor, _TBWriter
 
 
@@ -215,6 +216,228 @@ class CollectorDQNUniform:
         if self._writer is not None:
             self._writer.close()
         self.logger.info("CollectorDQNUniform closed (seed=%d).", self.collector_seed)
+
+
+class CollectorDQNRecurrentUniform:
+    def __init__(
+        self,
+        *,
+        controller,
+        trainer,
+        collectors_seed,
+        log_level,
+        report_period,
+        state_recover,
+        args_state_recover,
+        env,
+        args_env,
+        time_step_dtypes,
+        steps_per_rollout,
+        get_select_action_fn,
+        args_get_select_action_fn,
+        hidden_state_dim,
+        cell_type,
+        workdir: str | None = None,
+    ):
+        self.logger = logging.getLogger(f"{__name__}.seed{collectors_seed}")
+        self.logger.setLevel(log_level)
+        self.report_period = report_period
+
+        self.controller = controller
+        self.trainer = trainer
+        self.command_executor = CommandExecutor(max_workers=1)
+
+        self.env = env(**args_env)
+        self.num_envs = self.env.num_envs
+
+        self.dtypes = time_step_dtypes()
+        self.steps_per_rollout = steps_per_rollout
+
+        self.hidden_state_dim = hidden_state_dim
+        self.cell_type = cell_type
+
+        self.collector_seed = collectors_seed
+        self._random = random.Random(collectors_seed)
+        self._rng = jax.random.PRNGKey(collectors_seed)
+        self._rng, rng = jax.random.split(self._rng)
+        args_state_recover.rng = rng
+        flax_state = state_recover(**args_state_recover)
+
+        # online params are to prevent dqn algs from freezing
+        self.online_params = deque(maxlen=10)
+        self.online_params.append(flax_state.params)
+
+        self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
+
+        args_get_select_action_fn.apply_fn = flax_state.apply_fn
+        self.select_action = get_select_action_fn(**args_get_select_action_fn)
+        self.obs = None
+        self.hidden_state = None
+        self.reset_mask = None
+        self.episode_reward_now = np.zeros(self.num_envs)
+        self.completed_returns: deque[float] = deque(maxlen=100)
+        self._params_received = 0
+        self._env_steps = 0
+        self._writer: _TBWriter | None = (
+            _TBWriter(os.path.join(workdir, "tb")) if workdir is not None else None
+        )
+        self._closed = False
+        self.logger.info(
+            "CollectorDQNRecurrentUniform initialized (seed=%d, num_envs=%d).",
+            collectors_seed,
+            self.num_envs,
+        )
+
+    def _reset_obs(self) -> None:
+        self.obs, _ = self.env.reset()
+        self.hidden_state = ScannedRNN(self.hidden_state_dim, self.cell_type).initialize_carry(
+            self.num_envs
+        )
+        self.reset_mask = np.ones(self.num_envs, dtype=bool)
+
+    def warmup(self) -> None:
+        """Trigger JIT compilation of select_action in the calling thread."""
+        self._reset_obs()
+        self.select_action(
+            self._rng, self.online_params[0], self.hidden_state, self.obs, self.reset_mask
+        )
+
+    def run_rollout(self) -> TimeStepDQNRecurrent:
+        """Return one TimeStepDQNRecurrent trajectory per environment."""
+        obs_list: list[np.ndarray] = []
+        action_list: list[np.ndarray] = []
+        reward_list: list[np.ndarray] = []
+        terminated_list: list[np.ndarray] = []
+        truncated_list: list[np.ndarray] = []
+        hidden_state_list: list[np.ndarray] = []
+        reset_mask_list: list[np.ndarray] = []
+
+        for _ in range(self.steps_per_rollout):
+            hidden_state_before = self.hidden_state
+            reset_mask_before = self.reset_mask
+
+            self._rng, self.hidden_state, action_jnp = self.select_action(
+                self._rng,
+                self._random.choice(self.online_params),
+                self.hidden_state,
+                self.obs,
+                self.reset_mask,
+            )
+            actions = np.asarray(action_jnp, dtype=self.dtypes.action)  # (num_envs,)
+            next_obs, rewards, terminated, truncated, _infos = self.env.step(actions)
+
+            obs_list.append(self.obs)
+            action_list.append(actions)
+            reward_list.append(rewards)
+            terminated_list.append(terminated)
+            truncated_list.append(truncated)
+            hidden_state_list.append(
+                np.asarray(hidden_state_before, dtype=self.dtypes.hidden_state)
+            )
+            reset_mask_list.append(reset_mask_before.astype(self.dtypes.reset_hidden_state))
+
+            self.episode_reward_now += rewards
+            done = np.logical_or(terminated, truncated)
+            for i in np.where(done)[0]:
+                self.completed_returns.append(float(self.episode_reward_now[i]))
+                self.episode_reward_now[i] = 0.0
+
+            # AutoresetMode.DISABLED: env.step() returns the terminal obs but
+            # never resets sub-environments internally. Reset done envs here so
+            # self.obs always holds a valid initial observation for the next step.
+            if done.any():
+                reset_obs, _ = self.env.reset(options={"reset_mask": done})
+                next_obs = next_obs.copy()
+                next_obs[done] = reset_obs[done]
+
+            self.obs = next_obs
+            self.reset_mask = done
+
+        # Stack to (T, N, ...) then swap to (N, T, ...) for per-env trajectories.
+        obs_arr = np.stack(obs_list)
+        del obs_list
+        obs_arr = obs_arr.astype(self.dtypes.obs).swapaxes(0, 1)
+        act_arr = np.stack(action_list).astype(self.dtypes.action).swapaxes(0, 1)
+        rew_arr = np.stack(reward_list).astype(self.dtypes.reward).swapaxes(0, 1)
+        ter_arr = np.stack(terminated_list).astype(self.dtypes.terminated).swapaxes(0, 1)
+        tru_arr = np.stack(truncated_list).astype(self.dtypes.truncated).swapaxes(0, 1)
+        hid_arr = np.stack(hidden_state_list).astype(self.dtypes.hidden_state).swapaxes(0, 1)
+        rst_arr = np.stack(reset_mask_list).astype(self.dtypes.reset_hidden_state).swapaxes(0, 1)
+
+        return TimeStepDQNRecurrent(
+            obs=obs_arr,
+            action=act_arr,
+            reward=rew_arr,
+            terminated=ter_arr,
+            truncated=tru_arr,
+            hidden_state=hid_arr,
+            reset_hidden_state=rst_arr,
+        )
+
+    def collecting(self):
+        try:
+            self._collecting()
+        finally:
+            self.close()
+
+    def _collecting(self):
+        if self.obs is None:
+            self._reset_obs()
+        for rollouts_count in itertools.count(start=1, step=1):
+            trajectories = self.run_rollout()
+            self._env_steps += self.steps_per_rollout * self.num_envs
+
+            training_done = self.command_executor.call(self.controller, "is_done")
+            if training_done:
+                self.logger.info("Done signal received; finishing.")
+                return
+
+            while True:
+                adding_traj_done = self.command_executor.call(
+                    self.trainer,
+                    "add_traj_seq",
+                    (self.collector_seed, trajectories),
+                )
+                if adding_traj_done:
+                    break
+                time.sleep(0.01)
+            del trajectories
+
+            parameters = self.command_executor.resolve(self.futures_parameters)
+            if parameters is not None:
+                self.online_params.append(parameters)
+                self._params_received += 1
+            self.futures_parameters = self.command_executor.submit(
+                self.controller,
+                "get_parameters",
+            )
+
+            if rollouts_count % self.report_period == 0:
+                self.logger.info(
+                    "Episode returns (%d): %s. Param updates: %d.",
+                    len(self.completed_returns),
+                    [f"{r:.1f}" for r in self.completed_returns],
+                    self._params_received,
+                )
+                if self._writer is not None and self.completed_returns:
+                    self._writer.write_scalars(
+                        self._env_steps,
+                        {"collector/mean_return": float(np.mean(self.completed_returns))},
+                    )
+                    self._writer.flush()
+                self.completed_returns.clear()
+                self._params_received = 0
+
+    def close(self) -> None:
+        """Release local helper resources after collection stops."""
+        if self._closed:
+            return
+        self._closed = True
+        self.command_executor.shutdown()
+        self.env.close()
+        if self._writer is not None:
+            self._writer.close()
+        self.logger.info("CollectorDQNRecurrentUniform closed (seed=%d).", self.collector_seed)
 
 
 class CollectorDreamerUniform:

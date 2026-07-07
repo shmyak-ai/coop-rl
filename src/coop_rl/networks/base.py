@@ -26,6 +26,29 @@ def get_actor(base, torso, args_torso, action_head, args_action_head, input_laye
     return result
 
 
+def get_recurrent_actor(
+    base,
+    pre_torso,
+    args_pre_torso,
+    post_torso,
+    args_post_torso,
+    action_head,
+    args_action_head,
+    hidden_state_dim,
+    cell_type,
+    input_layer,
+):
+    result = base(
+        pre_torso=pre_torso(**args_pre_torso),
+        post_torso=post_torso(**args_post_torso),
+        action_head=action_head(**args_action_head),
+        hidden_state_dim=hidden_state_dim,
+        cell_type=cell_type,
+        input_layer=input_layer(),
+    )
+    return result
+
+
 class FeedForwardActor(nn.Module):
     """Simple Feedforward Actor Network."""
 

@@ -27,6 +27,39 @@ class TimeStepDQNDtypesAtari(NamedTuple):
     truncated: str = "int8"
 
 
+@chex.dataclass(frozen=True)
+class TimeStepDQNRecurrent:
+    """TimeStepDQN plus the recurrent state needed for R2D2-style burn-in.
+
+    hidden_state: the RNN carry as it was BEFORE this transition's action was
+    selected, so training can warm it back up from the start of a sampled window.
+    Only supports single-array carries (e.g. GRU); LSTM's (c, h) tuple carry is
+    not representable in this schema.
+    reset_hidden_state: done|truncated from the PREVIOUS env step, i.e. whether
+    the hidden state should be reset before consuming this transition's obs.
+    Not derivable from this window's own terminated/truncated, since it refers
+    to the step immediately before the window starts.
+    """
+
+    obs: chex.Array
+    action: chex.Array
+    reward: chex.Array
+    terminated: chex.Array
+    truncated: chex.Array
+    hidden_state: chex.Array
+    reset_hidden_state: chex.Array
+
+
+class TimeStepDQNRecurrentDtypesAtari(NamedTuple):
+    obs: str = "uint8"
+    action: str = "int8"
+    reward: str = "int32"
+    terminated: str = "int8"
+    truncated: str = "int8"
+    hidden_state: str = "float32"
+    reset_hidden_state: str = "int8"
+
+
 class Observation(NamedTuple):
     """The observation that the agent sees.
     agent_view: the agent's view of the environment.

@@ -21,7 +21,7 @@ import jax.numpy as jnp
 from flashbax.buffers.trajectory_buffer import TrajectoryBufferSample
 
 from coop_rl.agents.dreamer import ext_space as dreamer_ext_space
-from coop_rl.base.base_types import TimeStepDQN
+from coop_rl.base.base_types import TimeStepDQN, TimeStepDQNRecurrent
 
 
 def _sample_with_indices(state, rng_key, batch_size, sequence_length, period):
@@ -141,6 +141,65 @@ class BufferTrajectoryDQN:
                 reward=jnp.ones((), dtype=self.dtypes.reward),
                 terminated=jnp.ones((), dtype=self.dtypes.terminated),
                 truncated=jnp.ones((), dtype=self.dtypes.truncated),
+            )
+            self.state = self.buffer.init(fake_timestep)
+            self.rng_key = jax.random.PRNGKey(buffer_seed)
+            self._rng_lock = threading.Lock()
+
+    def add(self, batch_sequence):
+        with jax.default_device(self.cpu):
+            self.state = self.buffer.add(self.state, batch_sequence)
+
+    def sample(self):
+        with self._rng_lock:
+            self.rng_key, rng_key = jax.random.split(self.rng_key)
+        with jax.default_device(self.cpu):
+            batch = self.buffer.sample(self.state, rng_key)
+        return batch
+
+    def can_sample(self):
+        return self.buffer.can_sample(self.state)
+
+
+class BufferTrajectoryDQNRecurrent:
+    def __init__(
+        self,
+        buffer_seed,
+        add_batch_size,
+        sample_batch_size,
+        sample_sequence_length,
+        period,
+        min_length,
+        max_size,
+        observation_shape,
+        hidden_state_shape,
+        time_step_dtypes,
+    ):
+        self.dtypes = time_step_dtypes()
+        self.cpu = jax.devices("cpu")[0]
+        with jax.default_device(self.cpu):
+            self.buffer = fbx.make_trajectory_buffer(
+                add_batch_size=add_batch_size,
+                sample_batch_size=sample_batch_size,
+                sample_sequence_length=sample_sequence_length,
+                period=period,
+                min_length_time_axis=min_length,
+                max_length_time_axis=max_size // add_batch_size,
+            )
+            self.buffer = self.buffer.replace(
+                init=jax.jit(self.buffer.init),
+                add=jax.jit(self.buffer.add, donate_argnums=0),
+                sample=jax.jit(self.buffer.sample),
+                can_sample=jax.jit(self.buffer.can_sample),
+            )
+            fake_timestep = TimeStepDQNRecurrent(
+                obs=jnp.ones(observation_shape, dtype=self.dtypes.obs),
+                action=jnp.ones((), dtype=self.dtypes.action),
+                reward=jnp.ones((), dtype=self.dtypes.reward),
+                terminated=jnp.ones((), dtype=self.dtypes.terminated),
+                truncated=jnp.ones((), dtype=self.dtypes.truncated),
+                hidden_state=jnp.ones(hidden_state_shape, dtype=self.dtypes.hidden_state),
+                reset_hidden_state=jnp.ones((), dtype=self.dtypes.reset_hidden_state),
             )
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)

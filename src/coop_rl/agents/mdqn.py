@@ -29,10 +29,12 @@ from typing_extensions import NamedTuple
 
 from coop_rl.base.base_types import (
     ActorApply,
+    TimeStepDQNRecurrent,
 )
 from coop_rl.base.buffers import TimeStepDQN
 from coop_rl.base.loss import munchausen_q_learning
 from coop_rl.base.multistep import batch_discounted_returns
+from coop_rl.networks.base import ScannedRNN
 
 
 class Transition(NamedTuple):
@@ -42,6 +44,15 @@ class Transition(NamedTuple):
     done: chex.Array
     next_obs: chex.Array
     info: dict
+
+
+class RecurrentRolloutSample(NamedTuple):
+    q_online: chex.Array  # (batch, learn_length, num_actions)
+    q_target: chex.Array  # (batch, learn_length, num_actions)
+    action: chex.Array  # (batch, learn_length)
+    reward: chex.Array  # (batch, learn_length)
+    terminated: chex.Array  # (batch, learn_length)
+    truncated: chex.Array  # (batch, learn_length)
 
 
 class TrainState(train_state.TrainState):
@@ -119,6 +130,60 @@ def restore_dqn_flax_state(
     return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
 
 
+def create_recurrent_train_state(
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    obs_shape,
+    hidden_state_dim,
+    cell_type,
+    tau,
+):
+    state_rng, init_rng = jax.random.split(rng)
+    model = network(**args_network)
+    dummy_hidden_state = ScannedRNN(hidden_state_dim, cell_type).initialize_carry(1)
+    dummy_obs = jnp.ones((1, 1, *obs_shape))
+    dummy_reset = jnp.zeros((1, 1), dtype=bool)
+    params = model.init(init_rng, dummy_hidden_state, (dummy_obs, dummy_reset))
+    tx = optimizer(**args_optimizer)
+    return TrainState.create(
+        apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau
+    )
+
+
+def restore_recurrent_dqn_flax_state(
+    *,
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    observation_shape,
+    hidden_state_dim,
+    cell_type,
+    tau,
+    checkpointdir,
+):
+    state = create_recurrent_train_state(
+        rng,
+        network,
+        args_network,
+        optimizer,
+        args_optimizer,
+        observation_shape,
+        hidden_state_dim,
+        cell_type,
+        tau,
+    )
+    if checkpointdir is None:
+        return state
+    orbax_checkpointer = ocp.StandardCheckpointer()
+    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+    return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
+
+
 def get_select_action_fn(
     apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
 ) -> Callable:
@@ -146,6 +211,25 @@ def get_select_action_batch_fn(
         return key, actor_policy.sample(seed=policy_key)
 
     return select_action_batch
+
+
+def get_select_action_recurrent_batch_fn(
+    apply_fn: ActorApply, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    """Like get_select_action_batch_fn but threads a recurrent hidden state across calls."""
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    @jax.jit
+    def select_action(key, params, hidden_state, observations, reset_mask):
+        key, policy_key = jax.random.split(key)
+        obs_t = jnp.expand_dims(_preprocess(observations), axis=0)
+        reset_t = jnp.expand_dims(reset_mask, axis=0).astype(bool)
+        new_hidden_state, actor_policy = apply_fn(params, hidden_state, (obs_t, reset_t))
+        action = actor_policy.sample(seed=policy_key)
+        action = jnp.squeeze(action, axis=0)
+        return key, new_hidden_state, action
+
+    return select_action
 
 
 def get_update_step(
@@ -253,6 +337,155 @@ def get_update_step(
         return train_state, loss_info
 
     return _update_step
+
+
+def get_recurrent_rollout(
+    *, apply_fn: ActorApply, burn_in_length: int, obs_preprocess_fn: Callable | None = None
+) -> Callable:
+    """Rollout half of the recurrent DQN step: RNN forward passes only, no loss math.
+
+    Warms up the hidden state from the sequence's stored starting state via a
+    stop-gradient burn-in (run separately for online and target params), then
+    unrolls the remaining "learn" steps to produce per-timestep Q-value sequences.
+    """
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    def _recurrent_rollout(
+        q_params: FrozenDict, target_q_params: FrozenDict, sample: TimeStepDQNRecurrent
+    ) -> RecurrentRolloutSample:
+        # (batch, T, ...) -> (T, batch, ...) to match ScannedRNN's time-major scan.
+        sample_tm = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), sample)
+
+        init_hidden_state = sample_tm.hidden_state[0]
+        reset_tm = sample_tm.reset_hidden_state.astype(bool)
+
+        burn_obs = _preprocess(sample_tm.obs[:burn_in_length])
+        burn_reset = reset_tm[:burn_in_length]
+        learn_obs = _preprocess(sample_tm.obs[burn_in_length:])
+        learn_reset = reset_tm[burn_in_length:]
+
+        if burn_in_length > 0:
+            online_hidden_state, _ = apply_fn(q_params, init_hidden_state, (burn_obs, burn_reset))
+            online_hidden_state = jax.lax.stop_gradient(online_hidden_state)
+            target_hidden_state, _ = apply_fn(
+                target_q_params, init_hidden_state, (burn_obs, burn_reset)
+            )
+            target_hidden_state = jax.lax.stop_gradient(target_hidden_state)
+        else:
+            online_hidden_state = init_hidden_state
+            target_hidden_state = init_hidden_state
+
+        _, online_pi = apply_fn(q_params, online_hidden_state, (learn_obs, learn_reset))
+        _, target_pi = apply_fn(target_q_params, target_hidden_state, (learn_obs, learn_reset))
+
+        q_online = jnp.swapaxes(online_pi.preferences, 0, 1).astype(jnp.float32)
+        q_target = jnp.swapaxes(target_pi.preferences, 0, 1).astype(jnp.float32)
+
+        return RecurrentRolloutSample(
+            q_online=q_online,
+            q_target=q_target,
+            action=sample.action[:, burn_in_length:],
+            reward=sample.reward[:, burn_in_length:],
+            terminated=sample.terminated[:, burn_in_length:],
+            truncated=sample.truncated[:, burn_in_length:],
+        )
+
+    return _recurrent_rollout
+
+
+def get_update_step_recurrent(
+    *,
+    apply_fn: ActorApply,
+    burn_in_length: int,
+    gamma: float,
+    entropy_temperature: float,
+    munchausen_coefficient: float,
+    clip_value_min: float,
+    huber_loss_parameter: float,
+    max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
+    recurrent_rollout_fn: Callable | None = None,
+) -> Callable:
+    """DQN-step half of the recurrent DQN step: consumes a rollout's Q-value sequences.
+
+    Mirrors get_update_step's n-step Munchausen Q-learning math exactly, only
+    sourcing q_tm1/q_tm1_target/q_t_target from a recurrent_rollout_fn's rolled-out
+    sequences instead of two isolated feedforward apply_fn calls.
+    """
+    _rollout_fn = recurrent_rollout_fn or get_recurrent_rollout(
+        apply_fn=apply_fn, burn_in_length=burn_in_length, obs_preprocess_fn=obs_preprocess_fn
+    )
+
+    def _update_step_recurrent(
+        train_state: TrainState, buffer_sample: TrajectoryBufferSample
+    ) -> tuple[TrainState, dict]:
+        def _q_loss_fn(
+            q_params: FrozenDict,
+            target_q_params: FrozenDict,
+            sample: TimeStepDQNRecurrent,
+        ) -> tuple[jnp.ndarray, dict]:
+            rollout = _rollout_fn(q_params, target_q_params, sample)
+
+            length_batch, length_learn = rollout.action.shape[:2]
+            mask_done = jnp.logical_or(rollout.truncated == 1, rollout.terminated == 1)
+            indices_done = jnp.argmax(mask_done, axis=1)
+            has_one = jnp.any(mask_done, axis=1)
+            indices_done = jnp.where(has_one, indices_done, length_learn - 1)
+            batch_indices = jnp.arange(length_batch)
+
+            q_tm1 = rollout.q_online[:, 0]
+            q_tm1_target = rollout.q_target[:, 0]
+            q_t_target = rollout.q_target[batch_indices, indices_done]
+            a_tm1 = rollout.action[:, 0]
+
+            n_step_done = jnp.any(rollout.terminated == 1, axis=-1)
+            discounts = 1.0 - mask_done.astype(jnp.float32)
+            n_step_reward = batch_discounted_returns(
+                rollout.reward.astype(jnp.float32),
+                discounts * gamma,
+                jnp.zeros_like(discounts),
+            )[:, 0]
+
+            discount = 1.0 - n_step_done.astype(jnp.float32)
+            d_t = (discount * gamma).astype(jnp.float32)
+            r_t = jnp.clip(n_step_reward, -max_abs_reward, max_abs_reward).astype(jnp.float32)
+
+            batch_loss = munchausen_q_learning(
+                q_tm1,
+                q_tm1_target,
+                a_tm1,
+                r_t,
+                d_t,
+                q_t_target,
+                entropy_temperature,
+                munchausen_coefficient,
+                clip_value_min,
+                huber_loss_parameter,
+            )
+
+            loss_info = {
+                "loss": batch_loss,
+            }
+
+            return batch_loss, loss_info
+
+        sample: TimeStepDQNRecurrent = buffer_sample.experience
+
+        q_grad_fn = jax.grad(_q_loss_fn, has_aux=True)
+        q_grads, q_loss_info = q_grad_fn(
+            train_state.params,
+            train_state.target_params,
+            sample,
+        )
+        train_state = train_state.apply_gradients(grads=q_grads)
+
+        loss_info = {
+            **q_loss_info,
+        }
+
+        return train_state, loss_info
+
+    return _update_step_recurrent
 
 
 def get_update_epoch(*, update_step_fn: Callable, **kwargs) -> Callable:
