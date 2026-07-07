@@ -27,7 +27,7 @@ from coop_rl.base.base_types import TimeStepDQNDtypesAtari
 from coop_rl.base.buffers import BufferTrajectoryDQN
 from coop_rl.base.environment import HandlerEnvAtari
 from coop_rl.base.utils import make_optimizer
-from coop_rl.networks.base import FeedForwardActor, get_actor
+from coop_rl.networks.base import FeedForwardNetwork
 from coop_rl.networks.heads import DiscreteQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
@@ -59,9 +59,8 @@ def get_config():
     config.actions_shape = actions_shape
     config.workdir = workdir
 
-    config.network = network = get_actor
+    config.network = network = FeedForwardNetwork
     config.args_network = args_network = ml_collections.ConfigDict()
-    config.args_network.base = FeedForwardActor
     config.args_network.torso = CNNTorso
     config.args_network.args_torso = ml_collections.ConfigDict()
     config.args_network.args_torso.activation = "silu"
@@ -73,11 +72,11 @@ def get_config():
     config.args_network.args_torso.dtype = jnp.bfloat16
     config.args_network.args_torso.depth = 32  # Wang et al. (NeurIPS 2025)
     config.args_network.args_torso.width = 256
-    config.args_network.action_head = DiscreteQNetworkHead
-    config.args_network.args_action_head = ml_collections.ConfigDict()
-    config.args_network.args_action_head.action_dim = actions_shape
-    config.args_network.args_action_head.epsilon = 0.01
-    config.args_network.args_action_head.dtype = jnp.bfloat16
+    config.args_network.head = DiscreteQNetworkHead
+    config.args_network.args_head = ml_collections.ConfigDict()
+    config.args_network.args_head.action_dim = actions_shape
+    config.args_network.args_head.epsilon = 0.01
+    config.args_network.args_head.dtype = jnp.bfloat16
     config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = make_optimizer

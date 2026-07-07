@@ -3,7 +3,7 @@
 #
 
 import functools
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import chex
@@ -17,67 +17,20 @@ from coop_rl.networks.inputs import ObservationInput
 from coop_rl.networks.utils import parse_rnn_cell
 
 
-def get_actor(base, torso, args_torso, action_head, args_action_head, input_layer):
-    result = base(
-        torso=torso(**args_torso),
-        action_head=action_head(**args_action_head),
-        input_layer=input_layer(),
-    )
-    return result
+class FeedForwardNetwork(nn.Module):
+    """Simple Feedforward Network."""
 
-
-def get_recurrent_actor(
-    base,
-    pre_torso,
-    args_pre_torso,
-    post_torso,
-    args_post_torso,
-    action_head,
-    args_action_head,
-    hidden_state_dim,
-    cell_type,
-    input_layer,
-):
-    result = base(
-        pre_torso=pre_torso(**args_pre_torso),
-        post_torso=post_torso(**args_post_torso),
-        action_head=action_head(**args_action_head),
-        hidden_state_dim=hidden_state_dim,
-        cell_type=cell_type,
-        input_layer=input_layer(),
-    )
-    return result
-
-
-class FeedForwardActor(nn.Module):
-    """Simple Feedforward Actor Network."""
-
-    action_head: nn.Module
-    torso: nn.Module
-    input_layer: nn.Module = ObservationInput()
+    torso: type[nn.Module]
+    args_torso: Mapping[str, Any]
+    head: type[nn.Module]
+    args_head: Mapping[str, Any]
+    input_layer: type[nn.Module] = ObservationInput
 
     @nn.compact
     def __call__(self, observation: Observation) -> Any:
-        obs_embedding = self.input_layer(observation)
-        obs_embedding = self.torso(obs_embedding)
-
-        return self.action_head(obs_embedding)
-
-
-class FeedForwardCritic(nn.Module):
-    """Simple Feedforward Critic Network."""
-
-    critic_head: nn.Module
-    torso: nn.Module
-    input_layer: nn.Module = ObservationInput()
-
-    @nn.compact
-    def __call__(self, observation: Observation) -> chex.Array:
-        obs_embedding = self.input_layer(observation)
-        obs_embedding = self.torso(obs_embedding)
-        critic_output = self.critic_head(obs_embedding)
-
-        return critic_output
+        x = self.input_layer()(observation)
+        x = self.torso(**self.args_torso)(x)
+        return self.head(**self.args_head)(x)
 
 
 class CompositeNetwork(nn.Module):
@@ -148,62 +101,34 @@ class ScannedRNN(nn.Module):
         return cell.initialize_carry(jax.random.PRNGKey(0), (batch_size, self.hidden_state_dim))
 
 
-class RecurrentActor(nn.Module):
-    """Recurrent Actor Network."""
+class RecurrentNetwork(nn.Module):
+    """Recurrent Network."""
 
-    action_head: nn.Module
-    post_torso: nn.Module
+    pre_torso: type[nn.Module]
+    args_pre_torso: Mapping[str, Any]
+    post_torso: type[nn.Module]
+    args_post_torso: Mapping[str, Any]
+    head: type[nn.Module]
+    args_head: Mapping[str, Any]
     hidden_state_dim: int
     cell_type: str
-    pre_torso: nn.Module
-    input_layer: nn.Module = ObservationInput()
+    input_layer: type[nn.Module] = ObservationInput
 
     @nn.compact
     def __call__(
         self,
-        policy_hidden_state: chex.Array,
+        hidden_state: chex.Array,
         observation_done: RNNObservation,
     ) -> tuple[chex.Array, Any]:
-        observation, done = observation_done
+        x, done = observation_done
 
-        observation = self.input_layer(observation)
-        policy_embedding = self.pre_torso(observation)
-        policy_rnn_input = (policy_embedding, done)
-        policy_hidden_state, policy_embedding = ScannedRNN(self.hidden_state_dim, self.cell_type)(
-            policy_hidden_state, policy_rnn_input
+        x = self.input_layer()(x)
+        x = self.pre_torso(**self.args_pre_torso)(x)
+        rnn_input = (x, done)
+        hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(
+            hidden_state, rnn_input
         )
-        actor_logits = self.post_torso(policy_embedding)
-        pi = self.action_head(actor_logits)
+        x = self.post_torso(**self.args_post_torso)(x)
+        x = self.head(**self.args_head)(x)
 
-        return policy_hidden_state, pi
-
-
-class RecurrentCritic(nn.Module):
-    """Recurrent Critic Network."""
-
-    critic_head: nn.Module
-    post_torso: nn.Module
-    hidden_state_dim: int
-    cell_type: str
-    pre_torso: nn.Module
-    input_layer: nn.Module = ObservationInput()
-
-    @nn.compact
-    def __call__(
-        self,
-        critic_hidden_state: tuple[chex.Array, chex.Array],
-        observation_done: RNNObservation,
-    ) -> tuple[chex.Array, chex.Array]:
-        observation, done = observation_done
-
-        observation = self.input_layer(observation)
-
-        critic_embedding = self.pre_torso(observation)
-        critic_rnn_input = (critic_embedding, done)
-        critic_hidden_state, critic_embedding = ScannedRNN(self.hidden_state_dim, self.cell_type)(
-            critic_hidden_state, critic_rnn_input
-        )
-        critic_output = self.post_torso(critic_embedding)
-        critic_output = self.critic_head(critic_output)
-
-        return critic_hidden_state, critic_output
+        return hidden_state, x

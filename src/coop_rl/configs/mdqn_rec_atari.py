@@ -27,7 +27,7 @@ from coop_rl.base.base_types import TimeStepDQNRecurrentDtypesAtari
 from coop_rl.base.buffers import BufferTrajectoryDQNRecurrent
 from coop_rl.base.environment import HandlerEnvAtari
 from coop_rl.base.utils import make_optimizer
-from coop_rl.networks.base import RecurrentActor, get_recurrent_actor
+from coop_rl.networks.base import RecurrentNetwork
 from coop_rl.networks.heads import DiscreteQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso, DeepResidualTorso
@@ -65,9 +65,8 @@ def get_config():
     config.actions_shape = actions_shape
     config.workdir = workdir
 
-    config.network = network = get_recurrent_actor
+    config.network = network = RecurrentNetwork
     config.args_network = args_network = ml_collections.ConfigDict()
-    config.args_network.base = RecurrentActor
     config.args_network.pre_torso = CNNTorso
     config.args_network.args_pre_torso = ml_collections.ConfigDict()
     config.args_network.args_pre_torso.activation = "silu"
@@ -85,11 +84,11 @@ def get_config():
     config.args_network.args_post_torso.depth = 16  # half of the feedforward config's depth=32
     config.args_network.args_post_torso.activation = "swish"
     config.args_network.args_post_torso.dtype = jnp.bfloat16
-    config.args_network.action_head = DiscreteQNetworkHead
-    config.args_network.args_action_head = ml_collections.ConfigDict()
-    config.args_network.args_action_head.action_dim = actions_shape
-    config.args_network.args_action_head.epsilon = 0.01
-    config.args_network.args_action_head.dtype = jnp.bfloat16
+    config.args_network.head = DiscreteQNetworkHead
+    config.args_network.args_head = ml_collections.ConfigDict()
+    config.args_network.args_head.action_dim = actions_shape
+    config.args_network.args_head.epsilon = 0.01
+    config.args_network.args_head.dtype = jnp.bfloat16
     config.args_network.hidden_state_dim = hidden_state_dim
     config.args_network.cell_type = cell_type
     config.args_network.input_layer = EmbeddingInput
