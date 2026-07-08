@@ -5,10 +5,12 @@
 import enum
 import functools
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import chex
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 
 from coop_rl.networks.utils import parse_activation_fn
 
@@ -47,6 +49,21 @@ class ResidualBlock(nn.Module):
         return x + output
 
 
+def adaptive_max_pool(x: chex.Array, output_size: int) -> chex.Array:
+    """Adaptive max pool over the H, W axes of a [..., H, W, C] array (PyTorch semantics)."""
+    x = jnp.asarray(x)
+
+    def bounds(size: int) -> list[tuple[int, int]]:
+        return [
+            (i * size // output_size, -((i + 1) * -size // output_size)) for i in range(output_size)
+        ]
+
+    rows = [jnp.max(x[..., s:e, :, :], axis=-3) for s, e in bounds(x.shape[-3])]
+    x = jnp.stack(rows, axis=-3)
+    cols = [jnp.max(x[..., s:e, :], axis=-2) for s, e in bounds(x.shape[-2])]
+    return jnp.stack(cols, axis=-2)
+
+
 class DownsamplingStrategy(enum.Enum):
     AVG_POOL = "avg_pool"
     CONV_MAX = "conv+max"  # Used in IMPALA
@@ -57,6 +74,7 @@ class DownsamplingStrategy(enum.Enum):
 def make_downsampling_layer(
     strategy: str | DownsamplingStrategy,
     output_channels: int,
+    dtype: Any = None,
 ) -> nn.Module:
     """Returns a sequence of modules corresponding to the desired downsampling."""
     strategy = DownsamplingStrategy(strategy)
@@ -72,6 +90,7 @@ def make_downsampling_layer(
                     kernel_size=(3, 3),
                     strides=(2, 2),
                     kernel_init=nn.initializers.truncated_normal(1e-2),
+                    dtype=dtype,
                 ),
             ]
         )
@@ -88,6 +107,7 @@ def make_downsampling_layer(
                     kernel_size=(3, 3),
                     strides=(2, 2),
                     kernel_init=nn.initializers.truncated_normal(1e-2),
+                    dtype=dtype,
                 ),
             ]
         )
@@ -95,7 +115,7 @@ def make_downsampling_layer(
     elif strategy is DownsamplingStrategy.CONV_MAX:
         return nn.Sequential(
             [
-                nn.Conv(features=output_channels, kernel_size=(3, 3), strides=(1, 1)),
+                nn.Conv(features=output_channels, kernel_size=(3, 3), strides=(1, 1), dtype=dtype),
                 lambda x: nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME"),
             ]
         )
@@ -117,6 +137,8 @@ class VisualResNetTorso(nn.Module):
     use_layer_norm: bool = False
     activation: str = "relu"
     channel_first: bool = False
+    adaptive_pool_size: int | None = None
+    dtype: Any = None
 
     @nn.compact
     def __call__(self, observation: chex.Array) -> chex.Array:
@@ -141,20 +163,22 @@ class VisualResNetTorso(nn.Module):
         )
 
         for _, (num_channels, num_blocks, strategy) in enumerate(channels_blocks_strategies):
-            output = make_downsampling_layer(strategy, num_channels)(output)
+            output = make_downsampling_layer(strategy, num_channels, dtype=self.dtype)(output)
 
             for _ in range(num_blocks):
                 output = ResidualBlock(
                     make_inner_op=functools.partial(
-                        nn.Conv, features=num_channels, kernel_size=(3, 3)
+                        nn.Conv, features=num_channels, kernel_size=(3, 3), dtype=self.dtype
                     ),
                     use_layer_norm=self.use_layer_norm,
                     non_linearity=parse_activation_fn(self.activation),
                 )(output)
 
+        if self.adaptive_pool_size is not None:
+            output = adaptive_max_pool(output, self.adaptive_pool_size)
         output = output.reshape(*observation.shape[:-3], -1)
         for num_hidden_units in self.hidden_sizes:
-            output = nn.Dense(features=num_hidden_units)(output)
+            output = nn.Dense(features=num_hidden_units, dtype=self.dtype)(output)
             output = parse_activation_fn(self.activation)(output)
 
         return output
