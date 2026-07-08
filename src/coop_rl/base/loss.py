@@ -210,3 +210,79 @@ def munchausen_q_learning_n_step(
         batch_loss = rlax.l2_loss(td_error)
     weights = 1.0 - truncated[:, :anchors]
     return jnp.sum(batch_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)
+
+
+def munchausen_quantile_q_learning_n_step(
+    z_online: chex.Array,
+    quantiles: chex.Array,
+    z_target: chex.Array,
+    a_t: chex.Array,
+    r_t: chex.Array,
+    terminated: chex.Array,
+    truncated: chex.Array,
+    gamma: float,
+    n_steps: int,
+    entropy_temperature: chex.Array,
+    munchausen_coefficient: chex.Array,
+    clip_value_min: chex.Array,
+    quantile_huber_kappa: chex.Array,
+) -> chex.Array:
+    """N-step Munchausen-IQN loss over (batch, time, ...) learn-window sequences.
+
+    The quantile analogue of munchausen_q_learning_n_step: every timestep t in
+    [0, T - n_steps) anchors an n-step target per target quantile j,
+    sum_{i<n} gamma^i * shaped_r[t+i] + gamma^n * soft_z[t+n, j], where the
+    Munchausen bonus is reward shaping applied to every step's reward and
+    soft_z_j = sum_a pi(a|s) * (z_j(s, a) - tau * ln pi(a|s)) is the per-quantile
+    soft bootstrap, with pi = softmax(q_target / tau) from the target quantile mean.
+    An interior termination stops the sum after that step's reward (no bootstrap);
+    an interior truncation at offset k bootstraps gamma^k * soft_z from the
+    truncated step. The pairwise quantile Huber loss (sum over the N online
+    quantiles, mean over the N' target quantiles) is averaged over the anchors,
+    with truncated anchors masked out.
+    """
+    action_one_hot = jax.nn.one_hot(a_t, z_target.shape[-1])
+    # Munchausen reward shaping: r + alpha * clip(tau * ln pi(a|s), l0, 0), with pi
+    # computed from the target network's quantile-mean q-values.
+    q_target = jnp.mean(z_target, axis=2)
+    log_pi = jax.nn.log_softmax(q_target / entropy_temperature, axis=-1)
+    pi = jax.nn.softmax(q_target / entropy_temperature, axis=-1)
+    munchausen_term_a = jnp.sum(action_one_hot * entropy_temperature * log_pi, axis=-1)
+    munchausen_term_a = jnp.clip(munchausen_term_a, clip_value_min, 0.0)
+    shaped_r = r_t + munchausen_coefficient * munchausen_term_a
+
+    # Per-quantile soft bootstrap: sum_a pi(a|s) * (z_j(s, a) - tau * ln pi(a|s)).
+    soft_z = jnp.sum(
+        pi[:, :, jnp.newaxis, :] * (z_target - entropy_temperature * log_pi[:, :, jnp.newaxis, :]),
+        axis=-1,
+    )
+
+    terminated = terminated.astype(jnp.float32)
+    truncated = truncated.astype(jnp.float32)
+    # Backward recursion over the N' quantile axis: G(t, 0) = soft_z[t]; a truncated
+    # step's reward and successor are unusable, so bootstrap there instead.
+    target = soft_z
+    for h in range(1, n_steps + 1):
+        target = jnp.where(
+            truncated[:, :-h, jnp.newaxis] == 1,
+            soft_z[:, :-h],
+            shaped_r[:, :-h, jnp.newaxis]
+            + gamma * (1.0 - terminated[:, :-h, jnp.newaxis]) * target[:, 1:],
+        )
+    target = jax.lax.stop_gradient(target)
+
+    # Pairwise quantile Huber loss over N online x N' target quantiles per anchor.
+    anchors = z_online.shape[1] - n_steps
+    z_t_a = jnp.sum(z_online[:, :anchors] * action_one_hot[:, :anchors, jnp.newaxis, :], axis=-1)
+    td_error = target[:, :, jnp.newaxis, :] - z_t_a[:, :, :, jnp.newaxis]
+    abs_td_error = jnp.abs(td_error)
+    huber = jnp.where(
+        abs_td_error <= quantile_huber_kappa,
+        0.5 * td_error**2,
+        quantile_huber_kappa * (abs_td_error - 0.5 * quantile_huber_kappa),
+    )
+    indicator = (td_error < 0.0).astype(jnp.float32)
+    rho = jnp.abs(quantiles[:, :anchors, :, jnp.newaxis] - indicator) * huber / quantile_huber_kappa
+    anchor_loss = jnp.sum(jnp.mean(rho, axis=3), axis=2)
+    weights = 1.0 - truncated[:, :anchors]
+    return jnp.sum(anchor_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)

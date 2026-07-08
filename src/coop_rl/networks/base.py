@@ -146,3 +146,35 @@ class RecurrentNetwork(nn.Module):
         x = self.head(**self.args_head)(x)
 
         return hidden_state, x
+
+
+class QuantileRecurrentNetwork(nn.Module):
+    """Recurrent network whose head takes a number of quantile samples (IQN-style)."""
+
+    pre_torso: type[nn.Module]
+    args_pre_torso: Mapping[str, Any]
+    post_torso: type[nn.Module]
+    args_post_torso: Mapping[str, Any]
+    head: type[nn.Module]
+    args_head: Mapping[str, Any]
+    hidden_state_dim: int
+    cell_type: str
+    input_layer: type[nn.Module] = ObservationInput
+
+    @nn.compact
+    def __call__(
+        self,
+        hidden_state: chex.Array,
+        observation_done: RNNObservation,
+        num_quantiles: int,
+    ) -> tuple[chex.Array, Any]:
+        x, done = observation_done
+
+        x = self.input_layer()(x)
+        x = self.pre_torso(**self.args_pre_torso)(x)
+        rnn_input = (x, done)
+        hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(hidden_state, rnn_input)
+        x = self.post_torso(**self.args_post_torso)(x)
+        x = self.head(**self.args_head)(x, num_quantiles)
+
+        return hidden_state, x

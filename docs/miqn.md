@@ -47,7 +47,7 @@ the paper (M-IQN keeps ε-greedy despite the naturally stochastic softmax policy
 |---|---|---|
 | n-step returns (n = 3) | ✓ | the paper's headline M-IQN uses 3-step returns; every window reward gets its own Munchausen bonus (reward shaping), as in the mdqn feedforward path |
 | Dueling | ✓ | per-quantile value/advantage streams, `z = v + a − mean(a)`; validated for Munchausen by DM-DQN (Gu et al. 2022) |
-| Prioritized replay | ✓ | `BufferPrioritised` + importance-sampling weights, priorities = per-sequence quantile-Huber loss (same machinery as rainbow) |
+| Prioritized replay | ✓ (feedforward only) | `BufferPrioritised` + importance-sampling weights, priorities = per-sequence quantile-Huber loss (same machinery as rainbow); the recurrent variant deliberately uses uniform replay (see below) |
 | Double Q | ✗ | inapplicable — the bootstrap is a softmax-policy expectation, there is no argmax to decouple |
 | Noisy nets | ✗ | the noise would leak into the shaping policy `π = softmax(q̃_target/τ)`; the paper's M-IQN uses ε-greedy |
 
@@ -83,6 +83,32 @@ shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusio
   new priorities are the per-sequence loss (+1e-5), written back through
   `get_update_epoch`'s `buffer.set_priorities`.
 
+## The recurrent variant
+
+`miqn_rec_atari.py` is the R2D2-style counterpart, structured exactly like the recurrent
+MDQN (GRU instead of frame stacking, per-step hidden states in the buffer, 10-step
+stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). Per learn
+window, `get_recurrent_rollout` (`agents/miqn.py`) unrolls the online network with N
+quantile samples and the target network with N' samples; the loss
+(`munchausen_quantile_q_learning_n_step` in `base/loss.py`) builds an n-step Munchausen
+target **per target quantile** with the same backward recursion as the scalar
+`munchausen_q_learning_n_step` — the bootstrap is the per-quantile soft value
+`soft_z_j = Σ_a π(a|s)·(z_j(s,a) − τ ln π(a|s))` instead of `τ·logsumexp` — and applies
+the pairwise quantile Huber at every anchor (`learn_length − n_steps` per sequence,
+truncated anchors masked).
+
+Two deliberate simplifications versus the feedforward variant:
+
+- **Uniform replay, no PER.** There is no prioritized *sequence* buffer in the repo
+  (`BufferTrajectoryDQNRecurrent` is uniform), so PER here would mean building one plus
+  R2D2's mixed max/mean priority scheme, and it would force the update epoch out of jit
+  for host-side priority write-backs. Uniform replay reuses the existing recurrent
+  buffer/collector unchanged and keeps the whole epoch jitted (the config imports the
+  plain jitted `get_update_epoch` from `agents/mdqn`).
+- **The shaping policy comes free.** The rollout already computes target-network z for
+  every learn step, so the Munchausen policy is just its quantile mean — no separate
+  K-sample policy pass like the feedforward window assembly needs.
+
 ## Hyperparameters
 
 | Parameter | Value | Source |
@@ -103,11 +129,11 @@ shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusio
 
 | What | Where |
 |---|---|
-| M-IQN quantile-Huber loss | `src/coop_rl/base/loss.py` — `munchausen_quantile_q_learning` |
-| Update step / epoch, action selection, TrainState | `src/coop_rl/agents/miqn.py` |
+| M-IQN quantile-Huber losses | `src/coop_rl/base/loss.py` — `munchausen_quantile_q_learning`, `munchausen_quantile_q_learning_n_step` |
+| Update steps / epoch, action selection, TrainState | `src/coop_rl/agents/miqn.py` |
 | Implicit quantile dueling head | `src/coop_rl/networks/quantile.py` |
-| Network wrapper with `num_quantiles` arg | `src/coop_rl/networks/base.py` — `QuantileFeedForwardNetwork` |
-| Atari config | `src/coop_rl/configs/miqn_atari.py` |
+| Network wrappers with `num_quantiles` arg | `src/coop_rl/networks/base.py` — `QuantileFeedForwardNetwork`, `QuantileRecurrentNetwork` |
+| Atari configs | `src/coop_rl/configs/miqn_atari.py`, `src/coop_rl/configs/miqn_rec_atari.py` |
 
 ## References
 
