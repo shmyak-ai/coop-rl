@@ -30,7 +30,8 @@ from coop_rl.base.utils import make_optimizer
 from coop_rl.networks.base import RecurrentNetwork
 from coop_rl.networks.dueling import DuelingQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
-from coop_rl.networks.torso import CNNTorso, DeepResidualTorso
+from coop_rl.networks.resnet import DownsamplingStrategy, VisualResNetTorso
+from coop_rl.networks.torso import DeepResidualTorso
 from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import CollectorDQNRecurrentUniform
 from coop_rl.workers.trainers import Trainer
@@ -67,17 +68,19 @@ def get_config():
 
     config.network = network = RecurrentNetwork
     config.args_network = args_network = ml_collections.ConfigDict()
-    config.args_network.pre_torso = CNNTorso
+    config.args_network.pre_torso = VisualResNetTorso
     config.args_network.args_pre_torso = ml_collections.ConfigDict()
-    config.args_network.args_pre_torso.activation = "silu"
+    config.args_network.args_pre_torso.channels_per_group = (32, 64, 64)  # BTR: Impala width x2
+    config.args_network.args_pre_torso.blocks_per_group = (2, 2, 2)
+    config.args_network.args_pre_torso.downsampling_strategies = (
+        DownsamplingStrategy.CONV_MAX,
+    ) * 3
+    config.args_network.args_pre_torso.hidden_sizes = (512,)  # Dense bridge into the RNN
+    config.args_network.args_pre_torso.use_layer_norm = True  # BTR normalization (no spectral norm)
+    config.args_network.args_pre_torso.activation = "relu"
     config.args_network.args_pre_torso.channel_first = False
-    config.args_network.args_pre_torso.channel_sizes = [32, 64, 64]
-    config.args_network.args_pre_torso.kernel_sizes = [8, 4, 3]
-    config.args_network.args_pre_torso.strides = [4, 2, 1]
-    config.args_network.args_pre_torso.use_layer_norm = False
+    config.args_network.args_pre_torso.adaptive_pool_size = 6  # BTR adaptive maxpool, 11x11 -> 6x6
     config.args_network.args_pre_torso.dtype = jnp.bfloat16
-    config.args_network.args_pre_torso.width = 512
-    config.args_network.args_pre_torso.depth = 0  # CNN + linear bridge only, no residual stack
     config.args_network.post_torso = DeepResidualTorso
     config.args_network.args_post_torso = ml_collections.ConfigDict()
     config.args_network.args_post_torso.width = 256
@@ -99,7 +102,7 @@ def get_config():
     config.args_optimizer = args_optimizer = ml_collections.ConfigDict()
     config.args_optimizer.init_lr = 6.25e-5
     config.args_optimizer.decay_learning_rates = False
-    config.args_optimizer.max_grad_norm = 0.5
+    config.args_optimizer.max_grad_norm = 10.0  # BTR
 
     config.env = env = HandlerEnvAtari
     config.args_env = args_env = ml_collections.ConfigDict()
@@ -155,7 +158,7 @@ def get_config():
     config.args_trainer.args_get_update_step.apply_fn = None
     config.args_trainer.args_get_update_step.burn_in_length = burn_in_length
     config.args_trainer.args_get_update_step.n_steps = 3  # n-step TD targets, < learn_length
-    config.args_trainer.args_get_update_step.gamma = 0.99
+    config.args_trainer.args_get_update_step.gamma = 0.997  # BTR
     config.args_trainer.args_get_update_step.entropy_temperature = 0.03
     config.args_trainer.args_get_update_step.munchausen_coefficient = 0.9
     config.args_trainer.args_get_update_step.clip_value_min = -1.0

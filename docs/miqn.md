@@ -83,11 +83,34 @@ shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusio
   new priorities are the per-sequence loss (+1e-5), written back through
   `get_update_epoch`'s `buffer.set_priorities`.
 
+## The BTR variant
+
+`miqn_btr_atari.py` re-wires the same feedforward agent along the lines of **Beyond The
+Rainbow** (BTR, Clark et al., [arXiv:2411.03820](https://arxiv.org/abs/2411.03820)),
+whose ablations attribute the single largest gain (+142% IQM) to the encoder. Only the
+network and hyperparameters change — `agents/miqn.py` is shared:
+
+- **Impala ResNet encoder** (`VisualResNetTorso`, `networks/resnet.py`): BTR's 2× width
+  (32-64-64 channels, 2 residual blocks per group, conv+maxpool downsampling), ReLU;
+- **LayerNorm instead of BTR's spectral norm** — the BTR authors themselves note
+  (footnote) that LayerNorm, found after completion, is the better normalizer; it also
+  avoids threading a mutable power-iteration state through every `apply_fn` call;
+- **6×6 adaptive maxpool** (`adaptive_max_pool`, PyTorch semantics) before the flatten
+  → a 2304-dim IQN embedding, then 512-unit dueling streams. Total 2.90M parameters
+  vs BTR's reported 2.91M;
+- **BTR hyperparameters**: γ = 0.997, PER α = 0.2, grad-clip 10, batch 256,
+  N = N' = K = 8. Polyak targets (τ = 0.005) and lr 6.25e-5 are kept from the repo
+  convention (BTR: hard copies every 500 steps, lr 1e-4 at batch 256).
+
 ## The recurrent variant
 
 `miqn_rec_atari.py` is the R2D2-style counterpart, structured exactly like the recurrent
 MDQN (GRU instead of frame stacking, per-step hidden states in the buffer, 10-step
-stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). Per learn
+stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). It uses the
+same BTR-style Impala encoder and hyperparameter alignment as `miqn_btr_atari.py`
+(γ = 0.997, grad-clip 10, 8 quantile samples), with `hidden_sizes = (512,)` as a Dense
+bridge into the GRU — feeding the raw 2304-dim flatten into GRU(512) would ~3× the RNN
+input parameters for no BTR-grounded reason. Per learn
 window, `get_recurrent_rollout` (`agents/miqn.py`) unrolls the online network with N
 quantile samples and the target network with N' samples; the loss
 (`munchausen_quantile_q_learning_n_step` in `base/loss.py`) builds an n-step Munchausen
@@ -117,13 +140,15 @@ Two deliberate simplifications versus the feedforward variant:
 | α (Munchausen coefficient) | 0.9 | paper Table 2 |
 | l₀ (log-policy clip) | −1 | paper Table 2 |
 | κ (quantile Huber) | 1.0 | IQN |
-| N, N' (loss quantile samples) | 64, 64 | IQN / Dopamine |
-| K (acting / shaping-policy samples) | 32 | IQN / Dopamine |
+| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`); 8, 8 (btr, rec) | IQN / Dopamine; BTR |
+| K (acting / shaping-policy samples) | 32 (`miqn_atari`); 8 (btr, rec) | IQN / Dopamine; BTR |
 | n_cos (cosine embedding size) | 64 | IQN |
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
-| PER priority exponent / IS β | 0.6 / 0.5 → 1.0 | rainbow config |
+| γ | 0.99 (`miqn_atari`); 0.997 (btr, rec) | paper; BTR |
+| PER priority exponent / IS β | 0.6 (`miqn_atari`) / 0.2 (btr); 0.5 → 1.0 | rainbow config; BTR |
+| Batch size | 512 (`miqn_atari`); 256 (btr) | BTR value; also fits 8GB GPUs — the Impala encoder's 84×84 activations OOM at 512 |
 | Target update | Polyak τ = 0.005 | repo convention (paper: hard copy every 8000) |
-| Optimizer | Adam 6.25e-5, grad-clip 0.5 | repo convention (paper: Adam 5e-5) |
+| Optimizer | Adam 6.25e-5, grad-clip 0.5 (`miqn_atari`) / 10 (btr, rec) | repo convention (paper: Adam 5e-5); BTR clip |
 
 ## File map
 
@@ -133,7 +158,8 @@ Two deliberate simplifications versus the feedforward variant:
 | Update steps / epoch, action selection, TrainState | `src/coop_rl/agents/miqn.py` |
 | Implicit quantile dueling head | `src/coop_rl/networks/quantile.py` |
 | Network wrappers with `num_quantiles` arg | `src/coop_rl/networks/base.py` — `QuantileFeedForwardNetwork`, `QuantileRecurrentNetwork` |
-| Atari configs | `src/coop_rl/configs/miqn_atari.py`, `src/coop_rl/configs/miqn_rec_atari.py` |
+| Impala encoder + adaptive maxpool (BTR) | `src/coop_rl/networks/resnet.py` — `VisualResNetTorso`, `adaptive_max_pool` |
+| Atari configs | `src/coop_rl/configs/miqn_atari.py`, `src/coop_rl/configs/miqn_btr_atari.py`, `src/coop_rl/configs/miqn_rec_atari.py` |
 
 ## References
 
@@ -141,5 +167,9 @@ Two deliberate simplifications versus the feedforward variant:
   [arXiv:2007.14430](https://arxiv.org/abs/2007.14430) — M-IQN definition in Appx. B.1.
 - Dabney, Ostrovski, Silver, Munos. *Implicit Quantile Networks for Distributional
   Reinforcement Learning.* ICML 2018. [arXiv:1806.06923](https://arxiv.org/abs/1806.06923)
+- Clark, Towers, Evers, Hare. *Beyond The Rainbow: High Performance Deep Reinforcement
+  Learning on a Desktop PC.* ICML 2025. [arXiv:2411.03820](https://arxiv.org/abs/2411.03820)
+  — Impala encoder, adaptive maxpooling, and hyperparameters used by the btr and
+  recurrent configs.
 - Gu, Zhu, Lv, Shi, Hou, Xu. *DM-DQN: Dueling Munchausen deep Q network for robot path
   planning.* Complex & Intelligent Systems, 2022.

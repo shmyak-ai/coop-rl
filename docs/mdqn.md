@@ -186,7 +186,10 @@ to the window assembly in `agents/dqn.py` and `agents/rainbow.py`.
 ### The recurrent variant
 
 `mdqn_rec_atari.py` trades DQN's 4-frame stacking for a GRU (`stack_size = 1`,
-`hidden_state_dim = 512`), R2D2-style: the buffer stores the per-step hidden state, and
+`hidden_state_dim = 512`). Its visual encoder is a BTR-style Impala ResNet
+(`VisualResNetTorso`: 2× width, LayerNorm, 6×6 adaptive maxpool — per *Beyond The
+Rainbow*, Clark et al. 2025) with a 512-unit Dense bridge into the GRU; see
+`docs/miqn.md` for the encoder details. R2D2-style: the buffer stores the per-step hidden state, and
 each sampled 30-step sequence is split into a 10-step **burn-in** (hidden state warmed up
 from the stored value under stop-gradient, separately for online and target networks) and
 a 20-step **learn** window (`get_recurrent_rollout`). The loss
@@ -217,9 +220,10 @@ Deliberate or benign deviations in the coop-rl configs:
 | L2 loss (`huber_loss_parameter = 0.0`) | Huber | heavier tails on TD errors get more gradient weight |
 | `max_abs_reward = 1000` → effectively unclipped | rewards clipped to [−1, 1] | τ = 0.03 and l₀ = −1 were tuned against clipped rewards; with raw-scale rewards the Munchausen bonus (∈ [−0.9, 0]) is relatively much smaller |
 | Polyak target update, τ = 0.005 per step | hard copy every 8000 steps | modern smooth-target choice, similar effective timescale |
-| Adam lr 6.25e-5, eps 1e-5, grad-clip 0.5 | Adam lr 5e-5, no clipping | minor |
+| Adam lr 6.25e-5, eps 1e-5, grad-clip 0.5 (ff) / 10 (rec, per BTR) | Adam lr 5e-5, no clipping | minor |
+| γ = 0.99 (ff) / 0.997 (rec, per BTR) | γ = 0.99 | longer effective horizon in the recurrent config |
 | ε = 0.01 constant | ε = 0.01 with 250k-step linear decay | slightly less early exploration |
-| CNN + deep residual torso (Wang et al. 2025), SiLU/Swish, bfloat16 | Conv×3 → FC 512, ReLU, fp32 | deliberate modernization; loss math runs in fp32 (`astype(jnp.float32)` on Q-values) |
+| ff: CNN + deep residual torso (Wang et al. 2025), SiLU/Swish; rec: Impala ResNet + LayerNorm + 6×6 adaptive maxpool (BTR, Clark et al. 2025); both bfloat16 | Conv×3 → FC 512, ReLU, fp32 | deliberate modernization; loss math runs in fp32 (`astype(jnp.float32)` on Q-values) |
 
 ### Known caveats
 
@@ -261,6 +265,9 @@ steps, and it works for both the feedforward `(batch, emb)` and recurrent
 - Kapturowski et al. *Recurrent Experience Replay in Distributed Reinforcement Learning*
   (R2D2). ICLR 2019 — burn-in scheme used by the recurrent variant.
 - Wang et al. *1000 Layer Networks for Self-Supervised RL.* NeurIPS 2025 — deep residual
-  torso used by both configs.
+  torso used by the feedforward config.
+- Clark, Towers, Evers, Hare. *Beyond The Rainbow: High Performance Deep Reinforcement
+  Learning on a Desktop PC.* ICML 2025. [arXiv:2411.03820](https://arxiv.org/abs/2411.03820)
+  — Impala encoder and hyperparameters used by the recurrent config.
 - Gu, Zhu, Lv, Shi, Hou, Xu. *DM-DQN: Dueling Munchausen deep Q network for robot path
   planning.* Complex & Intelligent Systems, 2022 — dueling + Munchausen combination.
