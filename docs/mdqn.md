@@ -235,6 +235,25 @@ to `agents/dqn.py` and `agents/rainbow.py`). What remains:
    truncation (windows overlap with `period = 1`) and truncations are rare on Atari, so
    it is left as is.
 
+### Composing with other DQN extensions
+
+M-DQN changes the *target*, not the architecture or the replay scheme, so most classic
+DQN improvements compose with it — but not all of them are worth it:
+
+| Extension | Compatible? | Status in coop-rl |
+|---|---|---|
+| **Dueling** (Q = V + A − mean A) | Yes — pure head change, the loss never looks inside; DM-DQN (Gu et al. 2022) found it converges faster than both M-DQN and Dueling DQN | **Enabled**: both mdqn configs use `DuelingQNetworkHead` (`networks/dueling.py`) |
+| **n-step returns** | Yes — Munchausen is reward shaping, so every reward in the window gets its own bonus | Enabled (see above) |
+| **Double Q** | Not applicable — the bootstrap is `τ·logsumexp(q_target/τ)` (a soft max, no argmax to decouple), and the Munchausen penalty is already conservative | — |
+| **Prioritized replay** | Yes, but needs a prioritized buffer + importance-sampling weights in the loss; the paper beat C51 with uniform replay | Not implemented (uniform flashbax) |
+| **Noisy nets** | Possible (`NoisyLinear` exists for Rainbow), but the noise leaks into the shaping policy `π = softmax(q_target/τ)`, and M-DQN's entropy term already aids exploration | Not recommended |
+| **Distributional (C51/IQN)** | Yes — the paper's own M-IQN; requires shaping inside the distributional projection | Out of scope (a separate project) |
+
+The dueling head keeps the `EpsilonGreedy`/`.preferences` interface of
+`DiscreteQNetworkHead`, so it is a drop-in config swap: no change to the loss or update
+steps, and it works for both the feedforward `(batch, emb)` and recurrent
+`(time, batch, emb)` paths (no leading-dim reshapes).
+
 ## References
 
 - Vieillard, Pietquin, Geist. *Munchausen Reinforcement Learning.* NeurIPS 2020.
@@ -243,3 +262,5 @@ to `agents/dqn.py` and `agents/rainbow.py`). What remains:
   (R2D2). ICLR 2019 — burn-in scheme used by the recurrent variant.
 - Wang et al. *1000 Layer Networks for Self-Supervised RL.* NeurIPS 2025 — deep residual
   torso used by both configs.
+- Gu, Zhu, Lv, Shi, Hou, Xu. *DM-DQN: Dueling Munchausen deep Q network for robot path
+  planning.* Complex & Intelligent Systems, 2022 — dueling + Munchausen combination.

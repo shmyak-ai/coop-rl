@@ -14,7 +14,43 @@ from flax.linen.initializers import Initializer, orthogonal
 
 from coop_rl.networks.epsilon_greedy import EpsilonGreedy
 from coop_rl.networks.layers import NoisyLinear
-from coop_rl.networks.torso import NoisyMLPTorso
+from coop_rl.networks.torso import MLPTorso, NoisyMLPTorso
+
+
+class DuelingQNetworkHead(nn.Module):
+    action_dim: int
+    epsilon: float
+    layer_sizes: Sequence[int]
+    activation: str = "relu"
+    use_layer_norm: bool = False
+    kernel_init: Initializer = orthogonal(np.sqrt(2.0))
+    dtype: Any = None
+
+    @nn.compact
+    def __call__(self, embeddings: chex.Array) -> EpsilonGreedy:
+        value_torso = MLPTorso(
+            self.layer_sizes,
+            self.activation,
+            self.use_layer_norm,
+            kernel_init=self.kernel_init,
+            dtype=self.dtype,
+        )(embeddings)
+        advantages_torso = MLPTorso(
+            self.layer_sizes,
+            self.activation,
+            self.use_layer_norm,
+            kernel_init=self.kernel_init,
+            dtype=self.dtype,
+        )(embeddings)
+
+        value = nn.Dense(1, kernel_init=orthogonal(1.0), dtype=self.dtype)(value_torso)
+        advantages = nn.Dense(self.action_dim, kernel_init=orthogonal(1.0), dtype=self.dtype)(
+            advantages_torso
+        )
+        # No leading-dim reshapes: Dense acts on the last axis, so this works for
+        # both feedforward (batch, emb) and recurrent (time, batch, emb) inputs.
+        q_values = value + advantages - advantages.mean(axis=-1, keepdims=True)
+        return EpsilonGreedy(preferences=q_values, epsilon=self.epsilon)
 
 
 class NoisyDistributionalDuelingQNetwork(nn.Module):

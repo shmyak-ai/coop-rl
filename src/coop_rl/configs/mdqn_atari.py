@@ -28,7 +28,7 @@ from coop_rl.base.buffers import BufferTrajectoryDQN
 from coop_rl.base.environment import HandlerEnvAtari
 from coop_rl.base.utils import make_optimizer
 from coop_rl.networks.base import FeedForwardNetwork
-from coop_rl.networks.heads import DiscreteQNetworkHead
+from coop_rl.networks.dueling import DuelingQNetworkHead
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.torso import CNNTorso
 from coop_rl.workers.auxiliary import Controller
@@ -72,10 +72,12 @@ def get_config():
     config.args_network.args_torso.dtype = jnp.bfloat16
     config.args_network.args_torso.depth = 32  # Wang et al. (NeurIPS 2025)
     config.args_network.args_torso.width = 256
-    config.args_network.head = DiscreteQNetworkHead
+    config.args_network.head = DuelingQNetworkHead
     config.args_network.args_head = ml_collections.ConfigDict()
     config.args_network.args_head.action_dim = actions_shape
     config.args_network.args_head.epsilon = 0.01
+    config.args_network.args_head.layer_sizes = [256]
+    config.args_network.args_head.activation = "swish"
     config.args_network.args_head.dtype = jnp.bfloat16
     config.args_network.input_layer = EmbeddingInput
 
