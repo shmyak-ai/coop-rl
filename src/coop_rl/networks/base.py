@@ -33,6 +33,22 @@ class FeedForwardNetwork(nn.Module):
         return self.head(**self.args_head)(x)
 
 
+class QuantileFeedForwardNetwork(nn.Module):
+    """Feedforward network whose head takes a number of quantile samples (IQN-style)."""
+
+    torso: type[nn.Module]
+    args_torso: Mapping[str, Any]
+    head: type[nn.Module]
+    args_head: Mapping[str, Any]
+    input_layer: type[nn.Module] = ObservationInput
+
+    @nn.compact
+    def __call__(self, observation: Observation, num_quantiles: int) -> Any:
+        x = self.input_layer()(observation)
+        x = self.torso(**self.args_torso)(x)
+        return self.head(**self.args_head)(x, num_quantiles)
+
+
 class CompositeNetwork(nn.Module):
     """Composite Network. Takes in a sequence of layers and applies them sequentially."""
 
@@ -125,9 +141,7 @@ class RecurrentNetwork(nn.Module):
         x = self.input_layer()(x)
         x = self.pre_torso(**self.args_pre_torso)(x)
         rnn_input = (x, done)
-        hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(
-            hidden_state, rnn_input
-        )
+        hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(hidden_state, rnn_input)
         x = self.post_torso(**self.args_post_torso)(x)
         x = self.head(**self.args_head)(x)
 

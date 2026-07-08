@@ -245,9 +245,9 @@ DQN improvements compose with it — but not all of them are worth it:
 | **Dueling** (Q = V + A − mean A) | Yes — pure head change, the loss never looks inside; DM-DQN (Gu et al. 2022) found it converges faster than both M-DQN and Dueling DQN | **Enabled**: both mdqn configs use `DuelingQNetworkHead` (`networks/dueling.py`) |
 | **n-step returns** | Yes — Munchausen is reward shaping, so every reward in the window gets its own bonus | Enabled (see above) |
 | **Double Q** | Not applicable — the bootstrap is `τ·logsumexp(q_target/τ)` (a soft max, no argmax to decouple), and the Munchausen penalty is already conservative | — |
-| **Prioritized replay** | Yes, but needs a prioritized buffer + importance-sampling weights in the loss; the paper beat C51 with uniform replay | Not implemented (uniform flashbax) |
+| **Prioritized replay** | Yes, but needs a prioritized buffer + importance-sampling weights in the loss; the paper beat C51 with uniform replay | **Enabled in M-IQN** (`BufferPrioritised`); mdqn stays uniform |
 | **Noisy nets** | Possible (`NoisyLinear` exists for Rainbow), but the noise leaks into the shaping policy `π = softmax(q_target/τ)`, and M-DQN's entropy term already aids exploration | Not recommended |
-| **Distributional (C51/IQN)** | Yes — the paper's own M-IQN; requires shaping inside the distributional projection | Out of scope (a separate project) |
+| **Distributional (C51/IQN)** | Yes — the paper's own M-IQN | **Implemented**: `agents/miqn.py`, see `docs/miqn.md` |
 
 The dueling head keeps the `EpsilonGreedy`/`.preferences` interface of
 `DiscreteQNetworkHead`, so it is a drop-in config swap: no change to the loss or update

@@ -90,6 +90,69 @@ def munchausen_q_learning(
     return batch_loss
 
 
+def munchausen_quantile_q_learning(
+    z_tm1: chex.Array,
+    quantiles_tm1: chex.Array,
+    q_tm1_target: chex.Array,
+    z_t_target: chex.Array,
+    a_tm1: chex.Array,
+    r_t: chex.Array,
+    d_t: chex.Array,
+    entropy_temperature: chex.Array,
+    munchausen_coefficient: chex.Array,
+    clip_value_min: chex.Array,
+    quantile_huber_kappa: chex.Array,
+) -> chex.Array:
+    """Munchausen-IQN loss (Vieillard et al. 2020, Appx. B.1). Each input is a batch.
+
+    Regresses the online quantile values z_tm1 (B, N, A) at the sampled fractions
+    quantiles_tm1 (B, N) onto the per-target-quantile Munchausen target built from
+    z_t_target (B, N', A):
+
+        T_j = r + alpha * clip(tau * ln pi(a|s), l0, 0)
+              + d * sum_a' pi(a'|s') * (z_j(s', a') - tau * ln pi(a'|s'))
+
+    with pi = softmax(q_target / tau) and q_target the quantile mean. The quantile
+    Huber loss is summed over online quantiles and averaged over target quantiles.
+    Returns the per-batch loss vector (B,) so callers can apply importance weights.
+    """
+    action_one_hot = jax.nn.one_hot(a_tm1, z_tm1.shape[-1])
+    # Munchausen term: alpha * clip(tau * ln pi(a|s), l0, 0) at step 0.
+    munchausen_term = entropy_temperature * jax.nn.log_softmax(
+        q_tm1_target / entropy_temperature, axis=-1
+    )
+    munchausen_term_a = jnp.sum(action_one_hot * munchausen_term, axis=-1)
+    munchausen_term_a = jnp.clip(munchausen_term_a, clip_value_min, 0.0)
+
+    # Soft per-quantile bootstrap: sum_a' pi(a'|s') * (z_j(s', a') - tau * ln pi(a'|s')).
+    q_t_target = jnp.mean(z_t_target, axis=1)
+    log_pi_t = jax.nn.log_softmax(q_t_target / entropy_temperature, axis=-1)
+    pi_t = jax.nn.softmax(q_t_target / entropy_temperature, axis=-1)
+    soft_z_t = jnp.sum(
+        pi_t[:, jnp.newaxis, :] * (z_t_target - entropy_temperature * log_pi_t[:, jnp.newaxis, :]),
+        axis=-1,
+    )
+    target = (
+        r_t[:, jnp.newaxis]
+        + munchausen_coefficient * munchausen_term_a[:, jnp.newaxis]
+        + d_t[:, jnp.newaxis] * soft_z_t
+    )
+    target = jax.lax.stop_gradient(target)
+
+    # Pairwise quantile Huber loss over N online x N' target quantiles.
+    z_tm1_a = jnp.sum(z_tm1 * action_one_hot[:, jnp.newaxis, :], axis=-1)
+    td_error = target[:, jnp.newaxis, :] - z_tm1_a[:, :, jnp.newaxis]
+    abs_td_error = jnp.abs(td_error)
+    huber = jnp.where(
+        abs_td_error <= quantile_huber_kappa,
+        0.5 * td_error**2,
+        quantile_huber_kappa * (abs_td_error - 0.5 * quantile_huber_kappa),
+    )
+    indicator = (td_error < 0.0).astype(jnp.float32)
+    rho = jnp.abs(quantiles_tm1[:, :, jnp.newaxis] - indicator) * huber / quantile_huber_kappa
+    return jnp.sum(jnp.mean(rho, axis=2), axis=1)
+
+
 def munchausen_q_learning_n_step(
     q_online: chex.Array,
     q_target: chex.Array,
