@@ -14,6 +14,10 @@ These extend `~/.claude/CLAUDE.md` — do not repeat the global rules, only appl
 
 Pure functions for training logic, loss computation, and data transforms. Explicit data flow — pass inputs and return outputs. Isolate side effects (I/O, logging, env interaction, device placement, RNG seeding) at system boundaries. OOP is appropriate and encouraged for Ray actors, Flax modules, and stateful lifecycle management. Do not force functional rewrites of well-structured class-based code.
 
+## Documentation
+
+When an edit changes behavior described in `docs/*.md` (e.g. `dreamer.md`, `miqn.md`, `mdqn.md`), update the doc in the same change so it matches the implementation.
+
 ## Protected Files & Quality
 
 - Never modify `uv.lock`, `requirements*.txt`, `*.egg-info/**` unless explicitly asked. If a change seems to require it, stop and ask.

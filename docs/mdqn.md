@@ -138,6 +138,7 @@ collectors sample.
 | Recurrent (R2D2-style) update step | `mdqn.py` — `get_update_step_recurrent`, `get_recurrent_rollout` |
 | Action selection (ε-greedy, batched / recurrent) | `mdqn.py` — `get_select_action_batch_fn`, `get_select_action_recurrent_batch_fn` |
 | Soft target-network update | `mdqn.py` — `TrainState.apply_gradients` (`optax.incremental_update`) |
+| Post-GRU deep residual torso (rec only) | `src/coop_rl/networks/torso.py` — `DeepResidualTorso` |
 | Feedforward Atari config | `src/coop_rl/configs/mdqn_atari.py` |
 | Recurrent Atari config | `src/coop_rl/configs/mdqn_rec_atari.py` |
 
@@ -189,7 +190,10 @@ to the window assembly in `agents/dqn.py` and `agents/rainbow.py`.
 `hidden_state_dim = 512`). Its visual encoder is a BTR-style Impala ResNet
 (`VisualResNetTorso`: 2× width, LayerNorm, 6×6 adaptive maxpool — per *Beyond The
 Rainbow*, Clark et al. 2025) with a 512-unit Dense bridge into the GRU; see
-`docs/miqn.md` for the encoder details. R2D2-style: the buffer stores the per-step hidden state, and
+`docs/miqn.md` for the encoder details. The GRU output is then passed through a
+post-torso `DeepResidualTorso` (width 256, depth 8, Swish — Wang et al. 2025, see
+[deep-residual-networks skill](../.claude/skills/deep-residual-networks/SKILL.md))
+before the dueling head. R2D2-style: the buffer stores the per-step hidden state, and
 each sampled 30-step sequence is split into a 10-step **burn-in** (hidden state warmed up
 from the stored value under stop-gradient, separately for online and target networks) and
 a 20-step **learn** window (`get_recurrent_rollout`). The loss
@@ -223,7 +227,7 @@ Deliberate or benign deviations in the coop-rl configs:
 | Adam lr 6.25e-5, eps 1e-5, grad-clip 0.5 (ff) / 10 (rec, per BTR) | Adam lr 5e-5, no clipping | minor |
 | γ = 0.99 (ff) / 0.997 (rec, per BTR) | γ = 0.99 | longer effective horizon in the recurrent config |
 | ε = 0.01 constant | ε = 0.01 with 250k-step linear decay | slightly less early exploration |
-| ff: CNN + deep residual torso (Wang et al. 2025), SiLU/Swish; rec: Impala ResNet + LayerNorm + 6×6 adaptive maxpool (BTR, Clark et al. 2025); both bfloat16 | Conv×3 → FC 512, ReLU, fp32 | deliberate modernization; loss math runs in fp32 (`astype(jnp.float32)` on Q-values) |
+| ff: CNN + deep residual torso (Wang et al. 2025), SiLU/Swish; rec: Impala ResNet + LayerNorm + 6×6 adaptive maxpool (BTR, Clark et al. 2025) into the GRU, then a post-GRU deep residual torso (width 256, depth 8, Swish); both bfloat16 | Conv×3 → FC 512, ReLU, fp32 | deliberate modernization; loss math runs in fp32 (`astype(jnp.float32)` on Q-values) |
 
 ### Known caveats
 

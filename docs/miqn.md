@@ -110,7 +110,9 @@ stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). It us
 same BTR-style Impala encoder and hyperparameter alignment as `miqn_btr_atari.py`
 (γ = 0.997, grad-clip 10, 8 quantile samples), with `hidden_sizes = (512,)` as a Dense
 bridge into the GRU — feeding the raw 2304-dim flatten into GRU(512) would ~3× the RNN
-input parameters for no BTR-grounded reason. Per learn
+input parameters for no BTR-grounded reason. The GRU output then passes through a
+post-torso `DeepResidualTorso` (width 256, depth 8, Swish — Wang et al. 2025) before the
+dueling quantile head, same as `mdqn_rec_atari.py`. Per learn
 window, `get_recurrent_rollout` (`agents/miqn.py`) unrolls the online network with N
 quantile samples and the target network with N' samples; the loss
 (`munchausen_quantile_q_learning_n_step` in `base/loss.py`) builds an n-step Munchausen
@@ -159,6 +161,7 @@ Two deliberate simplifications versus the feedforward variant:
 | Implicit quantile dueling head | `src/coop_rl/networks/quantile.py` |
 | Network wrappers with `num_quantiles` arg | `src/coop_rl/networks/base.py` — `QuantileFeedForwardNetwork`, `QuantileRecurrentNetwork` |
 | Impala encoder + adaptive maxpool (BTR) | `src/coop_rl/networks/resnet.py` — `VisualResNetTorso`, `adaptive_max_pool` |
+| Post-GRU deep residual torso (rec only) | `src/coop_rl/networks/torso.py` — `DeepResidualTorso` |
 | Atari configs | `src/coop_rl/configs/miqn_atari.py`, `src/coop_rl/configs/miqn_btr_atari.py`, `src/coop_rl/configs/miqn_rec_atari.py` |
 
 ## References
