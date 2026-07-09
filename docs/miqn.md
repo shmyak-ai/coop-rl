@@ -148,6 +148,7 @@ Two deliberate simplifications versus the feedforward variant:
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
 | γ | 0.99 (`miqn_atari`); 0.997 (btr, rec) | paper; BTR |
 | PER priority exponent / IS β | 0.6 (`miqn_atari`) / 0.2 (btr); 0.5 → 1.0 | rainbow config; BTR |
+| Rewards | clipped to [−1, 1] (`max_abs_reward = 1.0`) | paper Table 2 — matches `mdqn`'s Atari configs |
 | Batch size | 512 (`miqn_atari`); 256 (btr) | BTR value; also fits 8GB GPUs — the Impala encoder's 84×84 activations OOM at 512 |
 | Target update | Polyak τ = 0.005 | repo convention (paper: hard copy every 8000) |
 | Optimizer | Adam 6.25e-5, grad-clip 0.5 (`miqn_atari`) / 10 (btr, rec) | repo convention (paper: Adam 5e-5); BTR clip |

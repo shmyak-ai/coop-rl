@@ -148,7 +148,7 @@ def get_config():
     config.args_trainer.args_get_update_step.num_tau_samples = 64
     config.args_trainer.args_get_update_step.num_tau_prime_samples = 64
     config.args_trainer.args_get_update_step.num_quantile_samples = 32
-    config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
+    config.args_trainer.args_get_update_step.max_abs_reward = 1.0
     config.args_trainer.args_get_update_step.importance_weight_scheduler_fn = optax.linear_schedule(
         init_value=0.5,  # importance sampling exponent
         end_value=1.0,

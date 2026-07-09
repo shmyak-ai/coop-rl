@@ -168,7 +168,7 @@ def get_config():
     config.args_trainer.args_get_update_step.quantile_huber_kappa = 1.0
     config.args_trainer.args_get_update_step.num_tau_samples = 8  # BTR
     config.args_trainer.args_get_update_step.num_tau_prime_samples = 8  # BTR
-    config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
+    config.args_trainer.args_get_update_step.max_abs_reward = 1.0
     config.args_trainer.args_get_update_step.obs_preprocess_fn = lambda x: (
         x.astype(jnp.bfloat16) / jnp.bfloat16(255.0)
     )
@@ -197,7 +197,7 @@ def get_config():
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
     config.args_collector.args_get_select_action_fn.num_quantile_samples = 8  # BTR
-    config.args_collector.args_get_select_action_fn.max_abs_reward = 1000.0
+    config.args_collector.args_get_select_action_fn.max_abs_reward = 1.0
     config.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
         x.astype(jnp.float32) / 255.0
     )

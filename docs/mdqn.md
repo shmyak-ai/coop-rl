@@ -8,10 +8,10 @@ the configs `mdqn_atari.py` / `mdqn_rec_atari.py`) against the original paper:
 
 **Verdict:** the core Munchausen loss (`base/loss.py:munchausen_q_learning`) is a faithful
 implementation of the paper's Eq. (7), and all three Munchausen-specific hyperparameters
-match the paper exactly (τ = 0.03, α = 0.9, l₀ = −1). The configs deviate from the paper
-in several deliberate ways (n-step returns in the feedforward config, soft target updates,
-L2 instead of Huber, no reward clipping, deep residual torsos) — catalogued in
-[Differences from the paper](#differences-from-the-paper). Three correctness issues found
+match the paper exactly (τ = 0.03, α = 0.9, l₀ = −1), as do the loss (Huber) and reward
+clipping ([−1, 1]). The configs deviate from the paper in a few deliberate ways (n-step
+returns in the feedforward config, soft target updates, deep residual torsos) — catalogued
+in [Differences from the paper](#differences-from-the-paper). Three correctness issues found
 in the original audit (n-step target misalignment, Munchausen bonus only at the window's
 first step, one TD error per recurrent sequence) have since been fixed; see
 [Known caveats](#known-caveats) for what remains.
@@ -158,8 +158,9 @@ target_q = stop_gradient(r_t + munchausen_coefficient * munchausen_term_a + d_t 
 ```
 
 `q_tm1_target` and `q_t_target` both come from the target network, matching the paper's
-use of `π_θ̄` and `q_θ̄`. The TD error is squared (L2) by default; setting
-`huber_loss_parameter > 0` switches to Huber as in the paper.
+use of `π_θ̄` and `q_θ̄`. `huber_loss_parameter` selects the regression loss: `0` gives a
+squared (L2) TD error, `> 0` gives Huber with that parameter as the threshold — both
+Atari configs set it to `1.0`, matching the paper.
 
 ### The update step (feedforward)
 
@@ -221,8 +222,6 @@ Deliberate or benign deviations in the coop-rl configs:
 | coop-rl | Paper | Impact |
 |---|---|---|
 | n-step returns (4-step ff; configurable `n_steps` = 3 rec) | 1-step only | the paper's headline result avoids n-step; here every reward in the window gets its own Munchausen bonus (reward shaping), keeping the n-step target consistent; recurrent `n_steps = 1` recovers the paper's operator |
-| L2 loss (`huber_loss_parameter = 0.0`) | Huber | heavier tails on TD errors get more gradient weight |
-| `max_abs_reward = 1000` → effectively unclipped | rewards clipped to [−1, 1] | τ = 0.03 and l₀ = −1 were tuned against clipped rewards; with raw-scale rewards the Munchausen bonus (∈ [−0.9, 0]) is relatively much smaller |
 | Polyak target update, τ = 0.005 per step | hard copy every 8000 steps | modern smooth-target choice, similar effective timescale |
 | Adam lr 6.25e-5, eps 1e-5, grad-clip 0.5 (ff) / 10 (rec, per BTR) | Adam lr 5e-5, no clipping | minor |
 | γ = 0.99 (ff) / 0.997 (rec, per BTR) | γ = 0.99 | longer effective horizon in the recurrent config |
