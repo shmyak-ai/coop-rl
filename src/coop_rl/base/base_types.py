@@ -39,6 +39,10 @@ class TimeStepDQNRecurrent:
     the hidden state should be reset before consuming this transition's obs.
     Not derivable from this window's own terminated/truncated, since it refers
     to the step immediately before the window starts.
+    prev_action/prev_reward: action and reward from the env step immediately
+    before this transition (zero at episode start), fed into the RNN R2D2-style.
+    Stored per transition for the same reason as reset_hidden_state: for the
+    first step of a sampled window they are not derivable from the window.
     """
 
     obs: chex.Array
@@ -48,6 +52,8 @@ class TimeStepDQNRecurrent:
     truncated: chex.Array
     hidden_state: chex.Array
     reset_hidden_state: chex.Array
+    prev_action: chex.Array
+    prev_reward: chex.Array
 
 
 class TimeStepDQNRecurrentDtypesAtari(NamedTuple):
@@ -58,6 +64,8 @@ class TimeStepDQNRecurrentDtypesAtari(NamedTuple):
     truncated: str = "int8"
     hidden_state: str = "float32"
     reset_hidden_state: str = "int8"
+    prev_action: str = "int8"
+    prev_reward: str = "int32"
 
 
 class Observation(NamedTuple):
@@ -72,6 +80,7 @@ class Observation(NamedTuple):
     step_count: chex.Array | None = None  # (,)
 
 
-RNNObservation: TypeAlias = tuple[Observation, Done]
+# (obs, prev_action, prev_reward, done)
+RNNObservation: TypeAlias = tuple[Observation, Action, chex.Array, Done]
 
 ActorApply = Callable[..., Any]

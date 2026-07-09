@@ -128,6 +128,7 @@ class RecurrentNetwork(nn.Module):
     args_head: Mapping[str, Any]
     hidden_state_dim: int
     cell_type: str
+    action_dim: int
     input_layer: type[nn.Module] = ObservationInput
 
     @nn.compact
@@ -136,10 +137,15 @@ class RecurrentNetwork(nn.Module):
         hidden_state: chex.Array,
         observation_done: RNNObservation,
     ) -> tuple[chex.Array, Any]:
-        x, done = observation_done
+        x, prev_action, prev_reward, done = observation_done
 
         x = self.input_layer()(x)
         x = self.pre_torso(**self.args_pre_torso)(x)
+        extras = jnp.concatenate(
+            [jax.nn.one_hot(prev_action, self.action_dim), prev_reward[..., jnp.newaxis]],
+            axis=-1,
+        ).astype(x.dtype)
+        x = jnp.concatenate([x, extras], axis=-1)
         rnn_input = (x, done)
         hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(hidden_state, rnn_input)
         x = self.post_torso(**self.args_post_torso)(x)
@@ -159,6 +165,7 @@ class QuantileRecurrentNetwork(nn.Module):
     args_head: Mapping[str, Any]
     hidden_state_dim: int
     cell_type: str
+    action_dim: int
     input_layer: type[nn.Module] = ObservationInput
 
     @nn.compact
@@ -168,10 +175,15 @@ class QuantileRecurrentNetwork(nn.Module):
         observation_done: RNNObservation,
         num_quantiles: int,
     ) -> tuple[chex.Array, Any]:
-        x, done = observation_done
+        x, prev_action, prev_reward, done = observation_done
 
         x = self.input_layer()(x)
         x = self.pre_torso(**self.args_pre_torso)(x)
+        extras = jnp.concatenate(
+            [jax.nn.one_hot(prev_action, self.action_dim), prev_reward[..., jnp.newaxis]],
+            axis=-1,
+        ).astype(x.dtype)
+        x = jnp.concatenate([x, extras], axis=-1)
         rnn_input = (x, done)
         hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(hidden_state, rnn_input)
         x = self.post_torso(**self.args_post_torso)(x)

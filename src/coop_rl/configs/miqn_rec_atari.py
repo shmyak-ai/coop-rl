@@ -98,6 +98,7 @@ def get_config():
     config.args_network.args_head.dtype = jnp.bfloat16
     config.args_network.hidden_state_dim = hidden_state_dim
     config.args_network.cell_type = cell_type
+    config.args_network.action_dim = actions_shape
     config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = make_optimizer
@@ -196,6 +197,7 @@ def get_config():
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
     config.args_collector.args_get_select_action_fn.num_quantile_samples = 8  # BTR
+    config.args_collector.args_get_select_action_fn.max_abs_reward = 1000.0
     config.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
         x.astype(jnp.float32) / 255.0
     )

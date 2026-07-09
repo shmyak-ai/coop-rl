@@ -140,8 +140,8 @@ def get_config():
     config.args_trainer.args_get_update_step.entropy_temperature = 0.03
     config.args_trainer.args_get_update_step.munchausen_coefficient = 0.9
     config.args_trainer.args_get_update_step.clip_value_min = -1.0
-    config.args_trainer.args_get_update_step.huber_loss_parameter = 0.0
-    config.args_trainer.args_get_update_step.max_abs_reward = 1000.0
+    config.args_trainer.args_get_update_step.huber_loss_parameter = 1.0
+    config.args_trainer.args_get_update_step.max_abs_reward = 1.0
     config.args_trainer.args_get_update_step.obs_preprocess_fn = lambda x: (
         x.astype(jnp.bfloat16) / jnp.bfloat16(255.0)
     )

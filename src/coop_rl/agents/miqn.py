@@ -157,9 +157,16 @@ def create_recurrent_train_state(
     model = network(**args_network)
     dummy_hidden_state = ScannedRNN(hidden_state_dim, cell_type).initialize_carry(1)
     dummy_obs = jnp.ones((1, 1, *obs_shape))
+    dummy_prev_action = jnp.zeros((1, 1), dtype=jnp.int32)
+    dummy_prev_reward = jnp.zeros((1, 1))
     dummy_reset = jnp.zeros((1, 1), dtype=bool)
     # Parameter shapes do not depend on the number of quantile samples.
-    params = model.init(rngs, dummy_hidden_state, (dummy_obs, dummy_reset), 1)
+    params = model.init(
+        rngs,
+        dummy_hidden_state,
+        (dummy_obs, dummy_prev_action, dummy_prev_reward, dummy_reset),
+        1,
+    )
     tx = optimizer(**args_optimizer)
     return TrainState.create(
         apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau
@@ -237,20 +244,31 @@ def get_select_action_batch_fn(
 
 
 def get_select_action_recurrent_batch_fn(
-    apply_fn: ActorApply, num_quantile_samples: int, obs_preprocess_fn: Callable | None = None
+    apply_fn: ActorApply,
+    num_quantile_samples: int,
+    max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
 ) -> Callable:
     """Like get_select_action_batch_fn but threads a recurrent hidden state across calls."""
     _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
 
     @jax.jit
-    def select_action(key, params, hidden_state, observations, reset_mask):
+    def select_action(
+        key, params, hidden_state, observations, reset_mask, prev_action, prev_reward
+    ):
         key, quantile_key, policy_key = jax.random.split(key, num=3)
         obs_t = jnp.expand_dims(_preprocess(observations), axis=0)
         reset_t = jnp.expand_dims(reset_mask, axis=0).astype(bool)
+        prev_action_t = jnp.expand_dims(prev_action, axis=0)
+        prev_reward_t = jnp.clip(
+            jnp.expand_dims(prev_reward, axis=0).astype(jnp.float32),
+            -max_abs_reward,
+            max_abs_reward,
+        )
         new_hidden_state, (actor_policy, _, _) = apply_fn(
             params,
             hidden_state,
-            (obs_t, reset_t),
+            (obs_t, prev_action_t, prev_reward_t, reset_t),
             num_quantile_samples,
             rngs={"quantiles": quantile_key},
         )
@@ -426,6 +444,7 @@ def get_recurrent_rollout(
     burn_in_length: int,
     num_tau_samples: int,
     num_tau_prime_samples: int,
+    max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
 ) -> Callable:
     """Rollout half of the recurrent M-IQN step: RNN forward passes only, no loss math.
@@ -451,18 +470,27 @@ def get_recurrent_rollout(
 
         init_hidden_state = sample_tm.hidden_state[0]
         reset_tm = sample_tm.reset_hidden_state.astype(bool)
+        prev_reward_tm = jnp.clip(
+            sample_tm.prev_reward.astype(jnp.float32), -max_abs_reward, max_abs_reward
+        )
 
         burn_obs = _preprocess(sample_tm.obs[:burn_in_length])
+        burn_prev_action = sample_tm.prev_action[:burn_in_length]
+        burn_prev_reward = prev_reward_tm[:burn_in_length]
         burn_reset = reset_tm[:burn_in_length]
+        burn_input = (burn_obs, burn_prev_action, burn_prev_reward, burn_reset)
         learn_obs = _preprocess(sample_tm.obs[burn_in_length:])
+        learn_prev_action = sample_tm.prev_action[burn_in_length:]
+        learn_prev_reward = prev_reward_tm[burn_in_length:]
         learn_reset = reset_tm[burn_in_length:]
+        learn_input = (learn_obs, learn_prev_action, learn_prev_reward, learn_reset)
 
         if burn_in_length > 0:
             # The head output is discarded during burn-in, so one quantile sample.
             online_hidden_state, _ = apply_fn(
                 q_params,
                 init_hidden_state,
-                (burn_obs, burn_reset),
+                burn_input,
                 1,
                 rngs={"quantiles": burn_online_key},
             )
@@ -470,7 +498,7 @@ def get_recurrent_rollout(
             target_hidden_state, _ = apply_fn(
                 target_q_params,
                 init_hidden_state,
-                (burn_obs, burn_reset),
+                burn_input,
                 1,
                 rngs={"quantiles": burn_target_key},
             )
@@ -482,14 +510,14 @@ def get_recurrent_rollout(
         _, (_, z_online, quantiles_online) = apply_fn(
             q_params,
             online_hidden_state,
-            (learn_obs, learn_reset),
+            learn_input,
             num_tau_samples,
             rngs={"quantiles": online_key},
         )
         _, (_, z_target, _) = apply_fn(
             target_q_params,
             target_hidden_state,
-            (learn_obs, learn_reset),
+            learn_input,
             num_tau_prime_samples,
             rngs={"quantiles": target_key},
         )
@@ -537,6 +565,7 @@ def get_update_step_recurrent(
         burn_in_length=burn_in_length,
         num_tau_samples=num_tau_samples,
         num_tau_prime_samples=num_tau_prime_samples,
+        max_abs_reward=max_abs_reward,
         obs_preprocess_fn=obs_preprocess_fn,
     )
 

@@ -278,6 +278,8 @@ class CollectorDQNRecurrentUniform:
         self.obs = None
         self.hidden_state = None
         self.reset_mask = None
+        self.prev_action = None
+        self.prev_reward = None
         self.episode_reward_now = np.zeros(self.num_envs)
         self.completed_returns: deque[float] = deque(maxlen=100)
         self._params_received = 0
@@ -298,12 +300,20 @@ class CollectorDQNRecurrentUniform:
             self.num_envs
         )
         self.reset_mask = np.ones(self.num_envs, dtype=bool)
+        self.prev_action = np.zeros(self.num_envs, dtype=self.dtypes.prev_action)
+        self.prev_reward = np.zeros(self.num_envs, dtype=self.dtypes.prev_reward)
 
     def warmup(self) -> None:
         """Trigger JIT compilation of select_action in the calling thread."""
         self._reset_obs()
         self.select_action(
-            self._rng, self.online_params, self.hidden_state, self.obs, self.reset_mask
+            self._rng,
+            self.online_params,
+            self.hidden_state,
+            self.obs,
+            self.reset_mask,
+            self.prev_action,
+            self.prev_reward,
         )
 
     def run_rollout(self) -> TimeStepDQNRecurrent:
@@ -315,12 +325,16 @@ class CollectorDQNRecurrentUniform:
         truncated_list: list[np.ndarray] = []
         hidden_state_list: list[np.ndarray] = []
         reset_mask_list: list[np.ndarray] = []
+        prev_action_list: list[np.ndarray] = []
+        prev_reward_list: list[np.ndarray] = []
 
         params = self.online_params
 
         for _ in range(self.steps_per_rollout):
             hidden_state_before = self.hidden_state
             reset_mask_before = self.reset_mask
+            prev_action_before = self.prev_action
+            prev_reward_before = self.prev_reward
 
             self._rng, self.hidden_state, action_jnp = self.select_action(
                 self._rng,
@@ -328,6 +342,8 @@ class CollectorDQNRecurrentUniform:
                 self.hidden_state,
                 self.obs,
                 self.reset_mask,
+                self.prev_action,
+                self.prev_reward,
             )
             actions = np.asarray(action_jnp, dtype=self.dtypes.action)  # (num_envs,)
             next_obs, rewards, terminated, truncated, _infos = self.env.step(actions)
@@ -341,6 +357,8 @@ class CollectorDQNRecurrentUniform:
                 np.asarray(hidden_state_before, dtype=self.dtypes.hidden_state)
             )
             reset_mask_list.append(reset_mask_before.astype(self.dtypes.reset_hidden_state))
+            prev_action_list.append(np.asarray(prev_action_before, dtype=self.dtypes.prev_action))
+            prev_reward_list.append(np.asarray(prev_reward_before, dtype=self.dtypes.prev_reward))
 
             self.episode_reward_now += rewards
             done = np.logical_or(terminated, truncated)
@@ -358,6 +376,9 @@ class CollectorDQNRecurrentUniform:
 
             self.obs = next_obs
             self.reset_mask = done
+            # The next episode's first step has no predecessor: zero prev inputs on done.
+            self.prev_action = np.where(done, 0, actions).astype(self.dtypes.prev_action)
+            self.prev_reward = np.where(done, 0, rewards).astype(self.dtypes.prev_reward)
 
         # Stack to (T, N, ...) then swap to (N, T, ...) for per-env trajectories.
         obs_arr = np.stack(obs_list)
@@ -369,6 +390,8 @@ class CollectorDQNRecurrentUniform:
         tru_arr = np.stack(truncated_list).astype(self.dtypes.truncated).swapaxes(0, 1)
         hid_arr = np.stack(hidden_state_list).astype(self.dtypes.hidden_state).swapaxes(0, 1)
         rst_arr = np.stack(reset_mask_list).astype(self.dtypes.reset_hidden_state).swapaxes(0, 1)
+        pact_arr = np.stack(prev_action_list).astype(self.dtypes.prev_action).swapaxes(0, 1)
+        prew_arr = np.stack(prev_reward_list).astype(self.dtypes.prev_reward).swapaxes(0, 1)
 
         return TimeStepDQNRecurrent(
             obs=obs_arr,
@@ -378,6 +401,8 @@ class CollectorDQNRecurrentUniform:
             truncated=tru_arr,
             hidden_state=hid_arr,
             reset_hidden_state=rst_arr,
+            prev_action=pact_arr,
+            prev_reward=prew_arr,
         )
 
     def collecting(self):

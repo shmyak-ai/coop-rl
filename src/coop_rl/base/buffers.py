@@ -200,6 +200,8 @@ class BufferTrajectoryDQNRecurrent:
                 truncated=jnp.ones((), dtype=self.dtypes.truncated),
                 hidden_state=jnp.ones(hidden_state_shape, dtype=self.dtypes.hidden_state),
                 reset_hidden_state=jnp.ones((), dtype=self.dtypes.reset_hidden_state),
+                prev_action=jnp.ones((), dtype=self.dtypes.prev_action),
+                prev_reward=jnp.ones((), dtype=self.dtypes.prev_reward),
             )
             self.state = self.buffer.init(fake_timestep)
             self.rng_key = jax.random.PRNGKey(buffer_seed)
