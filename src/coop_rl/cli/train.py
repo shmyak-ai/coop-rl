@@ -16,8 +16,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--backend",
         type=str,
         default="thread",
-        choices=["ray", "thread"],
-        help="Execution backend: distributed Ray actors or local Python threads.",
+        choices=["ray", "thread", "sequential"],
+        help=(
+            "Execution backend: distributed Ray actors, local Python threads, or a "
+            "single-thread synchronous collect/train loop."
+        ),
     )
     parser.add_argument(
         "--workdir",
@@ -48,7 +51,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     for key, value in TF_LOG_SUPPRESS_ENV_VARS.items():
         os.environ.setdefault(key, value)
-    if args.backend == "thread":
+    if args.backend in ("thread", "sequential"):
         for key, value in RUNTIME_ENV_THREAD["env_vars"].items():
             os.environ.setdefault(key, value)
     if args.debug:

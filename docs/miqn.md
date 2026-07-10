@@ -140,6 +140,30 @@ Two deliberate simplifications versus the feedforward variant:
   every learn step, so the Munchausen policy is just its quantile mean — no separate
   K-sample policy pass like the feedforward window assembly needs.
 
+## The BY571 variant (sequential backend)
+
+`miqn_by571_atari.py` replicates, as closely as the repo allows, the M-IQN Breakout
+demo from [BY571/IQN-and-Extensions](https://github.com/BY571/IQN-and-Extensions)
+(`-frames 500000 -eps_frames 75000 -min_eps 0.025 -lr 1e-4 -t 5e-3 -m 15000 -N 32`).
+Run it with the **sequential backend**:
+
+```
+coop-rl-train --config miqn_by571_atari --backend sequential
+```
+
+`TrainerSequential` (`workers/trainers.py`) is a single-thread synchronous loop —
+collect a rollout, then do `n_transitions × replay_ratio` gradient updates, repeat —
+restoring the classic DQN coupling between environment frames and updates that the
+async `ray`/`thread` backends deliberately decouple. Config knobs: `env_frames`
+(stop condition, in collected transitions) and `replay_ratio` (1.0 = BY571's one
+update per transition; 0.25 would express classic DQN's train-every-4-frames).
+Distinctive settings versus the other miqn configs: single env, Nature-CNN-like torso
+(ReLU, minimal depth-4 residual tail), N = N' = K = 32 (BY571 collapses all three),
+1-step returns (`sample_sequence_length = 2`), uniform replay via
+`priority_exponent = 0.0`, unclipped rewards, batch 32, buffer 15000, lr 1e-4,
+grad-clip 1.0, and a linearly annealed epsilon (1.0 → 0.025 over 75k frames) via
+`epsilon_scheduler_fn` in the collector's action selection.
+
 ## Hyperparameters
 
 | Parameter | Value | Source |
@@ -148,8 +172,8 @@ Two deliberate simplifications versus the feedforward variant:
 | α (Munchausen coefficient) | 0.9 | paper Table 2 |
 | l₀ (log-policy clip) | −1 | paper Table 2 |
 | κ (quantile Huber) | 1.0 | IQN |
-| N, N' (loss quantile samples) | 64, 64 (all three configs) | IQN / Dopamine (BTR's N=N'=8 trains flat) |
-| K (acting / shaping-policy samples) | 32 (all three configs) | IQN / Dopamine (BTR's K=8 trains flat) |
+| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`, btr, rec); 32, 32 (by571) | IQN / Dopamine (BTR's N=N'=8 trains flat); BY571 `-N 32` |
+| K (acting / shaping-policy samples) | 32 (all configs) | IQN / Dopamine (BTR's K=8 trains flat) |
 | n_cos (cosine embedding size) | 64 | IQN |
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
 | γ | 0.99 (`miqn_atari`); 0.997 (btr, rec) | paper; BTR |
@@ -169,7 +193,8 @@ Two deliberate simplifications versus the feedforward variant:
 | Network wrappers with `num_quantiles` arg | `src/coop_rl/networks/base.py` — `QuantileFeedForwardNetwork`, `QuantileRecurrentNetwork` |
 | Impala encoder + adaptive maxpool (BTR) | `src/coop_rl/networks/resnet.py` — `VisualResNetTorso`, `adaptive_max_pool` |
 | Post-GRU deep residual torso (rec only) | `src/coop_rl/networks/torso.py` — `DeepResidualTorso` |
-| Atari configs | `src/coop_rl/configs/miqn_atari.py`, `src/coop_rl/configs/miqn_btr_atari.py`, `src/coop_rl/configs/miqn_rec_atari.py` |
+| Atari configs | `src/coop_rl/configs/miqn_atari.py`, `src/coop_rl/configs/miqn_btr_atari.py`, `src/coop_rl/configs/miqn_rec_atari.py`, `src/coop_rl/configs/miqn_by571_atari.py` |
+| Sequential (synchronous) trainer | `src/coop_rl/workers/trainers.py` — `TrainerSequential` |
 
 ## References
 

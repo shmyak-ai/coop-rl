@@ -32,9 +32,8 @@ from coop_rl.networks.base import QuantileFeedForwardNetwork
 from coop_rl.networks.inputs import EmbeddingInput
 from coop_rl.networks.quantile import DuelingQuantileQNetworkHead
 from coop_rl.networks.torso import CNNTorso
-from coop_rl.workers.auxiliary import Controller
 from coop_rl.workers.collectors import CollectorDQNUniform
-from coop_rl.workers.trainers import Trainer
+from coop_rl.workers.trainers import TrainerSequential
 
 
 def get_config():
@@ -43,12 +42,13 @@ def get_config():
     #   run.py -env BreakoutNoFrameskip-v4 -agent iqn -munchausen 1 -frames 500000
     #          -eps_frames 75000 -min_eps 0.025 -eval_evary 10000 -lr 1e-4 -t 5e-3
     #          -m 15000 -N 32
-    # Known, unavoidable-without-larger-changes deviations: coop-rl's async trainer/
-    # collector architecture doesn't pin the replay ratio to BY571's 1:1; CNNTorso always
-    # appends a residual MLP tail (depth=4 here is the minimum, BY571 has none); Adam eps
-    # stays at coop-rl's hardcoded 1e-5 vs BY571's untouched PyTorch default 1e-8; and
-    # "evaluation" here is the training-policy collector/mean_return, not a strict greedy
-    # eval every 10k frames.
+    # Uses TrainerSequential (run with --backend sequential): one env, one gradient
+    # update per collected transition, exactly BY571's synchronous regime, stopping
+    # at 500000 environment frames. Remaining known deviations: CNNTorso always
+    # appends a residual MLP tail (depth=4 here is the minimum, BY571 has none);
+    # Adam eps stays at coop-rl's hardcoded 1e-5 vs BY571's untouched PyTorch default
+    # 1e-8; and "evaluation" is the training-policy collector/mean_return, not a
+    # strict greedy eval every 10k frames.
     config = ml_collections.ConfigDict()
 
     log_level = config_dict.FieldReference("INFO", field_type=str)
@@ -60,12 +60,10 @@ def get_config():
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
-    steps = 500000  # -frames 500000
-    training_iterations_per_step = 1
+    env_frames = 500000  # -frames 500000
+    replay_ratio = 1.0  # BY571: one gradient update per collected transition
 
     config.log_level = log_level
-    config.num_collectors = 1  # BY571 single worker
-    config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
@@ -135,21 +133,15 @@ def get_config():
     config.args_state_recover.tau = 0.005  # -t 5e-3
     config.args_state_recover.checkpointdir = checkpointdir
 
-    config.controller = Controller
-    config.args_controller = ml_collections.ConfigDict()
-    config.args_controller.log_level = log_level
-
-    config.trainer = Trainer
+    config.trainer = TrainerSequential
     config.args_trainer = ml_collections.ConfigDict()
-    config.args_trainer.controller = None
     config.args_trainer.trainer_seed = trainer_seed
     config.args_trainer.log_level = log_level
     config.args_trainer.workdir = workdir
-    config.args_trainer.steps = steps
-    config.args_trainer.training_iterations_per_step = training_iterations_per_step
-    config.args_trainer.summary_writing_period = 100  # logging and reporting
-    config.args_trainer.save_period = 1000  # orbax checkpointing
-    config.args_trainer.synchronization_period = 10  # send params to control actor
+    config.args_trainer.env_frames = env_frames
+    config.args_trainer.replay_ratio = replay_ratio
+    config.args_trainer.summary_writing_period = 1000  # in gradient updates
+    config.args_trainer.save_period = 50000  # orbax checkpointing, in gradient updates
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step
@@ -167,7 +159,7 @@ def get_config():
     config.args_trainer.args_get_update_step.importance_weight_scheduler_fn = optax.linear_schedule(
         init_value=0.5,  # no-op: priority_exponent=0.0 already makes IS weights uniform
         end_value=1.0,
-        transition_steps=steps * training_iterations_per_step,
+        transition_steps=int(env_frames * replay_ratio),
         transition_begin=0,
     )
     config.args_trainer.args_get_update_step.obs_preprocess_fn = lambda x: (
@@ -176,38 +168,39 @@ def get_config():
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
     config.args_trainer.args_get_update_epoch.update_step_fn = None
-    config.args_trainer.args_get_update_epoch.buffer_lock = None  # injected by Trainer
-    config.args_trainer.args_get_update_epoch.buffer = None  # injected by Trainer, initialized fn
+    config.args_trainer.args_get_update_epoch.buffer_lock = None  # injected by trainer
+    config.args_trainer.args_get_update_epoch.buffer = None  # injected by trainer
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
-    config.args_trainer.num_samples_on_gpu_cache = 3
 
-    config.collector = CollectorDQNUniform
-    config.args_collector = ml_collections.ConfigDict()
-    config.args_collector.controller = None
-    config.args_collector.trainer = None
-    config.args_collector.workdir = workdir
-    config.args_collector.collectors_seed = collectors_seed
-    config.args_collector.log_level = log_level
-    # 50 rollouts * 200 steps/rollout * 1 env ~= 10000 steps, approximating -eval_evary 10000
-    config.args_collector.report_period = 50
-    config.args_collector.state_recover = state_recover
-    config.args_collector.args_state_recover = args_state_recover
-    config.args_collector.env = env
-    config.args_collector.args_env = args_env
-    config.args_collector.time_step_dtypes = time_step_dtypes
-    config.args_collector.steps_per_rollout = 200
-    config.args_collector.get_select_action_fn = get_select_action_batch_fn
-    config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
-    config.args_collector.args_get_select_action_fn.apply_fn = None
-    config.args_collector.args_get_select_action_fn.num_quantile_samples = 32  # -N 32
-    config.args_collector.args_get_select_action_fn.epsilon_scheduler_fn = optax.linear_schedule(
-        init_value=1.0,  # -eps_frames 75000 -min_eps 0.025
-        end_value=0.025,
-        transition_steps=75000,
-        transition_begin=0,
+    config.args_trainer.collector = CollectorDQNUniform
+    config.args_trainer.args_collector = ml_collections.ConfigDict()
+    config.args_trainer.args_collector.controller = None  # injected by trainer
+    config.args_trainer.args_collector.trainer = None  # unused in the sequential path
+    config.args_trainer.args_collector.collectors_seed = collectors_seed
+    config.args_trainer.args_collector.log_level = log_level
+    config.args_trainer.args_collector.report_period = 1000000  # _collecting never runs here
+    config.args_trainer.args_collector.state_recover = state_recover
+    config.args_trainer.args_collector.args_state_recover = args_state_recover
+    config.args_trainer.args_collector.env = env
+    config.args_trainer.args_collector.args_env = args_env
+    config.args_trainer.args_collector.time_step_dtypes = time_step_dtypes
+    # 1 = exact BY571 per-transition interleaving (params advance between every env
+    # step); raise it (e.g. 200) to trade interleaving fidelity for wall-clock speed.
+    config.args_trainer.args_collector.steps_per_rollout = 1
+    config.args_trainer.args_collector.get_select_action_fn = get_select_action_batch_fn
+    config.args_trainer.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
+    config.args_trainer.args_collector.args_get_select_action_fn.apply_fn = None
+    config.args_trainer.args_collector.args_get_select_action_fn.num_quantile_samples = 32  # -N 32
+    config.args_trainer.args_collector.args_get_select_action_fn.epsilon_scheduler_fn = (
+        optax.linear_schedule(
+            init_value=1.0,  # -eps_frames 75000 -min_eps 0.025
+            end_value=0.025,
+            transition_steps=75000,
+            transition_begin=0,
+        )
     )
-    config.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
+    config.args_trainer.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
         x.astype(jnp.float32) / 255.0
     )
 

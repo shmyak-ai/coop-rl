@@ -169,6 +169,10 @@ def run_training(args: Namespace) -> None:
         _run_thread_training(conf)
         return
 
+    if args.backend == "sequential":
+        _run_sequential_training(conf)
+        return
+
     import ray
 
     initialize_ray(args.debug)
@@ -191,6 +195,18 @@ def run_training(args: Namespace) -> None:
         if ray.is_initialized():
             ray.shutdown()
         logger.info("Done; ray shutdown.")
+
+
+def _run_sequential_training(conf: Any) -> None:
+    """Execute a synchronous single-thread collect/train loop."""
+    trainer = conf.trainer(**conf.args_trainer)
+    try:
+        trainer.collector.warmup()
+        trainer.training()
+    except KeyboardInterrupt:
+        logging.getLogger(__name__).info("Interrupted; stopping sequential training.")
+    finally:
+        trainer.close()
 
 
 def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:

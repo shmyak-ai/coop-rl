@@ -26,7 +26,7 @@ import jax
 import orbax.checkpoint as ocp
 import psutil
 
-from coop_rl.workers.auxiliary import CommandExecutor, _TBWriter
+from coop_rl.workers.auxiliary import CommandExecutor, Controller, _TBWriter
 
 
 class _RWLock:
@@ -281,3 +281,174 @@ class Trainer(BufferKeeper):
         self.command_executor.shutdown()
         self._writer.close()
         self.logger.info("Trainer closed.")
+
+
+class TrainerSequential:
+    """Synchronous single-thread trainer: collect a rollout, then train, repeat.
+
+    Restores the classic DQN coupling between environment frames and gradient
+    updates: after every rollout of n transitions, performs n * replay_ratio
+    updates (replay_ratio=1.0 is the BY571/IQN-and-Extensions regime, 0.25 is
+    classic DQN's train-every-4-frames). Training stops once env_frames total
+    transitions have been collected. No Controller relay, sampler threads, or
+    GPU-sample queue: the collector runs in the same thread and always acts
+    with the latest parameters.
+    """
+
+    def __init__(
+        self,
+        *,
+        trainer_seed,
+        log_level,
+        workdir,
+        env_frames,
+        replay_ratio,
+        summary_writing_period,
+        save_period,
+        state_recover,
+        args_state_recover,
+        get_update_step,
+        args_get_update_step,
+        get_update_epoch,
+        args_get_update_epoch,
+        buffer,
+        args_buffer,
+        collector,
+        args_collector,
+    ):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(log_level)
+        self.workdir = workdir
+
+        self.env_frames = env_frames
+        self.replay_ratio = replay_ratio
+        self.summary_writing_period = summary_writing_period
+        self.save_period = save_period
+        self.orbax_checkpointer = ocp.StandardCheckpointer()
+
+        self.buffer = buffer(**args_buffer)
+        gpu_devices = jax.devices("gpu")
+        if not gpu_devices:
+            raise RuntimeError("No GPU devices found. TrainerSequential requires at least one GPU.")
+        self.gpu_device = gpu_devices[0]
+
+        self._rng = jax.random.PRNGKey(trainer_seed)
+        self._rng, rng = jax.random.split(self._rng)
+        args_state_recover.rng = rng
+        self.flax_state = state_recover(**args_state_recover)
+        args_get_update_step.apply_fn = self.flax_state.apply_fn
+        update_step_fn = get_update_step(**args_get_update_step)
+        args_get_update_epoch.update_step_fn = update_step_fn
+        if hasattr(args_get_update_epoch, "buffer_lock"):
+            # Single thread, so the lock is never contended; it only satisfies the
+            # shared update-epoch signature used for PER priority write-backs.
+            args_get_update_epoch.buffer_lock = _RWLock()
+        if hasattr(args_get_update_epoch, "buffer"):
+            args_get_update_epoch.buffer = self.buffer
+        self.update_epoch_fn = get_update_epoch(**args_get_update_epoch)
+
+        # The collector submits a constructor-time get_parameters request, so it
+        # needs a real controller object; this local one is never consulted again
+        # because only run_rollout() is used here, not _collecting().
+        args_collector.controller = Controller(log_level=log_level)
+        args_collector.trainer = None
+        self.collector = collector(**args_collector)
+
+        self._closed = False
+        self._writer = _TBWriter(os.path.join(workdir, "tb"))
+        total_params = sum(x.size for x in jax.tree_util.tree_leaves(self.flax_state.params))
+        self.logger.info(
+            "TrainerSequential initialized (env_frames=%d, replay_ratio=%s, buffer_size=%d).",
+            self.env_frames,
+            self.replay_ratio,
+            args_buffer.max_size,
+        )
+        self.logger.info("Total trainable parameters: %d.", total_params)
+
+    def training(self):
+        try:
+            self._training()
+        finally:
+            self.close()
+
+    def _training(self):
+        if self.collector.obs is None:
+            self.collector.warmup()
+        frames = 0
+        update_debt = 0.0
+        rollout_frames = self.collector.steps_per_rollout * self.collector.num_envs
+        last_summary_updates = 0
+        last_save_updates = 0
+        window_start = time.monotonic()
+        info = None
+        while frames < self.env_frames:
+            # Replace, not append: the collector must act with the latest params only.
+            self.collector.online_params.clear()
+            self.collector.online_params.append(self.flax_state.params)
+            trajectories = self.collector.run_rollout()
+            self.buffer.add(trajectories)
+            frames += rollout_frames
+
+            if not self.buffer.can_sample():
+                continue  # warm-up frames earn no update debt, as in BY571
+
+            update_debt += rollout_frames * self.replay_ratio
+            while update_debt >= 1.0:
+                sample = jax.device_put(self.buffer.sample(), device=self.gpu_device)
+                self.flax_state, info = self.update_epoch_fn(self.flax_state, [sample])
+                update_debt -= 1.0
+
+            updates = int(self.flax_state.step)
+            if info is not None and updates - last_summary_updates >= self.summary_writing_period:
+                elapsed = time.monotonic() - window_start
+                updates_per_second = (updates - last_summary_updates) / elapsed
+                scalars = {
+                    "trainer/loss": float(info["loss"]),
+                    "trainer/updates_per_second": updates_per_second,
+                    "trainer/env_frames": frames,
+                }
+                if self.collector.completed_returns:
+                    mean_return = float(
+                        sum(self.collector.completed_returns)
+                        / len(self.collector.completed_returns)
+                    )
+                    scalars["collector/mean_return"] = mean_return
+                self._writer.write_scalars(updates, scalars)
+                self._writer.flush()
+                self.logger.info(
+                    "Frames: %d.  Updates: %d.  Updates/s: %.1f.  Episodes done: %d.",
+                    frames,
+                    updates,
+                    updates_per_second,
+                    len(self.collector.completed_returns),
+                )
+                last_summary_updates = updates
+                window_start = time.monotonic()
+
+            if updates - last_save_updates >= self.save_period:
+                orbax_checkpoint_path = os.path.join(
+                    self.workdir, f"chkpt_train_step_{self.flax_state.step:07}"
+                )
+                self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
+                self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+                last_save_updates = updates
+
+        orbax_checkpoint_path = os.path.join(
+            self.workdir, f"chkpt_train_step_{self.flax_state.step:07}"
+        )
+        self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
+        self.logger.info(
+            "Frame budget reached (%d frames, %d updates); final checkpoint in: %s",
+            frames,
+            int(self.flax_state.step),
+            orbax_checkpoint_path,
+        )
+
+    def close(self) -> None:
+        """Release the collector's env/executor and the writer."""
+        if self._closed:
+            return
+        self._closed = True
+        self.collector.close()
+        self._writer.close()
+        self.logger.info("TrainerSequential closed.")
