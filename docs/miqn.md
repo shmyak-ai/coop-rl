@@ -59,7 +59,7 @@ the paper (M-IQN keeps ε-greedy despite the naturally stochastic softmax policy
 
 1. sample `σ ~ U[0,1]` per batch element (`num_quantiles` of them) via the
    `"quantiles"` RNG stream (mirrors rainbow's `"noise"` stream);
-2. cosine embedding `cos(π·i·σ), i = 0..n_cos−1` → Dense → ReLU;
+2. cosine embedding `cos(π·i·σ), i = 1..n_cos` → Dense → ReLU;
 3. Hadamard product with the torso's state embedding;
 4. dueling streams → `z (…, N, A)`; `q̃ = mean_N(z)` → `EpsilonGreedy`.
 
@@ -108,7 +108,9 @@ network and hyperparameters change — `agents/miqn.py` is shared:
 MDQN (GRU instead of frame stacking, per-step hidden states in the buffer, 10-step
 stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). It uses the
 same BTR-style Impala encoder and hyperparameter alignment as `miqn_btr_atari.py`
-(γ = 0.997, grad-clip 10, 8 quantile samples), with `hidden_sizes = (512,)` as a Dense
+(γ = 0.997, grad-clip 10) but paper-parity quantile sample counts (N = N' = 64, K = 32 —
+the BTR-style 8-sample counts proved too noisy for the recurrent variant, which trained
+flat on Breakout with them), with `hidden_sizes = (512,)` as a Dense
 bridge into the GRU — feeding the raw 2304-dim flatten into GRU(512) would ~3× the RNN
 input parameters for no BTR-grounded reason. The GRU output then passes through a
 post-torso `DeepResidualTorso` (width 256, depth 8, Swish — Wang et al. 2025) before the
@@ -142,8 +144,8 @@ Two deliberate simplifications versus the feedforward variant:
 | α (Munchausen coefficient) | 0.9 | paper Table 2 |
 | l₀ (log-policy clip) | −1 | paper Table 2 |
 | κ (quantile Huber) | 1.0 | IQN |
-| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`); 8, 8 (btr, rec) | IQN / Dopamine; BTR |
-| K (acting / shaping-policy samples) | 32 (`miqn_atari`); 8 (btr, rec) | IQN / Dopamine; BTR |
+| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`, rec); 8, 8 (btr) | IQN / Dopamine; BTR |
+| K (acting / shaping-policy samples) | 32 (`miqn_atari`, rec); 8 (btr) | IQN / Dopamine; BTR |
 | n_cos (cosine embedding size) | 64 | IQN |
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
 | γ | 0.99 (`miqn_atari`); 0.997 (btr, rec) | paper; BTR |

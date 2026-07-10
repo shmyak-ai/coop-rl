@@ -34,8 +34,10 @@ class DuelingQuantileQNetworkHead(nn.Module):
         quantiles = jax.random.uniform(
             self.make_rng("quantiles"), (*embedding.shape[:-1], num_quantiles)
         )
-        # Cosine embedding of the quantile fractions: cos(pi * i * sigma), i = 0..n_cos-1.
-        cos_embedding = jnp.cos(jnp.pi * quantiles[..., jnp.newaxis] * jnp.arange(self.n_cos))
+        # Cosine embedding of the quantile fractions: cos(pi * i * sigma), i = 1..n_cos.
+        cos_embedding = jnp.cos(
+            jnp.pi * quantiles[..., jnp.newaxis] * jnp.arange(1, self.n_cos + 1)
+        )
         phi = nn.relu(
             nn.Dense(embedding.shape[-1], kernel_init=self.kernel_init, dtype=self.dtype)(
                 cos_embedding.astype(embedding.dtype)
