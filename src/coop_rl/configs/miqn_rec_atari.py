@@ -59,7 +59,7 @@ def get_config():
     sample_sequence_length = burn_in_length + learn_length
 
     config.log_level = log_level
-    config.num_collectors = 1
+    config.num_collectors = 3
     config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
