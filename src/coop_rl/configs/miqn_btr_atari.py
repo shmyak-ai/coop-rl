@@ -56,8 +56,8 @@ def get_config():
     training_iterations_per_step = 1
 
     config.log_level = log_level
-    config.num_collectors = 8
-    config.num_samplers = 3
+    config.num_collectors = 3
+    config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
     config.actions_shape = actions_shape
@@ -111,7 +111,7 @@ def get_config():
     config.args_buffer.sample_sequence_length = 4  # 3-step returns, as the paper's M-IQN
     config.args_buffer.period = 1
     config.args_buffer.min_length = 1000
-    config.args_buffer.max_size = 300000  # in transitions
+    config.args_buffer.max_size = 1000000  # in transitions
     config.args_buffer.priority_exponent = 0.2  # BTR
     config.args_buffer.observation_shape = observation_shape
     config.args_buffer.time_step_dtypes = time_step_dtypes = TimeStepDQNDtypesAtari
@@ -152,9 +152,9 @@ def get_config():
     config.args_trainer.args_get_update_step.munchausen_coefficient = 0.9
     config.args_trainer.args_get_update_step.clip_value_min = -1.0
     config.args_trainer.args_get_update_step.quantile_huber_kappa = 1.0
-    config.args_trainer.args_get_update_step.num_tau_samples = 8  # BTR
-    config.args_trainer.args_get_update_step.num_tau_prime_samples = 8  # BTR
-    config.args_trainer.args_get_update_step.num_quantile_samples = 8  # BTR
+    config.args_trainer.args_get_update_step.num_tau_samples = 64  # M-IQN paper
+    config.args_trainer.args_get_update_step.num_tau_prime_samples = 64  # M-IQN paper
+    config.args_trainer.args_get_update_step.num_quantile_samples = 32  # M-IQN paper
     config.args_trainer.args_get_update_step.max_abs_reward = 1.0
     config.args_trainer.args_get_update_step.importance_weight_scheduler_fn = optax.linear_schedule(
         init_value=0.5,  # importance sampling exponent
@@ -191,7 +191,7 @@ def get_config():
     config.args_collector.get_select_action_fn = get_select_action_batch_fn
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
-    config.args_collector.args_get_select_action_fn.num_quantile_samples = 8  # BTR
+    config.args_collector.args_get_select_action_fn.num_quantile_samples = 32  # M-IQN paper
     config.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
         x.astype(jnp.float32) / 255.0
     )

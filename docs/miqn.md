@@ -98,9 +98,12 @@ network and hyperparameters change — `agents/miqn.py` is shared:
 - **6×6 adaptive maxpool** (`adaptive_max_pool`, PyTorch semantics) before the flatten
   → a 2304-dim IQN embedding, then 512-unit dueling streams. Total 2.90M parameters
   vs BTR's reported 2.91M;
-- **BTR hyperparameters**: γ = 0.997, PER α = 0.2, grad-clip 10, batch 256,
-  N = N' = K = 8. Polyak targets (τ = 0.005) and lr 6.25e-5 are kept from the repo
-  convention (BTR: hard copies every 500 steps, lr 1e-4 at batch 256).
+- **BTR hyperparameters**: γ = 0.997, PER α = 0.2, grad-clip 10, batch 256.
+  Polyak targets (τ = 0.005) and lr 6.25e-5 are kept from the repo convention
+  (BTR: hard copies every 500 steps, lr 1e-4 at batch 256). BTR's own N = N' = K = 8
+  quantile-sample counts are **not** used — see the recurrent variant section below,
+  the same undertrained-quantile failure mode hits the feedforward BTR config too, so
+  it uses paper-parity N = N' = 64, K = 32 like `miqn_atari.py`.
 
 ## The recurrent variant
 
@@ -108,9 +111,10 @@ network and hyperparameters change — `agents/miqn.py` is shared:
 MDQN (GRU instead of frame stacking, per-step hidden states in the buffer, 10-step
 stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). It uses the
 same BTR-style Impala encoder and hyperparameter alignment as `miqn_btr_atari.py`
-(γ = 0.997, grad-clip 10) but paper-parity quantile sample counts (N = N' = 64, K = 32 —
-the BTR-style 8-sample counts proved too noisy for the recurrent variant, which trained
-flat on Breakout with them), with `hidden_sizes = (512,)` as a Dense
+(γ = 0.997, grad-clip 10) and the same paper-parity quantile sample counts
+(N = N' = 64, K = 32 — the BTR-style 8-sample counts proved too noisy for M-IQN,
+producing a flat, state-independent-Q failure mode on Breakout in both the recurrent
+and feedforward variants), with `hidden_sizes = (512,)` as a Dense
 bridge into the GRU — feeding the raw 2304-dim flatten into GRU(512) would ~3× the RNN
 input parameters for no BTR-grounded reason. The GRU output then passes through a
 post-torso `DeepResidualTorso` (width 256, depth 8, Swish — Wang et al. 2025) before the
@@ -144,8 +148,8 @@ Two deliberate simplifications versus the feedforward variant:
 | α (Munchausen coefficient) | 0.9 | paper Table 2 |
 | l₀ (log-policy clip) | −1 | paper Table 2 |
 | κ (quantile Huber) | 1.0 | IQN |
-| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`, rec); 8, 8 (btr) | IQN / Dopamine; BTR |
-| K (acting / shaping-policy samples) | 32 (`miqn_atari`, rec); 8 (btr) | IQN / Dopamine; BTR |
+| N, N' (loss quantile samples) | 64, 64 (all three configs) | IQN / Dopamine (BTR's N=N'=8 trains flat) |
+| K (acting / shaping-policy samples) | 32 (all three configs) | IQN / Dopamine (BTR's K=8 trains flat) |
 | n_cos (cosine embedding size) | 64 | IQN |
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
 | γ | 0.99 (`miqn_atari`); 0.997 (btr, rec) | paper; BTR |
