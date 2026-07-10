@@ -43,10 +43,12 @@ class QuantileFeedForwardNetwork(nn.Module):
     input_layer: type[nn.Module] = ObservationInput
 
     @nn.compact
-    def __call__(self, observation: Observation, num_quantiles: int) -> Any:
+    def __call__(
+        self, observation: Observation, num_quantiles: int, epsilon: float | None = None
+    ) -> Any:
         x = self.input_layer()(observation)
         x = self.torso(**self.args_torso)(x)
-        return self.head(**self.args_head)(x, num_quantiles)
+        return self.head(**self.args_head)(x, num_quantiles, epsilon)
 
 
 class CompositeNetwork(nn.Module):

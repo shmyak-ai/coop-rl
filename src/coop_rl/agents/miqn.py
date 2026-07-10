@@ -224,21 +224,54 @@ def get_select_action_fn(
 
 
 def get_select_action_batch_fn(
-    apply_fn: ActorApply, num_quantile_samples: int, obs_preprocess_fn: Callable | None = None
+    apply_fn: ActorApply,
+    num_quantile_samples: int,
+    obs_preprocess_fn: Callable | None = None,
+    epsilon_scheduler_fn: Callable[[int], float] | None = None,
 ) -> Callable:
-    """Like get_select_action_fn but for a batch of N observations (num_envs, *obs_shape)."""
+    """Like get_select_action_fn but for a batch of N observations (num_envs, *obs_shape).
+
+    `epsilon_scheduler_fn`, if given, is a step-indexed schedule (e.g. `optax.linear_schedule`)
+    overriding the network's static epsilon; step count is tracked (in environment transitions)
+    by a plain Python counter closed over here, since the collector always calls the returned
+    function as `(key, params, observations)` regardless of agent.
+    """
     _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
 
+    if epsilon_scheduler_fn is None:
+
+        @jax.jit
+        def select_action_batch(key, params, observations):
+            key, quantile_key, policy_key = jax.random.split(key, num=3)
+            actor_policy, _, _ = apply_fn(
+                params,
+                _preprocess(observations),
+                num_quantile_samples,
+                rngs={"quantiles": quantile_key},
+            )
+            return key, actor_policy.sample(seed=policy_key)
+
+        return select_action_batch
+
     @jax.jit
-    def select_action_batch(key, params, observations):
+    def _select_action_batch_eps(key, params, observations, epsilon):
         key, quantile_key, policy_key = jax.random.split(key, num=3)
         actor_policy, _, _ = apply_fn(
             params,
             _preprocess(observations),
             num_quantile_samples,
+            epsilon,
             rngs={"quantiles": quantile_key},
         )
         return key, actor_policy.sample(seed=policy_key)
+
+    step_count = 0
+
+    def select_action_batch(key, params, observations):
+        nonlocal step_count
+        step_count += observations.shape[0]
+        epsilon = epsilon_scheduler_fn(step_count)
+        return _select_action_batch_eps(key, params, observations, epsilon)
 
     return select_action_batch
 

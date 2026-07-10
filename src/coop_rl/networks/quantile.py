@@ -28,9 +28,13 @@ class DuelingQuantileQNetworkHead(nn.Module):
 
     @nn.compact
     def __call__(
-        self, embedding: chex.Array, num_quantiles: int
+        self, embedding: chex.Array, num_quantiles: int, epsilon: float | None = None
     ) -> tuple[EpsilonGreedy, chex.Array, chex.Array]:
-        """Returns (epsilon-greedy policy over mean-z, z (..., N, A), quantiles (..., N))."""
+        """Returns (epsilon-greedy policy over mean-z, z (..., N, A), quantiles (..., N)).
+
+        `epsilon` overrides the module's static `self.epsilon` when given (e.g. for a
+        schedule computed by the caller); defaults to `self.epsilon` otherwise.
+        """
         quantiles = jax.random.uniform(
             self.make_rng("quantiles"), (*embedding.shape[:-1], num_quantiles)
         )
@@ -67,4 +71,5 @@ class DuelingQuantileQNetworkHead(nn.Module):
         z_values = value + advantages - advantages.mean(axis=-1, keepdims=True)
 
         q_values = z_values.mean(axis=-2)
-        return EpsilonGreedy(preferences=q_values, epsilon=self.epsilon), z_values, quantiles
+        eps = self.epsilon if epsilon is None else epsilon
+        return EpsilonGreedy(preferences=q_values, epsilon=eps), z_values, quantiles
