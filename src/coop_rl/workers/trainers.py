@@ -375,6 +375,7 @@ class TrainerSequential:
         if self.collector.obs is None:
             self.collector.warmup()
         frames = 0
+        episodes_done = 0
         update_debt = 0.0
         rollout_frames = self.collector.steps_per_rollout * self.collector.num_envs
         last_summary_updates = 0
@@ -388,6 +389,7 @@ class TrainerSequential:
             trajectories = self.collector.run_rollout()
             self.buffer.add(trajectories)
             frames += rollout_frames
+            episodes_done += int((trajectories.terminated | trajectories.truncated).sum())
 
             if not self.buffer.can_sample():
                 continue  # warm-up frames earn no update debt, as in BY571
@@ -407,20 +409,21 @@ class TrainerSequential:
                     "trainer/updates_per_second": updates_per_second,
                     "trainer/env_frames": frames,
                 }
-                if self.collector.completed_returns:
-                    mean_return = float(
-                        sum(self.collector.completed_returns)
-                        / len(self.collector.completed_returns)
-                    )
+                returns = self.collector.completed_returns
+                mean_return = sum(returns) / len(returns) if returns else float("nan")
+                if returns:
                     scalars["collector/mean_return"] = mean_return
                 self._writer.write_scalars(updates, scalars)
                 self._writer.flush()
                 self.logger.info(
-                    "Frames: %d.  Updates: %d.  Updates/s: %.1f.  Episodes done: %d.",
+                    "Frames: %d.  Updates: %d.  Updates/s: %.1f.  Episodes done: %d.  "
+                    "Mean return (last %d eps): %.1f.",
                     frames,
                     updates,
                     updates_per_second,
-                    len(self.collector.completed_returns),
+                    episodes_done,
+                    len(returns),
+                    mean_return,
                 )
                 last_summary_updates = updates
                 window_start = time.monotonic()
@@ -449,6 +452,10 @@ class TrainerSequential:
         if self._closed:
             return
         self._closed = True
+        # Checkpoint saves commit in a background thread; wait for them here,
+        # otherwise interpreter shutdown kills the commit and leaves the final
+        # checkpoint as an uncommitted *.orbax-checkpoint-tmp directory.
+        self.orbax_checkpointer.close()
         self.collector.close()
         self._writer.close()
         self.logger.info("TrainerSequential closed.")
