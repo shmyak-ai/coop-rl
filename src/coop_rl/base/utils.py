@@ -55,11 +55,11 @@ def make_learning_rate(
         return init_lr
 
 
-def make_optimizer(*, max_grad_norm: float, **kwargs):
+def make_optimizer(*, max_grad_norm: float, adam_eps: float = 1e-5, **kwargs):
     lr = make_learning_rate(**kwargs)
     return optax.chain(
         optax.clip_by_global_norm(max_grad_norm),
-        optax.adam(lr, eps=1e-5),
+        optax.adam(lr, eps=adam_eps),
     )
 
 

@@ -30,7 +30,7 @@ from coop_rl.base.environment import HandlerEnvAtari
 from coop_rl.base.utils import make_optimizer
 from coop_rl.networks.base import QuantileFeedForwardNetwork
 from coop_rl.networks.inputs import EmbeddingInput
-from coop_rl.networks.quantile import DuelingQuantileQNetworkHead
+from coop_rl.networks.quantile import QuantileQNetworkHead
 from coop_rl.networks.torso import CNNTorso
 from coop_rl.workers.collectors import CollectorDQNUniform
 from coop_rl.workers.trainers import TrainerSequential
@@ -44,11 +44,13 @@ def get_config():
     #          -m 15000 -N 32
     # Uses TrainerSequential (run with --backend sequential): one env, one gradient
     # update per collected transition, exactly BY571's synchronous regime, stopping
-    # at 500000 environment frames. Remaining known deviations: CNNTorso always
-    # appends a residual MLP tail (depth=4 here is the minimum, BY571 has none);
-    # Adam eps stays at coop-rl's hardcoded 1e-5 vs BY571's untouched PyTorch default
-    # 1e-8; and "evaluation" is the training-policy collector/mean_return, not a
-    # strict greedy eval every 10k frames.
+    # at 500000 environment frames. Architecture matches BY571's `-agent iqn` exactly:
+    # Nature-DQN convs -> flatten (3136) -> quantile fusion -> one 512 FC -> plain
+    # (non-dueling) action head, float32, Adam eps 1e-8, learning from 33 transitions.
+    # Remaining known deviations (all minor): orthogonal init vs PyTorch-default
+    # kaiming-uniform; noop starts (AtariPreprocessing) vs BY571's FIRE-on-reset;
+    # and "evaluation" is the training-policy collector/mean_return, not a strict
+    # near-greedy eval every 10k frames.
     config = ml_collections.ConfigDict()
 
     log_level = config_dict.FieldReference("INFO", field_type=str)
@@ -79,20 +81,20 @@ def get_config():
     config.args_network.args_torso.kernel_sizes = [8, 4, 3]
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.use_layer_norm = False
-    config.args_network.args_torso.dtype = jnp.bfloat16
-    # CNNTorso always appends a residual MLP tail; BY571 has none. Depth 4 (one residual
-    # block) is the smallest expressible approximation - see config docstring above.
-    config.args_network.args_torso.depth = 4
-    config.args_network.args_torso.width = 256
-    config.args_network.head = DuelingQuantileQNetworkHead
+    config.args_network.args_torso.padding = "VALID"  # PyTorch Conv2d default: 7x7x64 = 3136
+    config.args_network.args_torso.dtype = jnp.float32  # BY571 is full fp32
+    # depth=0: no residual MLP tail, the torso returns the raw flattened conv
+    # features (3136), and the head fuses quantiles there - exactly BY571's IQN.
+    config.args_network.args_torso.depth = 0
+    config.args_network.head = QuantileQNetworkHead  # BY571 -agent iqn is non-dueling
     config.args_network.args_head = ml_collections.ConfigDict()
     config.args_network.args_head.action_dim = actions_shape
     config.args_network.args_head.epsilon = 0.025  # fallback only; schedule overrides below
-    config.args_network.args_head.layer_sizes = [256]
-    config.args_network.args_head.activation = "relu"  # BY571 dueling streams
+    config.args_network.args_head.layer_sizes = [512]  # BY571 ff_1: one 512 hidden layer
+    config.args_network.args_head.activation = "relu"
     config.args_network.args_head.n_cos = 64
     config.args_network.args_head.use_layer_norm = False
-    config.args_network.args_head.dtype = jnp.bfloat16
+    config.args_network.args_head.dtype = jnp.float32
     config.args_network.input_layer = EmbeddingInput
 
     config.optimizer = optimizer = make_optimizer
@@ -100,6 +102,7 @@ def get_config():
     config.args_optimizer.init_lr = 1e-4  # -lr 1e-4
     config.args_optimizer.decay_learning_rates = False
     config.args_optimizer.max_grad_norm = 1.0  # BY571's clip_grad_norm(..., 1)
+    config.args_optimizer.adam_eps = 1e-8  # BY571 uses PyTorch's default Adam eps
 
     config.env = env = HandlerEnvAtari
     config.args_env = args_env = ml_collections.ConfigDict()
@@ -114,7 +117,7 @@ def get_config():
     config.args_buffer.sample_batch_size = 32  # BY571 batch size (worker=1, unscaled)
     config.args_buffer.sample_sequence_length = 2  # n_step=1, BY571 default
     config.args_buffer.period = 1
-    config.args_buffer.min_length = 1000
+    config.args_buffer.min_length = 33  # BY571 learns once len(memory) > batch_size (32)
     config.args_buffer.max_size = 15000  # -m 15000
     # BY571's -agent iqn uses uniform replay, not PER; priority_exponent=0.0 makes
     # BufferPrioritised sample uniformly and collapses importance weights to 1.0.
@@ -163,7 +166,7 @@ def get_config():
         transition_begin=0,
     )
     config.args_trainer.args_get_update_step.obs_preprocess_fn = lambda x: (
-        x.astype(jnp.bfloat16) / jnp.bfloat16(255.0)
+        x.astype(jnp.float32) / 255.0
     )
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()

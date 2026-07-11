@@ -63,6 +63,10 @@ the paper (M-IQN keeps ε-greedy despite the naturally stochastic softmax policy
 3. Hadamard product with the torso's state embedding;
 4. dueling streams → `z (…, N, A)`; `q̃ = mean_N(z)` → `EpsilonGreedy`.
 
+`QuantileQNetworkHead` (same file) is the plain non-dueling variant — steps 1–3
+identical, then MLP → Dense(A) directly — used by `miqn_by571_atari.py` for BY571
+parity.
+
 The head returns `(EpsilonGreedy, z, σ)` and is shape-agnostic over leading batch
 dims, so the same apply serves acting `(B, …)` and the window pass `(B, L, …)`.
 
@@ -157,12 +161,21 @@ restoring the classic DQN coupling between environment frames and updates that t
 async `ray`/`thread` backends deliberately decouple. Config knobs: `env_frames`
 (stop condition, in collected transitions) and `replay_ratio` (1.0 = BY571's one
 update per transition; 0.25 would express classic DQN's train-every-4-frames).
-Distinctive settings versus the other miqn configs: single env, Nature-CNN-like torso
-(ReLU, minimal depth-4 residual tail), N = N' = K = 32 (BY571 collapses all three),
-1-step returns (`sample_sequence_length = 2`), uniform replay via
-`priority_exponent = 0.0`, unclipped rewards, batch 32, buffer 15000, lr 1e-4,
-grad-clip 1.0, and a linearly annealed epsilon (1.0 → 0.025 over 75k frames) via
-`epsilon_scheduler_fn` in the collector's action selection.
+The network reproduces BY571's `-agent iqn` architecture exactly (parameter-count
+identical: 1,890,020): Nature-DQN convs (ReLU, `padding = "VALID"` — flax's SAME
+default would yield 11×11×64 = 7744 features instead of PyTorch's 7×7×64 = 3136)
+→ flatten (3136) with **no residual tail** (`CNNTorso` with `depth = 0`) →
+quantile cosine fusion at the raw conv features → one 512 FC → plain **non-dueling**
+`QuantileQNetworkHead`, all float32. Other exact matches: Adam eps 1e-8
+(`args_optimizer.adam_eps`; other configs keep coop-rl's 1e-5 default), learning
+starts at 33 stored transitions (`min_length = 33`), single env,
+N = N' = K = 32 (BY571 collapses all three), 1-step returns
+(`sample_sequence_length = 2`), uniform replay via `priority_exponent = 0.0`,
+unclipped rewards, batch 32, buffer 15000, lr 1e-4, grad-clip 1.0, soft target
+updates τ = 0.005 every step, and a linearly annealed epsilon (1.0 → 0.025 over
+75k frames) via `epsilon_scheduler_fn` in the collector's action selection.
+Remaining (minor) deviations: orthogonal vs PyTorch-default kaiming-uniform init,
+and noop starts vs BY571's FIRE-on-reset.
 
 ## Hyperparameters
 

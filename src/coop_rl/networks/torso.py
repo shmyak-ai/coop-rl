@@ -131,6 +131,7 @@ class CNNTorso(nn.Module):
     dtype: Any = None
     width: int = 256
     depth: int = 16
+    padding: str = "SAME"  # "VALID" matches PyTorch Conv2d's default (Nature DQN)
 
     @nn.compact
     def __call__(self, observation: chex.Array) -> chex.Array:
@@ -145,6 +146,7 @@ class CNNTorso(nn.Module):
                 channel,
                 (kernel, kernel),
                 (stride, stride),
+                padding=self.padding,
                 use_bias=not self.use_layer_norm,
                 dtype=self.dtype,
             )(x)
@@ -154,11 +156,14 @@ class CNNTorso(nn.Module):
 
         x = x.reshape(*observation.shape[:-3], -1)
 
-        x = DeepResidualTorso(
-            width=self.width,
-            depth=self.depth,
-            activation="swish",
-            dtype=self.dtype,
-        )(x)
+        # depth=0 disables the residual tail: the torso returns the raw flattened
+        # conv features (classic Nature-DQN style, e.g. for BY571 IQN parity).
+        if self.depth > 0:
+            x = DeepResidualTorso(
+                width=self.width,
+                depth=self.depth,
+                activation="swish",
+                dtype=self.dtype,
+            )(x)
 
         return x
