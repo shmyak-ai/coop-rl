@@ -59,7 +59,7 @@ class QuantileQNetworkHead(nn.Module):
             kernel_init=self.kernel_init,
             dtype=self.dtype,
         )(x)
-        z_values = nn.Dense(self.action_dim, kernel_init=orthogonal(1.0), dtype=self.dtype)(x)
+        z_values = nn.Dense(self.action_dim, kernel_init=self.kernel_init, dtype=self.dtype)(x)
 
         q_values = z_values.mean(axis=-2)
         eps = self.epsilon if epsilon is None else epsilon

@@ -25,6 +25,29 @@ class FirstDimToLast(ObservationWrapper):
         return transposed_obs
 
 
+class FireOnReset(gym.Wrapper):
+    """Press FIRE (action 1) then action 2 after every reset (classic FireResetEnv).
+
+    For games like Breakout where an episode only starts once FIRE is pressed.
+    Re-resets if the environment terminates during either press.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        meanings = env.unwrapped.get_action_meanings()
+        assert meanings[1] == "FIRE" and len(meanings) >= 3, meanings
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        obs, _, terminated, truncated, _ = self.env.step(1)
+        if terminated or truncated:
+            obs, info = self.env.reset()
+        obs, _, terminated, truncated, _ = self.env.step(2)
+        if terminated or truncated:
+            obs, info = self.env.reset()
+        return obs, info
+
+
 class HandlerEnv:
     def __init__(self, env_name, stack_size):
         self._env = HandlerEnv.make_env(env_name, stack_size)
@@ -64,6 +87,8 @@ def _make_atari_env(
     grayscale=True,
     add_channel=False,
     repeat_action_probability=0.0,
+    noop_max=30,
+    fire_on_reset=False,
 ):
     """Module-level factory for VectorEnv (must be picklable)."""
     import ale_py
@@ -74,12 +99,15 @@ def _make_atari_env(
     )
     env = AtariPreprocessing(
         env,
+        noop_max=noop_max,
         screen_size=screen_size,
         terminal_on_life_loss=False,
         grayscale_obs=grayscale,
         grayscale_newaxis=add_channel,
         scale_obs=False,
     )
+    if fire_on_reset:
+        env = FireOnReset(env)
     if stack_size > 1:
         env = FrameStackObservation(env, stack_size)
         env = FirstDimToLast(env)
@@ -95,9 +123,17 @@ class HandlerEnvAtari:
     ``(num_envs, *obs_shape)``.
     """
 
-    def __init__(self, env_name, *, stack_size=1, num_envs=1, **kwargs):
+    def __init__(
+        self, env_name, *, stack_size=1, num_envs=1, noop_max=30, fire_on_reset=False, **kwargs
+    ):
         factory = partial(
-            _make_atari_env, env_name, stack_size, kwargs, add_channel=(stack_size <= 1)
+            _make_atari_env,
+            env_name,
+            stack_size,
+            kwargs,
+            add_channel=(stack_size <= 1),
+            noop_max=noop_max,
+            fire_on_reset=fire_on_reset,
         )
         # DISABLED mode: env.step() never auto-resets sub-environments.
         # The collector resets done envs explicitly, preventing cross-episode
@@ -125,8 +161,15 @@ class HandlerEnvAtari:
         return _make_atari_env(env_name, stack_size, kwargs)
 
     @staticmethod
-    def check_env(env_name, stack_size, num_envs=1, **kwargs):
-        env = _make_atari_env(env_name, stack_size, kwargs, add_channel=(stack_size <= 1))
+    def check_env(env_name, stack_size, num_envs=1, noop_max=30, fire_on_reset=False, **kwargs):
+        env = _make_atari_env(
+            env_name,
+            stack_size,
+            kwargs,
+            add_channel=(stack_size <= 1),
+            noop_max=noop_max,
+            fire_on_reset=fire_on_reset,
+        )
         shape = env.observation_space.shape
         dtype = env.observation_space.dtype
         n_actions = env.action_space.n

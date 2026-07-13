@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import ml_collections
 import numpy as np
 import optax
+from flax.linen.initializers import variance_scaling
 from ml_collections import config_dict
 
 from coop_rl.agents.miqn import (
@@ -46,11 +47,11 @@ def get_config():
     # update per collected transition, exactly BY571's synchronous regime, stopping
     # at 500000 environment frames. Architecture matches BY571's `-agent iqn` exactly:
     # Nature-DQN convs -> flatten (3136) -> quantile fusion -> one 512 FC -> plain
-    # (non-dueling) action head, float32, Adam eps 1e-8, learning from 33 transitions.
-    # Remaining known deviations (all minor): orthogonal init vs PyTorch-default
-    # kaiming-uniform; noop starts (AtariPreprocessing) vs BY571's FIRE-on-reset;
-    # and "evaluation" is the training-policy collector/mean_return, not a strict
-    # near-greedy eval every 10k frames.
+    # (non-dueling) action head, float32, Adam eps 1e-8, learning from 33 transitions,
+    # PyTorch-default kernel init, no noop starts, FIRE pressed on reset.
+    # Remaining known deviations (all minor): flax zero-init biases vs PyTorch's
+    # uniform(+-1/sqrt(fan_in)); and "evaluation" is the training-policy
+    # collector/mean_return, not a strict near-greedy eval every 10k frames.
     config = ml_collections.ConfigDict()
 
     log_level = config_dict.FieldReference("INFO", field_type=str)
@@ -59,6 +60,9 @@ def get_config():
     actions_shape = config_dict.FieldReference(None, field_type=np.integer)
     workdir = config_dict.FieldReference(None, field_type=str)
     checkpointdir = config_dict.FieldReference(None, field_type=str)
+
+    # PyTorch's default layer init, kaiming_uniform(a=sqrt(5)) == U(+-1/sqrt(fan_in)).
+    torch_default_init = variance_scaling(1 / 3, "fan_in", "uniform")
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
@@ -82,6 +86,7 @@ def get_config():
     config.args_network.args_torso.strides = [4, 2, 1]
     config.args_network.args_torso.use_layer_norm = False
     config.args_network.args_torso.padding = "VALID"  # PyTorch Conv2d default: 7x7x64 = 3136
+    config.args_network.args_torso.kernel_init = torch_default_init
     config.args_network.args_torso.dtype = jnp.float32  # BY571 is full fp32
     # depth=0: no residual MLP tail, the torso returns the raw flattened conv
     # features (3136), and the head fuses quantiles there - exactly BY571's IQN.
@@ -94,6 +99,7 @@ def get_config():
     config.args_network.args_head.activation = "relu"
     config.args_network.args_head.n_cos = 64
     config.args_network.args_head.use_layer_norm = False
+    config.args_network.args_head.kernel_init = torch_default_init
     config.args_network.args_head.dtype = jnp.float32
     config.args_network.input_layer = EmbeddingInput
 
@@ -109,6 +115,8 @@ def get_config():
     config.args_env.env_name = "ale_py:ALE/Breakout-v5"
     config.args_env.stack_size = 4  # >= 1, 1 - no stacking
     config.args_env.num_envs = 1  # BY571 single environment
+    config.args_env.noop_max = 0  # BY571 has no noop starts
+    config.args_env.fire_on_reset = True  # BY571's FireResetEnv
 
     config.buffer = buffer = BufferPrioritised
     config.args_buffer = args_buffer = ml_collections.ConfigDict()

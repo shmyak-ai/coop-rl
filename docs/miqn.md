@@ -174,8 +174,16 @@ N = N' = K = 32 (BY571 collapses all three), 1-step returns
 unclipped rewards, batch 32, buffer 15000, lr 1e-4, grad-clip 1.0, soft target
 updates τ = 0.005 every step, and a linearly annealed epsilon (1.0 → 0.025 over
 75k frames) via `epsilon_scheduler_fn` in the collector's action selection.
-Remaining (minor) deviations: orthogonal vs PyTorch-default kaiming-uniform init,
-and noop starts vs BY571's FIRE-on-reset.
+Weight init matches PyTorch's layer default, `kaiming_uniform(a=√5)` =
+`U(±1/√fan_in)`, expressed as `variance_scaling(1/3, "fan_in", "uniform")` and
+passed as `kernel_init` to both torso and head (`CNNTorso` now forwards
+`kernel_init` to its convs; its default stays flax's `lecun_normal`, so other
+configs are unaffected). The env matches BY571's wrapper stack too:
+`noop_max = 0` (no noop starts) and `fire_on_reset = True` (a `FireOnReset`
+wrapper in `base/environment.py` presses FIRE then action 2 after every reset,
+like the classic `FireResetEnv`). Remaining (minor) deviations: flax zero-init
+biases vs PyTorch's `U(±1/√fan_in)` biases, and "evaluation" being the
+training-policy rolling mean return rather than a separate near-greedy eval.
 
 ## Hyperparameters
 

@@ -8,7 +8,7 @@ from typing import Any
 import chex
 import numpy as np
 from flax import linen as nn
-from flax.linen.initializers import Initializer, orthogonal, variance_scaling
+from flax.linen.initializers import Initializer, lecun_normal, orthogonal, variance_scaling
 
 from coop_rl.networks.layers import NoisyLinear
 from coop_rl.networks.utils import parse_activation_fn
@@ -126,7 +126,7 @@ class CNNTorso(nn.Module):
     strides: Sequence[int]
     activation: str = "relu"
     use_layer_norm: bool = False
-    kernel_init: Initializer = orthogonal(np.sqrt(2.0))
+    kernel_init: Initializer = lecun_normal()  # flax's nn.Conv default
     channel_first: bool = False
     dtype: Any = None
     width: int = 256
@@ -147,6 +147,7 @@ class CNNTorso(nn.Module):
                 (kernel, kernel),
                 (stride, stride),
                 padding=self.padding,
+                kernel_init=self.kernel_init,
                 use_bias=not self.use_layer_norm,
                 dtype=self.dtype,
             )(x)
