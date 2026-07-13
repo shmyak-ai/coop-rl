@@ -64,6 +64,9 @@ class TrainState(train_state.TrainState):
     key: jax.Array
     target_params: core.FrozenDict[str, Any] = struct.field(pytree_node=True)
     tau: int  # smoothing coefficient for target networks
+    # 0 (default): Polyak-blend the target every step via tau. >0: hard-copy the
+    # target from the online params every target_update_period steps instead.
+    target_update_period: int = struct.field(pytree_node=False, default=0)
 
     def apply_gradients(self, *, grads, **kwargs):
         """Updates ``step``, ``params``, ``opt_state`` and ``**kwargs`` in return value.
@@ -90,9 +93,14 @@ class TrainState(train_state.TrainState):
         # UPDATE Q PARAMS AND OPTIMISER STATE
         updates, new_opt_state = self.tx.update(grads_with_opt, self.opt_state, params_with_opt)
         new_params_with_opt = optax.apply_updates(params_with_opt, updates)
-        new_target_params = optax.incremental_update(
-            new_params_with_opt, self.target_params, self.tau
-        )
+        if self.target_update_period > 0:
+            new_target_params = optax.periodic_update(
+                new_params_with_opt, self.target_params, self.step + 1, self.target_update_period
+            )
+        else:
+            new_target_params = optax.incremental_update(
+                new_params_with_opt, self.target_params, self.tau
+            )
 
         # As implied by the OWG name, the gradients are used directly to update the
         # parameters.
@@ -116,23 +124,47 @@ class TrainState(train_state.TrainState):
         return self.replace(key=in_key), out_key
 
 
-def create_train_state(rng, network, args_network, optimizer, args_optimizer, obs_shape, tau):
-    state_rng, init_rng, quantile_rng = jax.random.split(rng, num=3)
-    rngs = {"params": init_rng, "quantiles": quantile_rng}
+def create_train_state(
+    rng, network, args_network, optimizer, args_optimizer, obs_shape, tau, target_update_period=0
+):
+    state_rng, init_rng, quantile_rng, noise_rng = jax.random.split(rng, num=4)
+    rngs = {"params": init_rng, "quantiles": quantile_rng, "noise": noise_rng}
     model = network(**args_network)
     # Parameter shapes do not depend on the number of quantile samples.
     params = model.init(rngs, jnp.ones((1, *obs_shape)), 1)
     tx = optimizer(**args_optimizer)
     return TrainState.create(
-        apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau
+        apply_fn=model.apply,
+        params=params,
+        target_params=params,
+        key=state_rng,
+        tx=tx,
+        tau=tau,
+        target_update_period=target_update_period,
     )
 
 
 def restore_dqn_flax_state(
-    *, rng, network, args_network, optimizer, args_optimizer, observation_shape, tau, checkpointdir
+    *,
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    observation_shape,
+    tau,
+    target_update_period=0,
+    checkpointdir,
 ):
     state = create_train_state(
-        rng, network, args_network, optimizer, args_optimizer, observation_shape, tau
+        rng,
+        network,
+        args_network,
+        optimizer,
+        args_optimizer,
+        observation_shape,
+        tau,
+        target_update_period,
     )
     if checkpointdir is None:
         return state
@@ -242,12 +274,12 @@ def get_select_action_batch_fn(
 
         @jax.jit
         def select_action_batch(key, params, observations):
-            key, quantile_key, policy_key = jax.random.split(key, num=3)
+            key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
             actor_policy, _, _ = apply_fn(
                 params,
                 _preprocess(observations),
                 num_quantile_samples,
-                rngs={"quantiles": quantile_key},
+                rngs={"quantiles": quantile_key, "noise": noise_key},
             )
             return key, actor_policy.sample(seed=policy_key)
 
@@ -255,13 +287,13 @@ def get_select_action_batch_fn(
 
     @jax.jit
     def _select_action_batch_eps(key, params, observations, epsilon):
-        key, quantile_key, policy_key = jax.random.split(key, num=3)
+        key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
         actor_policy, _, _ = apply_fn(
             params,
             _preprocess(observations),
             num_quantile_samples,
             epsilon,
-            rngs={"quantiles": quantile_key},
+            rngs={"quantiles": quantile_key, "noise": noise_key},
         )
         return key, actor_policy.sample(seed=policy_key)
 
@@ -341,9 +373,14 @@ def get_update_step(
             quantile_key: chex.PRNGKey,
             importance_sampling_exponent: float,
         ) -> tuple[jnp.ndarray, dict]:
-            online_key, target_key = jax.random.split(quantile_key)
+            online_key, target_key, online_noise_key, target_noise_key = jax.random.split(
+                quantile_key, num=4
+            )
             _, z_tm1, quantiles_tm1 = apply_fn(
-                q_params, transitions.obs, num_tau_samples, rngs={"quantiles": online_key}
+                q_params,
+                transitions.obs,
+                num_tau_samples,
+                rngs={"quantiles": online_key, "noise": online_noise_key},
             )
             z_tm1 = z_tm1.astype(jnp.float32)
             quantiles_tm1 = quantiles_tm1.astype(jnp.float32)
@@ -351,7 +388,7 @@ def get_update_step(
                 target_q_params,
                 transitions.next_obs,
                 num_tau_prime_samples,
-                rngs={"quantiles": target_key},
+                rngs={"quantiles": target_key, "noise": target_noise_key},
             )
             z_t_target = z_t_target.astype(jnp.float32)
 
@@ -400,7 +437,7 @@ def get_update_step(
         terminated_at_cut = sample.terminated[batch_indices, indices_done] == 1
 
         train_state, key = train_state.get_key()
-        policy_key, loss_key = jax.random.split(key)
+        policy_key, policy_noise_key, loss_key = jax.random.split(key, num=3)
 
         # Munchausen reward shaping for the intermediate steps: each reward gets
         # its own alpha * clip(tau * ln pi(a|s), l0, 0) bonus, with pi computed from
@@ -408,7 +445,10 @@ def get_update_step(
         # inside munchausen_quantile_q_learning from q_tm1_target.
         obs = _preprocess(sample.obs)
         _, z_target_seq, _ = apply_fn(
-            train_state.target_params, obs, num_quantile_samples, rngs={"quantiles": policy_key}
+            train_state.target_params,
+            obs,
+            num_quantile_samples,
+            rngs={"quantiles": policy_key, "noise": policy_noise_key},
         )
         q_target_seq = jnp.mean(z_target_seq, axis=-2).astype(jnp.float32)
         log_pi = entropy_temperature * jax.nn.log_softmax(

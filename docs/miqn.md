@@ -49,7 +49,7 @@ the paper (M-IQN keeps ε-greedy despite the naturally stochastic softmax policy
 | Dueling | ✓ | per-quantile value/advantage streams, `z = v + a − mean(a)`; validated for Munchausen by DM-DQN (Gu et al. 2022) |
 | Prioritized replay | ✓ (feedforward only) | `BufferPrioritised` + importance-sampling weights, priorities = per-sequence quantile-Huber loss (same machinery as rainbow); the recurrent variant deliberately uses uniform replay (see below) |
 | Double Q | ✗ | inapplicable — the bootstrap is a softmax-policy expectation, there is no argmax to decouple |
-| Noisy nets | ✗ | the noise would leak into the shaping policy `π = softmax(q̃_target/τ)`; the paper's M-IQN uses ε-greedy |
+| Noisy nets | ✗ (`miqn_atari`, by571, rec); ✓ (btr) | the noise would leak into the shaping policy `π = softmax(q̃_target/τ)`; the paper's M-IQN uses ε-greedy. `miqn_btr_atari.py` adds it anyway to match BTR's actual default (`--noisy 1`, combined with annealed ε-greedy — see the BTR variant section), accepting the untested risk |
 
 ## The network
 
@@ -91,8 +91,11 @@ shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusio
 
 `miqn_btr_atari.py` re-wires the same feedforward agent along the lines of **Beyond The
 Rainbow** (BTR, Clark et al., [arXiv:2411.03820](https://arxiv.org/abs/2411.03820)),
-whose ablations attribute the single largest gain (+142% IQM) to the encoder. Only the
-network and hyperparameters change — `agents/miqn.py` is shared:
+whose ablations attribute the single largest gain (+142% IQM) to the encoder. Almost
+all of `agents/miqn.py` is shared — the additions are an opt-in hard-copy target
+update (see below) and an always-available `"noise"` rng stream for NoisyNets, both
+inert for every other miqn config (Polyak stays the default; plain heads never call
+`self.make_rng("noise")`, so the extra stream is simply unused):
 
 - **Impala ResNet encoder** (`VisualResNetTorso`, `networks/resnet.py`): BTR's 2× width
   (32-64-64 channels, 2 residual blocks per group, conv+maxpool downsampling), ReLU;
@@ -100,14 +103,60 @@ network and hyperparameters change — `agents/miqn.py` is shared:
   (footnote) that LayerNorm, found after completion, is the better normalizer; it also
   avoids threading a mutable power-iteration state through every `apply_fn` call;
 - **6×6 adaptive maxpool** (`adaptive_max_pool`, PyTorch semantics) before the flatten
-  → a 2304-dim IQN embedding, then 512-unit dueling streams. Total 2.90M parameters
-  vs BTR's reported 2.91M;
-- **BTR hyperparameters**: γ = 0.997, PER α = 0.2, grad-clip 10, batch 256.
-  Polyak targets (τ = 0.005) and lr 6.25e-5 are kept from the repo convention
-  (BTR: hard copies every 500 steps, lr 1e-4 at batch 256). BTR's own N = N' = K = 8
-  quantile-sample counts are **not** used — see the recurrent variant section below,
-  the same undertrained-quantile failure mode hits the feedforward BTR config too, so
-  it uses paper-parity N = N' = 64, K = 32 like `miqn_atari.py`.
+  → a 2304-dim IQN embedding, then 512-unit **noisy** dueling streams (see below).
+  Total 5,265,834 parameters — hand-computing BTR's own `networks.py` with its actual
+  default (`--noisy 1`, `model_size=2`, `linear_size=512`, `n_cos=64`, 4 actions for
+  Breakout; conv bias=True everywhere; spectral norm adds no trainable parameters;
+  `FactorizedNoisyLinear` stores a full sigma matrix per weight/bias exactly like this
+  repo's `NoisyLinear`) gives 5,264,554 — a 1,280-parameter difference, fully explained
+  by this repo's LayerNorm γ/β terms replacing BTR's spectral norm (which adds none).
+  The earlier "2.90M vs BTR's reported 2.91M" figure (before NoisyNets was added this
+  session) was comparing against BTR run *without* NoisyNets, not BTR's actual default;
+- **NoisyNets** (`NoisyDuelingQuantileQNetworkHead`, `networks/quantile.py`), matching
+  BTR's actual default recipe (`--noisy 1`) rather than pure ε-greedy: the dueling
+  value/advantage streams use `NoisyMLPTorso`/`NoisyLinear` (Fortunato et al. 2018,
+  already used by `configs/rainbow_atari.py`) instead of `MLPTorso`/`nn.Dense`; the IQN
+  cosine-embedding fusion Dense stays plain, matching BTR's own `networks.py` (its
+  `cos_embedding` is a bare `nn.Linear`, never wrapped in its noisy/plain switch). A
+  `"noise"` rng stream is threaded through `create_train_state`, `get_select_action_batch_fn`,
+  and `get_update_step` in `agents/miqn.py`, mirroring `agents/rainbow.py`'s existing
+  convention exactly. `sigma_zero = 0.5` (the Fortunato-paper/class default, not
+  `rainbow_atari.py`'s tuned `0.25`). BTR's own exploration combines NoisyNets with an
+  **annealed ε-greedy for the first half of training**: ε anneals `1.0 → 0.01` over
+  2,000,000 frames (BTR's own `eps_steps`), then ε-greedy is disabled (`ε = 0` from
+  `env_frames // 2` onward), leaving noisy weights as the only exploration source —
+  reproduced via `optax.join_schedules` in `args_get_select_action_fn.epsilon_scheduler_fn`.
+  Every other miqn config still excludes NoisyNets, since noise leaking into the
+  Munchausen shaping policy's softmax is a real (if BTR-untested) risk the M-IQN paper
+  avoids by design;
+- **Synchronous training loop, run with `--backend sequential`**: BTR's own loop does
+  exactly one `learn()` call per vectorized env-step batch, no separate update-frequency
+  knob. `miqn_btr_atari.py` uses `TrainerSequential` (like `miqn_by571_atari.py`) with
+  `replay_ratio = 1/32` and `steps_per_rollout = 1`, so one rollout = one 32-env step
+  batch = one gradient update, matching BTR's cadence exactly instead of coop-rl's
+  async Ray-based decoupled collectors/trainer used by the other feedforward configs;
+- **Hard target-network copy every 500 steps**, matching BTR exactly. `TrainState` in
+  `agents/miqn.py` gained an opt-in `target_update_period` field
+  (`args_state_recover.target_update_period = 500`): when `> 0` it hard-copies the
+  online params into the target every `target_update_period` steps via
+  `optax.periodic_update`, instead of Polyak-blending via `tau` every step. Every
+  other miqn config leaves it at the default `0` and keeps the original Polyak path.
+- **BTR hyperparameters**: γ = 0.997, PER α = 0.2, grad-clip 10, batch 256, lr 1e-4
+  (matches BTR — same batch size, so there's no reason left to keep the repo's
+  lower Dopamine-convention lr here), Adam ε = `0.005 / batch_size` ≈ 1.953e-5 (BTR
+  hardcodes this formula, not a flag; the repo's other miqn configs keep the default
+  1e-5). PER importance-sampling β is a **constant 0.45**, not annealed — BTR's own
+  `--per_beta_anneal` flag defaults to off, so `self.per_beta` never leaves its
+  hardcoded 0.45 initial value; this replaces the config's previous `0.5 → 1.0` linear
+  anneal (a repo-convention value that was never actually BTR's own schedule). BTR's own
+  N = N' = K = 8 quantile-sample counts are now matched exactly too — **this
+  previously caused a flat, state-independent-Q failure mode for M-IQN** (see the
+  recurrent variant section below, and why `miqn_atari.py`/the recurrent config use
+  paper-parity N = N' = 64, K = 32 instead); this config accepts that risk to match
+  BTR as closely as possible, so watch training curves for a flat Q if using it.
+- **32 parallel envs** instead of BTR's default 64 — halved alongside the batch size
+  to fit the Impala encoder's 84×84 activations on 8GB GPUs, same rationale as the
+  batch-256 note above.
 
 ## The recurrent variant
 
@@ -193,16 +242,17 @@ training-policy rolling mean return rather than a separate near-greedy eval.
 | α (Munchausen coefficient) | 0.9 | paper Table 2 |
 | l₀ (log-policy clip) | −1 | paper Table 2 |
 | κ (quantile Huber) | 1.0 | IQN |
-| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`, btr, rec); 32, 32 (by571) | IQN / Dopamine (BTR's N=N'=8 trains flat); BY571 `-N 32` |
-| K (acting / shaping-policy samples) | 32 (all configs) | IQN / Dopamine (BTR's K=8 trains flat) |
+| N, N' (loss quantile samples) | 64, 64 (`miqn_atari`, rec); 32, 32 (by571); 8, 8 (btr) | IQN / Dopamine (BTR's N=N'=8 trains flat elsewhere); BY571 `-N 32`; BTR default (accepted risk) |
+| K (acting / shaping-policy samples) | 32 (`miqn_atari`, by571, rec); 8 (btr) | IQN / Dopamine (BTR's K=8 trains flat elsewhere); BTR default (accepted risk) |
 | n_cos (cosine embedding size) | 64 | IQN |
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
 | γ | 0.99 (`miqn_atari`); 0.997 (btr, rec) | paper; BTR |
-| PER priority exponent / IS β | 0.6 (`miqn_atari`) / 0.2 (btr); 0.5 → 1.0 | rainbow config; BTR |
+| PER priority exponent / IS β | 0.6 / 0.5→1.0 (`miqn_atari`, by571, rec); 0.2 / constant 0.45 (btr) | rainbow config; BTR (`per_beta_anneal` defaults off, so β never anneals) |
 | Rewards | clipped to [−1, 1] (`max_abs_reward = 1.0`) | paper Table 2 — matches `mdqn`'s Atari configs |
 | Batch size | 512 (`miqn_atari`); 256 (btr) | BTR value; also fits 8GB GPUs — the Impala encoder's 84×84 activations OOM at 512 |
-| Target update | Polyak τ = 0.005 | repo convention (paper: hard copy every 8000) |
-| Optimizer | Adam 6.25e-5, grad-clip 0.5 (`miqn_atari`) / 10 (btr, rec) | repo convention (paper: Adam 5e-5); BTR clip |
+| Target update | Polyak τ = 0.005 (`miqn_atari`, by571, rec); hard copy every 500 steps (btr) | repo convention (paper: hard copy every 8000); BTR |
+| Optimizer | Adam 6.25e-5 eps 1e-5, grad-clip 0.5 (`miqn_atari`); Adam 1e-4 eps 0.005/batch_size≈1.953e-5, grad-clip 10 (btr); grad-clip 10 (rec) | repo convention (paper: Adam 5e-5); BTR |
+| Exploration | ε-greedy, fixed (`miqn_atari`, rec); ε-greedy, annealed (by571); NoisyNets + ε-greedy annealed 1.0→0.01 over 2M frames then disabled (btr) | paper's M-IQN uses ε-greedy; BTR's own default (`--noisy 1`) |
 
 ## File map
 
@@ -210,7 +260,7 @@ training-policy rolling mean return rather than a separate near-greedy eval.
 |---|---|
 | M-IQN quantile-Huber losses | `src/coop_rl/base/loss.py` — `munchausen_quantile_q_learning`, `munchausen_quantile_q_learning_n_step` |
 | Update steps / epoch, action selection, TrainState | `src/coop_rl/agents/miqn.py` |
-| Implicit quantile dueling head | `src/coop_rl/networks/quantile.py` |
+| Implicit quantile dueling head (plain and `Noisy*`, btr only) | `src/coop_rl/networks/quantile.py` |
 | Network wrappers with `num_quantiles` arg | `src/coop_rl/networks/base.py` — `QuantileFeedForwardNetwork`, `QuantileRecurrentNetwork` |
 | Impala encoder + adaptive maxpool (BTR) | `src/coop_rl/networks/resnet.py` — `VisualResNetTorso`, `adaptive_max_pool` |
 | Post-GRU deep residual torso (rec only) | `src/coop_rl/networks/torso.py` — `DeepResidualTorso` |
