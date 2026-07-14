@@ -45,11 +45,11 @@ the paper (M-IQN keeps ε-greedy despite the naturally stochastic softmax policy
 
 | Extension | In this implementation | Why |
 |---|---|---|
-| n-step returns (n = 3) | ✓ | the paper's headline M-IQN uses 3-step returns; the Munchausen bonus is applied only at the anchor step s₀, matching BTR and BY571 (an earlier version shaped every window reward, which drove Q-values steadily negative and collapsed a healthy policy — see the BTR variant section) |
+| n-step returns (n = 3) | ✓ | the paper's headline M-IQN uses 3-step returns; the Munchausen term is applied only at the anchor step s₀, matching BTR and BY571 (an earlier version shaped every window reward and collapsed a healthy policy — see [Known caveats](#known-caveats)) |
 | Dueling | ✓ | per-quantile value/advantage streams, `z = v + a − mean(a)`; validated for Munchausen by DM-DQN (Gu et al. 2022) |
 | Prioritized replay | ✓ (feedforward only) | `BufferPrioritised` + importance-sampling weights, priorities = per-sequence quantile-Huber loss (same machinery as rainbow); the recurrent variant deliberately uses uniform replay (see below) |
 | Double Q | ✗ | inapplicable — the bootstrap is a softmax-policy expectation, there is no argmax to decouple |
-| Noisy nets | ✗ (by571, rec); ✓ (`miqn_atari`, btr) | BTR's own published agent (Clark et al. 2024, arXiv:2411.03820) combines Munchausen RL, IQN, and NoisyNets together — validated across the full Atari-60 suite (IQM 7.4, Table 1 / Appendix C.2) — so `miqn_atari.py` and `miqn_btr_atari.py` match that combination (`--noisy 1`, combined with annealed ε-greedy — see the BTR variant section); the paper's own vanilla M-IQN uses plain ε-greedy instead |
+| Noisy nets | ✗ (by571, rec); ✓ (`miqn_atari`, btr) | BTR's published agent (Clark et al. 2025, arXiv:2411.03820) combines Munchausen RL, IQN, and NoisyNets, validated across the full Atari-60 suite (IQM 7.4, Table 1 / Appendix C.2); `miqn_atari.py` and `miqn_btr_atari.py` match that combination — see the BTR variant section. The paper's own vanilla M-IQN uses plain ε-greedy |
 
 ## The network
 
@@ -78,11 +78,11 @@ shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusio
 
 - the shaping policy comes from the **target network's** `q̃` at the anchor
   observation `s₀` only (K = `num_quantile_samples` fractions, quantile mean taken in
-  f32 so bf16 quantization does not distort the τ = 0.03 softmax); the step-0 bonus is
-  added inside the loss from `q̃_target(s₀)`, and intermediate n-step rewards are
-  **not** shaped — matching BTR and BY571, whose n-step targets carry the addon only
-  at s_t (BTR takes it from the online net instead of the target net; that residual
-  difference is deliberate — BY571 and the M-DQN paper both use the target net);
+  f32 so bf16 quantization does not distort the τ = 0.03 softmax); the Munchausen term
+  is added inside the loss from `q̃_target(s₀)`, and intermediate n-step rewards are
+  **not** shaped — matching BTR and BY571, whose n-step targets carry the term only
+  at s_t (see [Known caveats](#known-caveats) for the collapse this convention
+  prevents, and for the deliberate target-net-vs-online-net difference from BTR);
 - the loss `munchausen_quantile_q_learning` (`base/loss.py`) draws N =
   `num_tau_samples` online fractions at `s₀` and N' = `num_tau_prime_samples` target
   fractions at `s_n`, builds the per-target-quantile Munchausen target, and returns
@@ -123,22 +123,23 @@ plain heads never call `self.make_rng("noise")`, so the extra stream is simply u
   already used by `configs/rainbow_atari.py`) instead of `MLPTorso`/`nn.Dense`; the IQN
   cosine-embedding fusion Dense stays plain, matching BTR's own `networks.py` (its
   `cos_embedding` is a bare `nn.Linear`, never wrapped in its noisy/plain switch). A
-  `"noise"` rng stream is threaded through `create_train_state`, `get_select_action_batch_fn`,
-  and `get_update_step` in `agents/miqn.py`, mirroring `agents/rainbow.py`'s existing
-  convention exactly. `sigma_zero = 0.5` (the Fortunato-paper/class default, not
-  `rainbow_atari.py`'s tuned `0.25`). BTR's own exploration combines NoisyNets with an
-  **annealed ε-greedy for the first half of training**, then disables it (`ε = 0` from
-  `env_frames // 2` onward), leaving noisy weights as the only exploration source.
-  BTR's `EpsilonGreedy` subtracts `(ε − 0.01) / eps_steps` per stored transition
-  (`eps_steps = 2M`), an exponential-gap decay `ε(k) = 0.01 + 0.99·exp(−k/2e6)` —
-  ~0.37 at 2M, ~0.14 at 4M, ~0.03 at 8M frames — which `miqn_btr_atari.py` reproduces
-  with a plain Python schedule in `args_get_select_action_fn.epsilon_scheduler_fn`.
-  `miqn_atari.py` keeps a linear `1.0 → 0.01` over 2M frames via `optax.join_schedules`
-  instead: in its async setup there is no single global frame counter anyway (each of
-  the `num_collectors` parallel `CollectorDQNUniform` Ray actors anneals independently
-  over its own local frame count), so it is an approximation either way.
-  `miqn_by571_atari.py`/`miqn_rec_atari.py` still exclude NoisyNets,
-  matching the M-IQN paper's own plain ε-greedy;
+  `"noise"` rng stream is threaded through `create_train_state`,
+  `get_select_action_batch_fn`, and `get_update_step` in `agents/miqn.py`, mirroring
+  `agents/rainbow.py`'s existing convention exactly. `sigma_zero = 0.5` (the
+  Fortunato-paper/class default, not `rainbow_atari.py`'s tuned `0.25`).
+  `miqn_by571_atari.py`/`miqn_rec_atari.py` exclude NoisyNets, matching the M-IQN
+  paper's own plain ε-greedy;
+- **Exploration schedule**: BTR combines NoisyNets with an **annealed ε-greedy for the
+  first half of training**, then disables it (`ε = 0` from `env_frames // 2` onward),
+  leaving noisy weights as the only exploration source. BTR's `EpsilonGreedy` subtracts
+  `(ε − 0.01) / eps_steps` per stored transition (`eps_steps = 2M`) — an exponential-gap
+  decay `ε(k) = 0.01 + 0.99·exp(−k/2e6)`, ~0.37 at 2M, ~0.14 at 4M, ~0.03 at 8M frames.
+  `miqn_btr_atari.py` reproduces it with a plain Python schedule in
+  `args_get_select_action_fn.epsilon_scheduler_fn`. `miqn_atari.py` keeps a linear
+  `1.0 → 0.01` over 2M frames via `optax.join_schedules` instead: in its async setup
+  there is no single global frame counter anyway (each of the `num_collectors` parallel
+  `CollectorDQNUniform` Ray actors anneals independently over its own local frame
+  count), so it is an approximation either way;
 - **Trainer/collector wiring is the one deliberate difference between the two configs**:
   `miqn_btr_atari.py` uses `TrainerSequential` (run with `--backend sequential`), a
   synchronous single-thread loop reproducing BTR's own exact interleaving — one
@@ -174,25 +175,6 @@ plain heads never call `self.make_rng("noise")`, so the extra stream is simply u
 - **32 parallel envs** instead of BTR's default 64 — halved alongside the batch size
   to fit the Impala encoder's 84×84 activations on 8GB GPUs, same rationale as the
   batch-256 note above.
-
-**Intermediate-shaping collapse (fixed).** An earlier version of `get_update_step`
-added the Munchausen bonus to every intermediate reward of the 3-step window on top of
-the step-0 addon. Checkpoint forensics on a Breakout run showed the failure directly:
-the greedy policy (ε = 0.01 eval) climbed to a mean return of 9.3 by 20k updates, then
-collapsed to 0.9 by 30k while mean Q dove −2.2 → −9.0 → −12.9 — impossible under
-clipped rewards in [0, 1] and only explicable by the extra negative shaping (each
-intermediate bonus is `α·clip(τ·ln π(a|s), −1, 0)`, and buffer actions are mostly
-random early, so the penalties compound without the fixed-point compensation the
-step-0 addon gets through the bootstrap). BTR and BY571 shape only s_t; the
-implementation now matches (both the feedforward window assembly and the recurrent
-`munchausen_quantile_q_learning_n_step` recursion, where only the final unroll level —
-the anchor's own reward — carries the addon).
-
-**Resuming from a checkpoint.** `--orbax-checkpoint-dir` restores the `TrainState`
-only (params, target params, optimizer state, update-step counter, rng). The replay
-buffer and PER priorities, the local frames counter, and the ε-schedule counter (a
-Python closure in `get_select_action_batch_fn`) all restart from zero — a resumed run
-re-anneals ε from 1.0 and re-warms the buffer before its first update.
 
 ## The recurrent variant
 
@@ -269,6 +251,65 @@ wrapper in `base/environment.py` presses FIRE then action 2 after every reset,
 like the classic `FireResetEnv`). Remaining (minor) deviations: flax zero-init
 biases vs PyTorch's `U(±1/√fan_in)` biases, and "evaluation" being the
 training-policy rolling mean return rather than a separate near-greedy eval.
+
+## Known caveats
+
+**Intermediate-shaping collapse (fixed).** An earlier version of `get_update_step`
+added the Munchausen term to every intermediate reward of the 3-step window on top of
+the anchor-step application. Checkpoint forensics on a Breakout run showed the failure
+directly: the greedy policy (ε = 0.01 eval) climbed to a mean return of 9.3 by 20k
+updates, then collapsed to 0.9 by 30k while mean Q dove −2.2 → −9.0 → −12.9 —
+impossible under clipped rewards in [0, 1] and only explicable by the extra negative
+shaping (each intermediate term is `α·clip(τ·ln π(a|s), −1, 0)`, and buffer actions
+are mostly random early, so the penalties compound without the fixed-point
+compensation the anchor-step term gets through the bootstrap). BTR and BY571 shape
+only s_t; the implementation now matches — the feedforward window assembly, the
+recurrent `munchausen_quantile_q_learning_n_step` recursion (only the final unroll
+level, the anchor's own reward, carries the term), and the mdqn counterparts (see
+`docs/mdqn.md`, Known caveats).
+
+**Resuming from a checkpoint.** `--orbax-checkpoint-dir` restores the `TrainState`
+only (params, target params, optimizer state, update-step counter, rng). The replay
+buffer and PER priorities, the local frames counter, and the ε-schedule counter (a
+Python closure in `get_select_action_batch_fn`) all restart from zero — a resumed run
+re-anneals ε from 1.0 and re-warms the buffer before its first update. Judge training
+health by a near-greedy eval on checkpoints, not the ε-mixed training return.
+
+**Remaining divergences from BTR** (deliberate; roughly in ablation-priority order if
+a run misbehaves):
+
+1. **Munchausen term from the target net.** BTR computes `τ·ln π` from the *online*
+   net; this repo uses the target net, matching the M-DQN paper and BY571. A one-line
+   change in `get_update_step` — the first ablation to try.
+2. **bf16 network compute** (BTR is fp32 end-to-end). Only the shaping-sensitive path
+   — the quantile mean feeding the τ = 0.03 softmax — is forced to f32; TD errors and
+   priorities still come from bf16 activations. A full-fp32 run (batch 128 on 8GB
+   GPUs) is the fallback if the flat-Q mode reappears.
+3. **Unvalidated combination.** Paper-parity quantile counts (N = N' = 64, K = 32)
+   + NoisyNets + hard-copy targets + Impala encoder is a combination no reference has
+   run: BTR's own result used N = 8 (which trains flat here), and the paper's M-IQN
+   used no NoisyNets.
+4. **Sticky actions off** (`repeat_action_probability = 0.0`; BTR defaults to 0.25).
+   The env is easier, so returns are not comparable to BTR's published numbers.
+5. **PER priority metric**: priorities are the quantile-Huber loss value; BTR uses
+   |TD| summed over online quantiles, averaged over target quantiles. A different
+   sampling distribution, judged low-impact.
+6. **Update budget**: `replay_ratio = 1/64` at `env_frames = 32M` yields ~500k
+   gradient steps vs BTR's ~781k over 200M frames. Raise `env_frames` if a healthy
+   run is still improving at the end.
+
+**Other caveats:**
+
+- **Truncation at the window's first step degenerates** (feedforward path, shared
+  with mdqn — see `docs/mdqn.md`, Known caveats): the target reduces to a
+  self-regression on the soft value of `o_0`. At most one window per truncation,
+  rare on Atari, left as is.
+- **Noise leaks into the shaping policy**: the target-net pass at s₀ runs with
+  sampled NoisyNet noise, so `π = softmax(q̃/τ)` — and hence the Munchausen term —
+  is stochastic. BTR combines NoisyNets and Munchausen the same way, so this is
+  validated in practice.
+- **Host RAM**: the 1M-transition buffer grows to ~28GB of uint8 observations;
+  swapping silently craters updates/s.
 
 ## Hyperparameters
 
