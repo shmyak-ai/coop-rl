@@ -278,21 +278,12 @@ def get_update_step(
             q_t_target = q_target_seq[batch_indices, indices_done]
             a_tm1 = sample.action[:, 0]
 
-            # Munchausen reward shaping for the intermediate steps: each reward gets
-            # its own alpha * clip(tau * ln pi(a|s), l0, 0) bonus. Step 0's bonus is
-            # added inside munchausen_q_learning.
-            log_pi = entropy_temperature * jax.nn.log_softmax(
-                q_target_seq / entropy_temperature, axis=-1
-            )
-            action_one_hot = jax.nn.one_hot(sample.action, q_target_seq.shape[-1])
-            munchausen_bonus = jnp.clip(
-                jnp.sum(action_one_hot * log_pi, axis=-1), clip_value_min, 0.0
-            )
+            # Munchausen shaping applies only at the anchor step: the step-0 addon
+            # alpha * clip(tau * ln pi(a|s), l0, 0) is added inside
+            # munchausen_q_learning from q_tm1_target. Intermediate n-step rewards
+            # are not shaped (M-DQN paper, BTR, BY571).
             step_positions = jnp.arange(length_traj)[jnp.newaxis, :]
             r_seq = jnp.clip(sample.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
-            r_seq = r_seq + munchausen_coefficient * munchausen_bonus * (
-                step_positions >= 1
-            ).astype(jnp.float32)
             # The cut transition's reward is part of the bootstrap value, unless it
             # terminated the episode (then it is the final reward, with no bootstrap).
             cut_mask = (step_positions == indices_done[:, jnp.newaxis]) & ~terminated_at_cut[

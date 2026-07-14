@@ -11,10 +11,15 @@ implementation of the paper's Eq. (7), and all three Munchausen-specific hyperpa
 match the paper exactly (τ = 0.03, α = 0.9, l₀ = −1), as do the loss (Huber) and reward
 clipping ([−1, 1]). The configs deviate from the paper in a few deliberate ways (n-step
 returns in the feedforward config, soft target updates, deep residual torsos) — catalogued
-in [Differences from the paper](#differences-from-the-paper). Three correctness issues found
-in the original audit (n-step target misalignment, Munchausen bonus only at the window's
-first step, one TD error per recurrent sequence) have since been fixed; see
-[Known caveats](#known-caveats) for what remains.
+in [Differences from the paper](#differences-from-the-paper). Two correctness issues found
+in the original audit (n-step target misalignment, one TD error per recurrent sequence)
+have since been fixed. A third audit finding — the Munchausen bonus applied only at the
+window's first step — was initially "fixed" by shaping every intermediate reward, but that
+change was reversed on 2026-07-14: the same pattern in M-IQN was forensically shown to
+drive mean Q unboundedly negative and collapse the policy (see `docs/miqn.md`,
+"Intermediate-shaping collapse"), and no reference implementation (M-DQN paper, BTR,
+BY571) shapes intermediate n-step rewards. See [Known caveats](#known-caveats) for what
+remains.
 
 ## The idea in one paragraph
 
@@ -170,10 +175,12 @@ n-step Munchausen target per window. With the storage convention "index t holds
 `(o_t, a_t, r_t, term_t)` where `r_t` was produced by `a_t` at `o_t`", the window is cut
 at the first done transition, index n (or the last transition if none):
 
-- **Reward sum**: `Σ_{i<n} γ^i r̃_i`, where each intermediate reward carries its own
-  Munchausen bonus, `r̃_i = r_i + α·clip(τ ln π(a_i|o_i), l₀, 0)` — M-RL is reward
-  shaping, so with n-step returns every reward in the window is shaped, not just the
-  first (step 0's bonus is added inside `munchausen_q_learning`).
+- **Reward sum**: `Σ_{i<n} γ^i r_i`, with the Munchausen bonus
+  `α·clip(τ ln π(a_0|o_0), l₀, 0)` applied **only at the anchor step 0** (added inside
+  `munchausen_q_learning`). Intermediate rewards are *not* shaped — matching the M-DQN
+  paper, BTR and BY571. Shaping every intermediate reward compounds negative penalties
+  without the fixed-point compensation the step-0 addon gets through the bootstrap, and
+  was forensically shown to collapse M-IQN training (see `docs/miqn.md`).
 - **Bootstrap**: `γⁿ · τ·logsumexp(q_target(o_n)/τ)`, discounted by γⁿ, not γ. The cut
   transition's own reward `r_n` is *excluded* from the sum because it is part of the
   bootstrap value.
@@ -203,11 +210,12 @@ error at every learn step** that has n successor steps inside the window (R2D2-s
 dense targets; `n_steps` is configurable, default 3): `q_online[:, t]` regresses onto
 
 ```
-Σ_{i<n} γ^i·r̃_{t+i} + γ^n·τ·logsumexp(q_target[:, t+n]/τ)
+r̃_t + Σ_{0<i<n} γ^i·r_{t+i} + γ^n·τ·logsumexp(q_target[:, t+n]/τ)
 ```
 
-where `r̃ = r + α·clip(τ ln π(a|s), l₀, 0)` is the Munchausen-shaped reward, applied to
-every step. An interior termination stops the sum after that step's reward (no
+where `r̃_t = r_t + α·clip(τ ln π(a_t|s_t), l₀, 0)` is the Munchausen-shaped reward,
+applied only at the anchor step t — intermediate rewards inside the n-step window stay
+unshaped. An interior termination stops the sum after that step's reward (no
 bootstrap); an interior truncation at offset k bootstraps `γᵏ·softV` from the truncated
 step; truncated anchors are masked out of the mean. Each 30-step sequence yields
 `learn_length − n_steps` TD errors (17 at n = 3). Note n = 1 matches the paper's 1-step
@@ -221,7 +229,7 @@ Deliberate or benign deviations in the coop-rl configs:
 
 | coop-rl | Paper | Impact |
 |---|---|---|
-| n-step returns (4-step ff; configurable `n_steps` = 3 rec) | 1-step only | the paper's headline result avoids n-step; here every reward in the window gets its own Munchausen bonus (reward shaping), keeping the n-step target consistent; recurrent `n_steps = 1` recovers the paper's operator |
+| n-step returns (4-step ff; configurable `n_steps` = 3 rec) | 1-step only | the paper's headline result avoids n-step; the Munchausen bonus applies only at the anchor step (as in BTR/BY571) — shaping intermediate rewards was tried and collapsed training (see `docs/miqn.md`); recurrent `n_steps = 1` recovers the paper's operator |
 | Polyak target update, τ = 0.005 per step | hard copy every 8000 steps | modern smooth-target choice, similar effective timescale |
 | Adam lr 6.25e-5, eps 1e-5, grad-clip 0.5 (ff) / 10 (rec, per BTR) | Adam lr 5e-5, no clipping | minor |
 | γ = 0.99 (ff) / 0.997 (rec, per BTR) | γ = 0.99 | longer effective horizon in the recurrent config |
@@ -230,11 +238,13 @@ Deliberate or benign deviations in the coop-rl configs:
 
 ### Known caveats
 
-Three issues found in the original audit — misaligned n-step targets (last reward
-double-counted, bootstrap discounted γ instead of γⁿ), the Munchausen bonus applied only
-to the window's first step, and the recurrent variant emitting a single TD error per
-sequence — have been fixed as described above (the n-step alignment fix is also ported
-to `agents/dqn.py` and `agents/rainbow.py`). What remains:
+Two issues found in the original audit — misaligned n-step targets (last reward
+double-counted, bootstrap discounted γ instead of γⁿ) and the recurrent variant emitting
+a single TD error per sequence — have been fixed as described above (the n-step alignment
+fix is also ported to `agents/dqn.py` and `agents/rainbow.py`). The audit's third finding
+(bonus only at the window's first step) turned out to be correct behavior, not a bug: the
+every-step-shaping "fix" was reversed on 2026-07-14 after it was shown to collapse M-IQN
+training. What remains:
 
 1. **Truncation at the window's first step** (feedforward path) degenerates: with no
    rewards to accumulate the target is just `softV(o_0)` plus the Munchausen term — a
@@ -250,7 +260,7 @@ DQN improvements compose with it — but not all of them are worth it:
 | Extension | Compatible? | Status in coop-rl |
 |---|---|---|
 | **Dueling** (Q = V + A − mean A) | Yes — pure head change, the loss never looks inside; DM-DQN (Gu et al. 2022) found it converges faster than both M-DQN and Dueling DQN | **Enabled**: both mdqn configs use `DuelingQNetworkHead` (`networks/dueling.py`) |
-| **n-step returns** | Yes — Munchausen is reward shaping, so every reward in the window gets its own bonus | Enabled (see above) |
+| **n-step returns** | Yes — with the bonus at the anchor step only (BTR/BY571 convention); shaping every window reward destabilizes training | Enabled (see above) |
 | **Double Q** | Not applicable — the bootstrap is `τ·logsumexp(q_target/τ)` (a soft max, no argmax to decouple), and the Munchausen penalty is already conservative | — |
 | **Prioritized replay** | Yes, but needs a prioritized buffer + importance-sampling weights in the loss; the paper beat C51 with uniform replay | **Enabled in M-IQN** (`BufferPrioritised`); mdqn stays uniform |
 | **Noisy nets** | Possible (`NoisyLinear` exists for Rainbow), but the noise leaks into the shaping policy `π = softmax(q_target/τ)`, and M-DQN's entropy term already aids exploration | Not recommended |

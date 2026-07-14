@@ -170,14 +170,16 @@ def munchausen_q_learning_n_step(
     """N-step Munchausen Q-learning over (batch, time, ...) learn-window sequences.
 
     Every timestep t in [0, T - n_steps) anchors an n-step target
-    sum_{i<n} gamma^i * shaped_r[t+i] + gamma^n * soft_v[t+n], where the
-    Munchausen bonus is reward shaping applied to every step's reward. An
-    interior termination stops the sum after that step's reward (no bootstrap);
+    sum_{i<n} gamma^i * r[t+i] + gamma^n * soft_v[t+n], where the Munchausen
+    bonus shapes only the anchor step's reward r[t] (intermediate rewards are
+    not shaped, matching the M-DQN paper, BTR and BY571). An interior
+    termination stops the sum after that step's reward (no bootstrap);
     an interior truncation at offset k bootstraps gamma^k * soft_v from the
     truncated step. Truncated anchors are masked out of the mean.
     """
     action_one_hot = jax.nn.one_hot(a_t, q_target.shape[-1])
-    # Munchausen reward shaping: r + alpha * clip(tau * ln pi(a|s), l0, 0).
+    # Munchausen addon r + alpha * clip(tau * ln pi(a|s), l0, 0), applied only at
+    # the anchor step (the final unroll level below).
     munchausen_term = entropy_temperature * jax.nn.log_softmax(
         q_target / entropy_temperature, axis=-1
     )
@@ -191,13 +193,16 @@ def munchausen_q_learning_n_step(
     terminated = terminated.astype(jnp.float32)
     truncated = truncated.astype(jnp.float32)
     # Backward recursion: G(t, 0) = soft_v[t]; a truncated step's reward and
-    # successor are unusable, so bootstrap there instead.
+    # successor are unusable, so bootstrap there instead. Only the final unroll
+    # level adds the anchor step's own reward, so only it carries the Munchausen
+    # addon (intermediate n-step rewards are not shaped).
     target_q = soft_v
     for h in range(1, n_steps + 1):
+        r_h = shaped_r if h == n_steps else r_t
         target_q = jnp.where(
             truncated[:, :-h] == 1,
             soft_v[:, :-h],
-            shaped_r[:, :-h] + gamma * (1.0 - terminated[:, :-h]) * target_q[:, 1:],
+            r_h[:, :-h] + gamma * (1.0 - terminated[:, :-h]) * target_q[:, 1:],
         )
     target_q = jax.lax.stop_gradient(target_q)
 
