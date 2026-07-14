@@ -415,9 +415,16 @@ def get_update_step(
             q_loss = jnp.mean(importance_weights * batch_q_error)
             new_priorities = batch_q_error + 1e-5
 
+            q_online = jnp.mean(z_tm1, axis=1)
             loss_info = {
                 "loss": q_loss,
                 "priorities": new_priorities,
+                "q_online_mean": jnp.mean(q_online),
+                # Std across states of the per-state mean q: a flat,
+                # state-independent Q collapses this toward zero.
+                "q_state_std": jnp.std(jnp.mean(q_online, axis=-1)),
+                "priority_mean": jnp.mean(new_priorities),
+                "priority_max": jnp.max(new_priorities),
             }
 
             return q_loss, loss_info
@@ -439,28 +446,22 @@ def get_update_step(
         train_state, key = train_state.get_key()
         policy_key, policy_noise_key, loss_key = jax.random.split(key, num=3)
 
-        # Munchausen reward shaping for the intermediate steps: each reward gets
-        # its own alpha * clip(tau * ln pi(a|s), l0, 0) bonus, with pi computed from
-        # the target network's mean-quantile q-values. Step 0's bonus is added
-        # inside munchausen_quantile_q_learning from q_tm1_target.
+        # Munchausen policy pass at the anchor observation only: the step-0 addon
+        # alpha * clip(tau * ln pi(a|s), l0, 0) is added inside
+        # munchausen_quantile_q_learning from q_tm1_target. Intermediate n-step
+        # rewards are not shaped, matching BTR and BY571.
         obs = _preprocess(sample.obs)
-        _, z_target_seq, _ = apply_fn(
+        _, z_target_tm1, _ = apply_fn(
             train_state.target_params,
-            obs,
+            jax.tree_util.tree_map(lambda x: x[:, 0], obs),
             num_quantile_samples,
             rngs={"quantiles": policy_key, "noise": policy_noise_key},
         )
-        q_target_seq = jnp.mean(z_target_seq, axis=-2).astype(jnp.float32)
-        log_pi = entropy_temperature * jax.nn.log_softmax(
-            q_target_seq / entropy_temperature, axis=-1
-        )
-        action_one_hot = jax.nn.one_hot(sample.action, q_target_seq.shape[-1])
-        munchausen_bonus = jnp.clip(jnp.sum(action_one_hot * log_pi, axis=-1), clip_value_min, 0.0)
+        # The mean feeds a softmax at tau = 0.03; compute it in f32 so bf16
+        # quantization does not distort the shaping policy.
+        q_tm1_target = jnp.mean(z_target_tm1.astype(jnp.float32), axis=-2)
         step_positions = jnp.arange(length_traj)[jnp.newaxis, :]
         r_seq = jnp.clip(sample.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
-        r_seq = r_seq + munchausen_coefficient * munchausen_bonus * (step_positions >= 1).astype(
-            jnp.float32
-        )
         # The cut transition's reward is part of the bootstrap value, unless it
         # terminated the episode (then it is the final reward, with no bootstrap).
         cut_mask = (step_positions == indices_done[:, jnp.newaxis]) & ~terminated_at_cut[
@@ -482,7 +483,7 @@ def get_update_step(
             reward=n_step_reward,
             discount=n_step_discount,
             next_obs=jax.tree_util.tree_map(lambda x: x[batch_indices, indices_done], obs),
-            q_tm1_target=q_target_seq[:, 0],
+            q_tm1_target=q_tm1_target,
             info={},
         )
 
@@ -500,10 +501,22 @@ def get_update_step(
         )
         train_state = train_state.apply_gradients(grads=q_grads)
 
+        # Step-0 Munchausen addon, recomputed for monitoring: pinned near
+        # clip_value_min * munchausen_coefficient means the shaping saturates.
+        log_pi_tm1 = entropy_temperature * jax.nn.log_softmax(
+            q_tm1_target / entropy_temperature, axis=-1
+        )
+        action_one_hot = jax.nn.one_hot(sample.action[:, 0], q_tm1_target.shape[-1])
+        munchausen_addon = jnp.clip(
+            jnp.sum(action_one_hot * log_pi_tm1, axis=-1), clip_value_min, 0.0
+        )
+
         # PACK LOSS INFO
         info = {
             **q_loss_info,
             "importance_sampling_exponent": importance_sampling_exponent,
+            "munchausen_addon_mean": jnp.mean(munchausen_addon),
+            "grad_norm": optax.global_norm(q_grads),
         }
 
         return train_state, info

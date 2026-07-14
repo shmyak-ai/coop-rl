@@ -14,4 +14,6 @@ class EpsilonGreedy:
         key1, key2 = jax.random.split(seed)
         greedy = jnp.argmax(self.preferences, axis=-1)
         random = jax.random.randint(key2, greedy.shape, 0, self.preferences.shape[-1])
-        return jnp.where(jax.random.uniform(key1) < self.epsilon, random, greedy)
+        return jnp.where(
+            jax.random.uniform(key1, shape=greedy.shape) < self.epsilon, random, greedy
+        )

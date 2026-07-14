@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import jax.numpy as jnp
 import ml_collections
 import numpy as np
@@ -39,7 +41,8 @@ from coop_rl.workers.trainers import TrainerSequential
 def get_config():
     # M-IQN with the "Beyond The Rainbow" (arXiv:2411.03820) encoder and hyperparameters:
     # Impala ResNet (2x width) + LayerNorm + adaptive maxpool, gamma 0.997, PER alpha 0.2,
-    # grad clip 10, 8 quantile samples. LayerNorm replaces BTR's spectral norm.
+    # grad clip 10. LayerNorm replaces BTR's spectral norm. Paper-parity quantile sample
+    # counts (N = N' = 64, K = 32) are used instead of BTR's own 8 — see docs/miqn.md.
     # Uses TrainerSequential (run with --backend sequential): BTR's own loop does
     # exactly one gradient update per vectorized env-step batch, so this reproduces
     # that synchronous collect/train coupling instead of coop-rl's async Ray backend.
@@ -55,9 +58,12 @@ def get_config():
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
     num_envs = 32
-    replay_ratio = 1 / num_envs  # BTR: exactly one learn() call per env-step batch
-    # Preserves the previous async config's 1,000,000-gradient-update budget:
-    # env_frames * replay_ratio == 1,000,000 updates.
+    # BTR: one learn() call per 64-env step batch = one gradient update per 64
+    # transitions. With 32 envs that is one update per two rollouts (the trainer's
+    # update_debt accumulator handles the fractional ratio).
+    replay_ratio = 1 / 64
+    # env_frames * replay_ratio == 500,000 updates (BTR does 781k over its full
+    # 200M-frame run).
     env_frames = 32_000_000
     batch_size = 256
 
@@ -114,7 +120,9 @@ def get_config():
     config.args_buffer.sample_batch_size = batch_size
     config.args_buffer.sample_sequence_length = 4  # 3-step returns, as the paper's M-IQN
     config.args_buffer.period = 1
-    config.args_buffer.min_length = 1000
+    # BTR min_sampling_size: 200,000 transitions before the first gradient update
+    # (flashbax min_length is per time axis: 6250 * 32 add rows = 200k transitions).
+    config.args_buffer.min_length = 6250
     config.args_buffer.max_size = 1000000  # in transitions
     config.args_buffer.priority_exponent = 0.2  # BTR
     config.args_buffer.observation_shape = observation_shape
@@ -141,8 +149,8 @@ def get_config():
     config.args_trainer.workdir = workdir
     config.args_trainer.env_frames = env_frames
     config.args_trainer.replay_ratio = replay_ratio
-    config.args_trainer.summary_writing_period = 100  # in gradient updates
-    config.args_trainer.save_period = 1000  # orbax checkpointing, in gradient updates
+    config.args_trainer.summary_writing_period = 1000  # in gradient updates
+    config.args_trainer.save_period = 10000  # orbax checkpointing, in gradient updates
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step
@@ -153,11 +161,11 @@ def get_config():
     config.args_trainer.args_get_update_step.munchausen_coefficient = 0.9
     config.args_trainer.args_get_update_step.clip_value_min = -1.0
     config.args_trainer.args_get_update_step.quantile_huber_kappa = 1.0
-    # BTR's own N = N' = K = 8 (see docs/miqn.md for the previously-observed flat-Q
-    # failure mode risk at this sample count with M-IQN).
-    config.args_trainer.args_get_update_step.num_tau_samples = 8
-    config.args_trainer.args_get_update_step.num_tau_prime_samples = 8
-    config.args_trainer.args_get_update_step.num_quantile_samples = 8
+    # BTR's own N = N' = K = 8 trains flat for M-IQN (see docs/miqn.md) — paper-parity
+    # counts used instead, like miqn_atari.py/miqn_rec_atari.py.
+    config.args_trainer.args_get_update_step.num_tau_samples = 64
+    config.args_trainer.args_get_update_step.num_tau_prime_samples = 64
+    config.args_trainer.args_get_update_step.num_quantile_samples = 32
     config.args_trainer.args_get_update_step.max_abs_reward = 1.0
     # BTR's own per_beta_anneal defaults to off, so its IS exponent is a fixed 0.45,
     # not annealed.
@@ -193,19 +201,20 @@ def get_config():
     config.args_trainer.args_collector.get_select_action_fn = get_select_action_batch_fn
     config.args_trainer.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_trainer.args_collector.args_get_select_action_fn.apply_fn = None
-    config.args_trainer.args_collector.args_get_select_action_fn.num_quantile_samples = 8  # BTR
+    config.args_trainer.args_collector.args_get_select_action_fn.num_quantile_samples = 32
+
     # BTR combines NoisyNets with annealed eps-greedy for the first half of training,
-    # then relies on noisy weights alone: eps 1.0 -> 0.01 over 2,000,000 frames (BTR's
-    # own eps_steps), held at 0.01 until env_frames // 2, then disabled (eps = 0.0).
+    # then relies on noisy weights alone. BTR's EpsilonGreedy subtracts
+    # (eps - 0.01) / 2e6 per transition (eps_steps = 2M), i.e. an exponential-gap
+    # decay eps(k) = 0.01 + 0.99 * exp(-k / 2e6): ~0.37 at 2M, ~0.14 at 4M, ~0.03 at
+    # 8M frames. Disabled (eps = 0.0) from env_frames // 2 on, as in BTR.
+    def _btr_epsilon_schedule(step_count: int) -> float:
+        if step_count >= env_frames // 2:
+            return 0.0
+        return 0.01 + 0.99 * math.exp(-step_count / 2_000_000)
+
     config.args_trainer.args_collector.args_get_select_action_fn.epsilon_scheduler_fn = (
-        optax.join_schedules(
-            schedules=[
-                optax.linear_schedule(init_value=1.0, end_value=0.01, transition_steps=2_000_000),
-                optax.constant_schedule(0.01),
-                optax.constant_schedule(0.0),
-            ],
-            boundaries=[2_000_000, env_frames // 2],
-        )
+        _btr_epsilon_schedule
     )
     config.args_trainer.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
         x.astype(jnp.float32) / 255.0

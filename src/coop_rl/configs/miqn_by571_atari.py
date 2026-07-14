@@ -152,7 +152,7 @@ def get_config():
     config.args_trainer.env_frames = env_frames
     config.args_trainer.replay_ratio = replay_ratio
     config.args_trainer.summary_writing_period = 1000  # in gradient updates
-    config.args_trainer.save_period = 50000  # orbax checkpointing, in gradient updates
+    config.args_trainer.save_period = 10000  # orbax checkpointing, in gradient updates
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step

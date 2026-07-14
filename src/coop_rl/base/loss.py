@@ -260,13 +260,16 @@ def munchausen_quantile_q_learning_n_step(
     terminated = terminated.astype(jnp.float32)
     truncated = truncated.astype(jnp.float32)
     # Backward recursion over the N' quantile axis: G(t, 0) = soft_z[t]; a truncated
-    # step's reward and successor are unusable, so bootstrap there instead.
+    # step's reward and successor are unusable, so bootstrap there instead. Only the
+    # final unroll level adds the anchor step's own reward, so only it carries the
+    # Munchausen addon (BTR/BY571: intermediate n-step rewards are not shaped).
     target = soft_z
     for h in range(1, n_steps + 1):
+        r_h = shaped_r if h == n_steps else r_t
         target = jnp.where(
             truncated[:, :-h, jnp.newaxis] == 1,
             soft_z[:, :-h],
-            shaped_r[:, :-h, jnp.newaxis]
+            r_h[:, :-h, jnp.newaxis]
             + gamma * (1.0 - terminated[:, :-h, jnp.newaxis]) * target[:, 1:],
         )
     target = jax.lax.stop_gradient(target)

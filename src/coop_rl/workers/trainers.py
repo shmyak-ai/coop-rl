@@ -23,6 +23,7 @@ from queue import Empty, Full, Queue
 
 import flax
 import jax
+import numpy as np
 import orbax.checkpoint as ocp
 import psutil
 
@@ -405,10 +406,14 @@ class TrainerSequential:
                 elapsed = time.monotonic() - window_start
                 updates_per_second = (updates - last_summary_updates) / elapsed
                 scalars = {
-                    "trainer/loss": float(info["loss"]),
                     "trainer/updates_per_second": updates_per_second,
                     "trainer/env_frames": frames,
                 }
+                # All scalar diagnostics from the update step (skips per-sample
+                # arrays such as the PER priorities).
+                for name, value in info.items():
+                    if np.ndim(value) == 0:
+                        scalars[f"trainer/{name}"] = float(value)
                 returns = self.collector.completed_returns
                 mean_return = sum(returns) / len(returns) if returns else float("nan")
                 if returns:
