@@ -177,18 +177,42 @@ plain heads never call `self.make_rng("noise")`, so the extra stream is simply u
 
 ## The recurrent variant
 
-`miqn_rec_atari.py` is the R2D2-style counterpart, structured exactly like the recurrent
+`miqn_rec_atari.py` is the R2D2-style counterpart, structured like the recurrent
 MDQN (GRU instead of frame stacking, per-step hidden states in the buffer, 10-step
-stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). It uses the
-same BTR-style Impala encoder and hyperparameter alignment as `miqn_btr_atari.py`
-(γ = 0.997, grad-clip 10) and the same paper-parity quantile sample counts
+stop-gradient burn-in + 20-step learn window, configurable `n_steps = 3`). It shares
+`miqn_atari.py`'s full BTR hyperparameter alignment: Impala encoder, γ = 0.997,
+grad-clip 10, Adam 1e-4 with eps 0.005/batch (batch = 16 sequences × 20 learn steps
+= 320 transitions per update), noisy dueling head (σ₀ = 0.5) plus BTR's annealed
+ε-greedy schedule (disabled from `env_frames // 2`), hard target copy every 500
+updates, 200k-transition replay warm-up, and the 500k-update budget
+(`env_frames // 64`). Quantile sample counts are paper-parity
 (N = N' = 64, K = 32 — BTR's own N = N' = K = 8 trains flat for M-IQN in both the
 recurrent and feedforward variants, see the BTR variant section), with
 `hidden_sizes = (512,)` as a Dense
 bridge into the GRU — feeding the raw 2304-dim flatten into GRU(512) would ~3× the RNN
-input parameters for no BTR-grounded reason. The GRU output then passes through a
+input parameters for no BTR-grounded reason.
+
+Two recurrence details follow MEME ("Human-level Atari 200x faster",
+[arXiv:2209.07550](https://arxiv.org/abs/2209.07550)):
+
+- **Skip connection around the GRU** (MEME appendix B.3): `QuantileRecurrentNetwork`
+  concatenates the GRU's output with its input (encoder features ++ prev-action
+  one-hot ++ prev-reward) before the post-torso, so the head sees both the memory
+  summary and the current frame's features directly.
+- **50%-overlapping learn windows**: the buffer samples windows every
+  `period = learn_length // 2` = 10 steps (MEME: trace 160, replay period 80),
+  doubling the anchors extracted per collected frame versus the previous
+  non-overlapping windows.
+
+Burn-in stays at 10 rather than MEME's 0: MEME's burn-in-free stored state rides on a
+high replay ratio and trust-region target machinery absent here, while this async
+setup samples uniformly from a 500k-transition buffer whose stored hidden states can
+be many thousands of updates stale — the regime where R2D2's ablations found
+stored-state-plus-burn-in best.
+
+The GRU output (post skip-concat) passes through a
 post-torso `DeepResidualTorso` (width 256, depth 8, Swish — Wang et al. 2025) before the
-dueling quantile head, same as `mdqn_rec_atari.py`. Per learn
+noisy dueling quantile head. Per learn
 window, `get_recurrent_rollout` (`agents/miqn.py`) unrolls the online network with N
 quantile samples and the target network with N' samples; the loss
 (`munchausen_quantile_q_learning_n_step` in `base/loss.py`) builds an n-step Munchausen
@@ -270,9 +294,13 @@ level, the anchor's own reward, carries the term), and the mdqn counterparts (se
 **Resuming from a checkpoint.** `--orbax-checkpoint-dir` restores the `TrainState`
 only (params, target params, optimizer state, update-step counter, rng). The replay
 buffer and PER priorities, the local frames counter, and the ε-schedule counter (a
-Python closure in `get_select_action_batch_fn`) all restart from zero — a resumed run
+Python closure in `get_select_action_batch_fn` and
+`get_select_action_recurrent_batch_fn`) all restart from zero — a resumed run
 re-anneals ε from 1.0 and re-warms the buffer before its first update. Judge training
 health by a near-greedy eval on checkpoints, not the ε-mixed training return.
+Recurrent checkpoints from before the MEME skip connection was added to
+`QuantileRecurrentNetwork` no longer restore — the concat changed the post-torso's
+first Dense input shape.
 
 **Remaining divergences from BTR** (deliberate; roughly in ablation-priority order if
 a run misbehaves):
@@ -323,13 +351,13 @@ a run misbehaves):
 | n_cos (cosine embedding size) | 64 | IQN |
 | n-step | 3 (`sample_sequence_length = 4`) | paper's M-IQN |
 | γ | 0.99 (by571); 0.997 (`miqn_atari`, btr, rec) | paper; BTR |
-| PER priority exponent / IS β | 0.6 / 0.5→1.0 (by571, rec); 0.2 / constant 0.45 (`miqn_atari`, btr) | rainbow config; BTR (`per_beta_anneal` defaults off, so β never anneals) |
+| PER priority exponent / IS β | 0.6 / 0.5→1.0 (by571); 0.2 / constant 0.45 (`miqn_atari`, btr); uniform replay, no PER (rec) | rainbow config; BTR (`per_beta_anneal` defaults off, so β never anneals) |
 | Rewards | clipped to [−1, 1] (`max_abs_reward = 1.0`) | paper Table 2 — matches `mdqn`'s Atari configs |
 | Batch size | 256 (`miqn_atari`, btr) | BTR value; also fits 8GB GPUs — the Impala encoder's 84×84 activations OOM at 512 |
-| Target update | Polyak τ = 0.005 (by571, rec); hard copy every 500 steps (`miqn_atari`, btr) | repo convention (paper: hard copy every 8000); BTR |
-| Optimizer | Adam 1e-4 eps 0.005/batch_size≈1.953e-5, grad-clip 10 (`miqn_atari`, btr); grad-clip 10 (rec) | repo convention (paper: Adam 5e-5); BTR |
-| Exploration | ε-greedy, fixed (rec); ε-greedy, annealed (by571); NoisyNets + ε-greedy annealed then disabled at `env_frames // 2` — exponential-gap `ε(k) = 0.01 + 0.99·exp(−k/2e6)`, BTR's exact recurrence (`miqn_atari`, btr) | paper's M-IQN uses ε-greedy; BTR's own default (`--noisy 1`) |
-| Replay warm-up / ratio | 200k transitions, 1 update per 64 transitions (btr) | BTR `min_sampling_size`; BTR one `learn()` per 64-env step |
+| Target update | Polyak τ = 0.005 (by571); hard copy every 500 steps (`miqn_atari`, btr, rec) | repo convention (paper: hard copy every 8000); BTR |
+| Optimizer | Adam 1e-4 eps 0.005/batch_size≈1.953e-5, grad-clip 10 (`miqn_atari`, btr); Adam 1e-4 eps 0.005/320≈1.563e-5, grad-clip 10 (rec — batch = 16 sequences × 20 learn steps) | repo convention (paper: Adam 5e-5); BTR |
+| Exploration | ε-greedy, annealed (by571); NoisyNets + ε-greedy annealed then disabled at `env_frames // 2` — exponential-gap `ε(k) = 0.01 + 0.99·exp(−k/2e6)`, BTR's exact recurrence (`miqn_atari`, btr, rec) | paper's M-IQN uses ε-greedy; BTR's own default (`--noisy 1`) |
+| Replay warm-up / ratio | 200k transitions, 1 update per 64 transitions (btr); 200k-transition warm-up (`miqn_atari`, rec — no fixed ratio on the async backend) | BTR `min_sampling_size`; BTR one `learn()` per 64-env step |
 
 ## File map
 
@@ -354,5 +382,9 @@ a run misbehaves):
   Learning on a Desktop PC.* ICML 2025. [arXiv:2411.03820](https://arxiv.org/abs/2411.03820)
   — Impala encoder, adaptive maxpooling, and hyperparameters used by the btr and
   recurrent configs.
+- Kapturowski, Campos, Jiang, Rakićević, van Hasselt, Blundell, Puigdomènech Badia.
+  *Human-level Atari 200x faster.* [arXiv:2209.07550](https://arxiv.org/abs/2209.07550)
+  — MEME; the recurrent config's RNN skip connection (appendix B.3) and overlapping
+  replay windows.
 - Gu, Zhu, Lv, Shi, Hou, Xu. *DM-DQN: Dueling Munchausen deep Q network for robot path
   planning.* Complex & Intelligent Systems, 2022.

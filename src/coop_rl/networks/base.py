@@ -176,6 +176,7 @@ class QuantileRecurrentNetwork(nn.Module):
         hidden_state: chex.Array,
         observation_done: RNNObservation,
         num_quantiles: int,
+        epsilon: float | None = None,
     ) -> tuple[chex.Array, Any]:
         x, prev_action, prev_reward, done = observation_done
 
@@ -187,8 +188,13 @@ class QuantileRecurrentNetwork(nn.Module):
         ).astype(x.dtype)
         x = jnp.concatenate([x, extras], axis=-1)
         rnn_input = (x, done)
-        hidden_state, x = ScannedRNN(self.hidden_state_dim, self.cell_type)(hidden_state, rnn_input)
+        hidden_state, rnn_out = ScannedRNN(self.hidden_state_dim, self.cell_type)(
+            hidden_state, rnn_input
+        )
+        # MEME (arXiv:2209.07550) B.3: the RNN output is concatenated with its input
+        # before the head.
+        x = jnp.concatenate([x, rnn_out], axis=-1)
         x = self.post_torso(**self.args_post_torso)(x)
-        x = self.head(**self.args_head)(x, num_quantiles)
+        x = self.head(**self.args_head)(x, num_quantiles, epsilon)
 
         return hidden_state, x

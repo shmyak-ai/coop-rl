@@ -183,9 +183,10 @@ def create_recurrent_train_state(
     hidden_state_dim,
     cell_type,
     tau,
+    target_update_period=0,
 ):
-    state_rng, init_rng, quantile_rng = jax.random.split(rng, num=3)
-    rngs = {"params": init_rng, "quantiles": quantile_rng}
+    state_rng, init_rng, quantile_rng, noise_rng = jax.random.split(rng, num=4)
+    rngs = {"params": init_rng, "quantiles": quantile_rng, "noise": noise_rng}
     model = network(**args_network)
     dummy_hidden_state = ScannedRNN(hidden_state_dim, cell_type).initialize_carry(1)
     dummy_obs = jnp.ones((1, 1, *obs_shape))
@@ -201,7 +202,13 @@ def create_recurrent_train_state(
     )
     tx = optimizer(**args_optimizer)
     return TrainState.create(
-        apply_fn=model.apply, params=params, target_params=params, key=state_rng, tx=tx, tau=tau
+        apply_fn=model.apply,
+        params=params,
+        target_params=params,
+        key=state_rng,
+        tx=tx,
+        tau=tau,
+        target_update_period=target_update_period,
     )
 
 
@@ -216,6 +223,7 @@ def restore_recurrent_dqn_flax_state(
     hidden_state_dim,
     cell_type,
     tau,
+    target_update_period=0,
     checkpointdir,
 ):
     state = create_recurrent_train_state(
@@ -228,6 +236,7 @@ def restore_recurrent_dqn_flax_state(
         hidden_state_dim,
         cell_type,
         tau,
+        target_update_period,
     )
     if checkpointdir is None:
         return state
@@ -313,15 +322,18 @@ def get_select_action_recurrent_batch_fn(
     num_quantile_samples: int,
     max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
+    epsilon_scheduler_fn: Callable[[int], float] | None = None,
 ) -> Callable:
-    """Like get_select_action_batch_fn but threads a recurrent hidden state across calls."""
+    """Like get_select_action_batch_fn but threads a recurrent hidden state across calls.
+
+    `epsilon_scheduler_fn`, if given, is a step-indexed schedule (e.g. `optax.linear_schedule`)
+    overriding the network's static epsilon; step count is tracked (in environment transitions)
+    by a plain Python counter closed over here, since the collector always calls the returned
+    function with the same positional arguments regardless of agent.
+    """
     _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
 
-    @jax.jit
-    def select_action(
-        key, params, hidden_state, observations, reset_mask, prev_action, prev_reward
-    ):
-        key, quantile_key, policy_key = jax.random.split(key, num=3)
+    def _prepare_inputs(observations, reset_mask, prev_action, prev_reward):
         obs_t = jnp.expand_dims(_preprocess(observations), axis=0)
         reset_t = jnp.expand_dims(reset_mask, axis=0).astype(bool)
         prev_action_t = jnp.expand_dims(prev_action, axis=0)
@@ -330,16 +342,56 @@ def get_select_action_recurrent_batch_fn(
             -max_abs_reward,
             max_abs_reward,
         )
+        return obs_t, prev_action_t, prev_reward_t, reset_t
+
+    if epsilon_scheduler_fn is None:
+
+        @jax.jit
+        def select_action(
+            key, params, hidden_state, observations, reset_mask, prev_action, prev_reward
+        ):
+            key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
+            new_hidden_state, (actor_policy, _, _) = apply_fn(
+                params,
+                hidden_state,
+                _prepare_inputs(observations, reset_mask, prev_action, prev_reward),
+                num_quantile_samples,
+                rngs={"quantiles": quantile_key, "noise": noise_key},
+            )
+            action = actor_policy.sample(seed=policy_key)
+            action = jnp.squeeze(action, axis=0)
+            return key, new_hidden_state, action
+
+        return select_action
+
+    @jax.jit
+    def _select_action_eps(
+        key, params, hidden_state, observations, reset_mask, prev_action, prev_reward, epsilon
+    ):
+        key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
         new_hidden_state, (actor_policy, _, _) = apply_fn(
             params,
             hidden_state,
-            (obs_t, prev_action_t, prev_reward_t, reset_t),
+            _prepare_inputs(observations, reset_mask, prev_action, prev_reward),
             num_quantile_samples,
-            rngs={"quantiles": quantile_key},
+            epsilon,
+            rngs={"quantiles": quantile_key, "noise": noise_key},
         )
         action = actor_policy.sample(seed=policy_key)
         action = jnp.squeeze(action, axis=0)
         return key, new_hidden_state, action
+
+    step_count = 0
+
+    def select_action(
+        key, params, hidden_state, observations, reset_mask, prev_action, prev_reward
+    ):
+        nonlocal step_count
+        step_count += observations.shape[0]
+        epsilon = epsilon_scheduler_fn(step_count)
+        return _select_action_eps(
+            key, params, hidden_state, observations, reset_mask, prev_action, prev_reward, epsilon
+        )
 
     return select_action
 
@@ -548,9 +600,16 @@ def get_recurrent_rollout(
         sample: TimeStepDQNRecurrent,
         quantile_key: chex.PRNGKey,
     ) -> RecurrentQuantileRolloutSample:
-        burn_online_key, burn_target_key, online_key, target_key = jax.random.split(
-            quantile_key, num=4
-        )
+        (
+            burn_online_key,
+            burn_online_noise_key,
+            burn_target_key,
+            burn_target_noise_key,
+            online_key,
+            online_noise_key,
+            target_key,
+            target_noise_key,
+        ) = jax.random.split(quantile_key, num=8)
         # (batch, T, ...) -> (T, batch, ...) to match ScannedRNN's time-major scan.
         sample_tm = jax.tree_util.tree_map(lambda x: jnp.swapaxes(x, 0, 1), sample)
 
@@ -578,7 +637,7 @@ def get_recurrent_rollout(
                 init_hidden_state,
                 burn_input,
                 1,
-                rngs={"quantiles": burn_online_key},
+                rngs={"quantiles": burn_online_key, "noise": burn_online_noise_key},
             )
             online_hidden_state = jax.lax.stop_gradient(online_hidden_state)
             target_hidden_state, _ = apply_fn(
@@ -586,7 +645,7 @@ def get_recurrent_rollout(
                 init_hidden_state,
                 burn_input,
                 1,
-                rngs={"quantiles": burn_target_key},
+                rngs={"quantiles": burn_target_key, "noise": burn_target_noise_key},
             )
             target_hidden_state = jax.lax.stop_gradient(target_hidden_state)
         else:
@@ -598,14 +657,14 @@ def get_recurrent_rollout(
             online_hidden_state,
             learn_input,
             num_tau_samples,
-            rngs={"quantiles": online_key},
+            rngs={"quantiles": online_key, "noise": online_noise_key},
         )
         _, (_, z_target, _) = apply_fn(
             target_q_params,
             target_hidden_state,
             learn_input,
             num_tau_prime_samples,
-            rngs={"quantiles": target_key},
+            rngs={"quantiles": target_key, "noise": target_noise_key},
         )
 
         return RecurrentQuantileRolloutSample(
