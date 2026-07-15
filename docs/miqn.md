@@ -134,12 +134,11 @@ plain heads never call `self.make_rng("noise")`, so the extra stream is simply u
   leaving noisy weights as the only exploration source. BTR's `EpsilonGreedy` subtracts
   `(ε − 0.01) / eps_steps` per stored transition (`eps_steps = 2M`) — an exponential-gap
   decay `ε(k) = 0.01 + 0.99·exp(−k/2e6)`, ~0.37 at 2M, ~0.14 at 4M, ~0.03 at 8M frames.
-  `miqn_btr_atari.py` reproduces it with a plain Python schedule in
-  `args_get_select_action_fn.epsilon_scheduler_fn`. `miqn_atari.py` keeps a linear
-  `1.0 → 0.01` over 2M frames via `optax.join_schedules` instead: in its async setup
-  there is no single global frame counter anyway (each of the `num_collectors` parallel
-  `CollectorDQNUniform` Ray actors anneals independently over its own local frame
-  count), so it is an approximation either way;
+  `miqn_btr_atari.py` and `miqn_atari.py` both reproduce it with the same plain Python
+  schedule in `args_get_select_action_fn.epsilon_scheduler_fn`; in `miqn_atari.py`'s
+  async setup there is no single global frame counter (each of the `num_collectors`
+  parallel `CollectorDQNUniform` Ray actors anneals independently over its own local
+  frame count), so the boundaries are per-collector approximations there;
 - **Trainer/collector wiring is the one deliberate difference between the two configs**:
   `miqn_btr_atari.py` uses `TrainerSequential` (run with `--backend sequential`), a
   synchronous single-thread loop reproducing BTR's own exact interleaving — one
@@ -329,7 +328,7 @@ a run misbehaves):
 | Batch size | 256 (`miqn_atari`, btr) | BTR value; also fits 8GB GPUs — the Impala encoder's 84×84 activations OOM at 512 |
 | Target update | Polyak τ = 0.005 (by571, rec); hard copy every 500 steps (`miqn_atari`, btr) | repo convention (paper: hard copy every 8000); BTR |
 | Optimizer | Adam 1e-4 eps 0.005/batch_size≈1.953e-5, grad-clip 10 (`miqn_atari`, btr); grad-clip 10 (rec) | repo convention (paper: Adam 5e-5); BTR |
-| Exploration | ε-greedy, fixed (rec); ε-greedy, annealed (by571); NoisyNets + ε-greedy annealed then disabled at `env_frames // 2` — exponential-gap `ε(k) = 0.01 + 0.99·exp(−k/2e6)` (btr, BTR's exact recurrence); linear 1.0→0.01 over 2M frames (`miqn_atari`) | paper's M-IQN uses ε-greedy; BTR's own default (`--noisy 1`) |
+| Exploration | ε-greedy, fixed (rec); ε-greedy, annealed (by571); NoisyNets + ε-greedy annealed then disabled at `env_frames // 2` — exponential-gap `ε(k) = 0.01 + 0.99·exp(−k/2e6)`, BTR's exact recurrence (`miqn_atari`, btr) | paper's M-IQN uses ε-greedy; BTR's own default (`--noisy 1`) |
 | Replay warm-up / ratio | 200k transitions, 1 update per 64 transitions (btr) | BTR `min_sampling_size`; BTR one `learn()` per 64-env step |
 
 ## File map

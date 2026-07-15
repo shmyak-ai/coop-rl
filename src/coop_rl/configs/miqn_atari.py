@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import jax.numpy as jnp
 import ml_collections
 import numpy as np
@@ -38,6 +40,13 @@ from coop_rl.workers.trainers import Trainer
 
 
 def get_config():
+    # M-IQN with the "Beyond The Rainbow" (arXiv:2411.03820) encoder and hyperparameters:
+    # Impala ResNet (2x width) + LayerNorm + adaptive maxpool, gamma 0.997, PER alpha 0.2,
+    # grad clip 10. LayerNorm replaces BTR's spectral norm. Paper-parity quantile sample
+    # counts (N = N' = 64, K = 32) are used instead of BTR's own 8 — see docs/miqn.md.
+    # Same hyperparameters as miqn_btr_atari.py, but on coop-rl's async Ray backend:
+    # training and collecting run in separate actors instead of BTR's synchronous
+    # collect/train coupling, so there is no fixed replay ratio.
     config = ml_collections.ConfigDict()
 
     log_level = config_dict.FieldReference("INFO", field_type=str)
@@ -49,16 +58,19 @@ def get_config():
 
     seed = 73
     buffer_seed, trainer_seed, collectors_seed = seed + 1, seed + 2, seed + 3
-    steps = 1000000
+    num_envs = 32
+    # Not an actual stopping condition here (the async Trainer stops at `steps` updates,
+    # not env frames) — used to compute the epsilon schedule boundary and the update
+    # budget below, the same way BTR's own env_frames budget does.
+    env_frames = 32_000_000
+    # miqn_btr_atari.py's env_frames * replay_ratio (1/64) = 500,000 gradient updates;
+    # the async Trainer has no replay ratio, so match its update budget directly.
+    steps = env_frames // 64
     training_iterations_per_step = 1
     batch_size = 256
-    # Not an actual stopping condition here (the async Trainer stops at `steps` updates,
-    # not env frames) — used only to compute the epsilon schedule boundary below, the
-    # same way BTR's own env_frames budget does.
-    env_frames = 32_000_000
 
     config.log_level = log_level
-    config.num_collectors = 3
+    config.num_collectors = 1
     config.num_samplers = 1
     config.observation_shape = observation_shape
     config.observation_dtype = observation_dtype
@@ -101,7 +113,7 @@ def get_config():
     config.args_env = args_env = ml_collections.ConfigDict()
     config.args_env.env_name = "ale_py:ALE/Breakout-v5"
     config.args_env.stack_size = 4  # >= 1, 1 - no stacking
-    config.args_env.num_envs = 32
+    config.args_env.num_envs = num_envs
 
     config.buffer = buffer = BufferPrioritised
     config.args_buffer = args_buffer = ml_collections.ConfigDict()
@@ -112,7 +124,9 @@ def get_config():
     config.args_buffer.sample_batch_size = batch_size
     config.args_buffer.sample_sequence_length = 4  # 3-step returns, as the paper's M-IQN
     config.args_buffer.period = 1
-    config.args_buffer.min_length = 1000
+    # BTR min_sampling_size: 200,000 transitions before the first gradient update
+    # (flashbax min_length is per time axis: 6250 * 32 add rows = 200k transitions).
+    config.args_buffer.min_length = 6250
     config.args_buffer.max_size = 1000000  # in transitions
     config.args_buffer.priority_exponent = 0.2  # BTR
     config.args_buffer.observation_shape = observation_shape
@@ -146,7 +160,7 @@ def get_config():
     config.args_trainer.training_iterations_per_step = training_iterations_per_step
     config.args_trainer.summary_writing_period = 1000  # logging and reporting
     config.args_trainer.save_period = 10000  # orbax checkpointing
-    config.args_trainer.synchronization_period = 1  # send params to control actor
+    config.args_trainer.synchronization_period = 10  # send params to control actor
     config.args_trainer.state_recover = state_recover
     config.args_trainer.args_state_recover = args_state_recover
     config.args_trainer.get_update_step = get_update_step
@@ -158,7 +172,7 @@ def get_config():
     config.args_trainer.args_get_update_step.clip_value_min = -1.0
     config.args_trainer.args_get_update_step.quantile_huber_kappa = 1.0
     # BTR's own N = N' = K = 8 trains flat for M-IQN (see docs/miqn.md) — paper-parity
-    # counts used instead.
+    # counts used instead, like miqn_btr_atari.py/miqn_rec_atari.py.
     config.args_trainer.args_get_update_step.num_tau_samples = 64
     config.args_trainer.args_get_update_step.num_tau_prime_samples = 64
     config.args_trainer.args_get_update_step.num_quantile_samples = 32
@@ -174,8 +188,8 @@ def get_config():
     config.args_trainer.get_update_epoch = get_update_epoch
     config.args_trainer.args_get_update_epoch = ml_collections.ConfigDict()
     config.args_trainer.args_get_update_epoch.update_step_fn = None
-    config.args_trainer.args_get_update_epoch.buffer_lock = None  # injected by Trainer
-    config.args_trainer.args_get_update_epoch.buffer = None  # injected by Trainer, initialized fn
+    config.args_trainer.args_get_update_epoch.buffer_lock = None  # injected by trainer
+    config.args_trainer.args_get_update_epoch.buffer = None  # injected by trainer
     config.args_trainer.buffer = buffer
     config.args_trainer.args_buffer = args_buffer
     config.args_trainer.num_samples_on_gpu_cache = 3
@@ -198,20 +212,21 @@ def get_config():
     config.args_collector.args_get_select_action_fn = ml_collections.ConfigDict()
     config.args_collector.args_get_select_action_fn.apply_fn = None
     config.args_collector.args_get_select_action_fn.num_quantile_samples = 32
+
     # BTR combines NoisyNets with annealed eps-greedy for the first half of training,
-    # then relies on noisy weights alone: eps 1.0 -> 0.01 over 2,000,000 frames (BTR's
-    # own eps_steps), held at 0.01 until env_frames // 2, then disabled (eps = 0.0).
-    # Each of this async config's `num_collectors` collectors anneals independently
-    # over its own local env-frame count (there is no single global frame counter),
-    # using the same absolute boundaries as BTR's own schedule.
-    config.args_collector.args_get_select_action_fn.epsilon_scheduler_fn = optax.join_schedules(
-        schedules=[
-            optax.linear_schedule(init_value=1.0, end_value=0.01, transition_steps=2_000_000),
-            optax.constant_schedule(0.01),
-            optax.constant_schedule(0.0),
-        ],
-        boundaries=[2_000_000, env_frames // 2],
-    )
+    # then relies on noisy weights alone. BTR's EpsilonGreedy subtracts
+    # (eps - 0.01) / 2e6 per transition (eps_steps = 2M), i.e. an exponential-gap
+    # decay eps(k) = 0.01 + 0.99 * exp(-k / 2e6): ~0.37 at 2M, ~0.14 at 4M, ~0.03 at
+    # 8M frames. Disabled (eps = 0.0) from env_frames // 2 on, as in BTR. Each of this
+    # async config's `num_collectors` collectors anneals independently over its own
+    # local env-frame count (there is no single global frame counter), using the same
+    # absolute boundaries as BTR's own schedule.
+    def _btr_epsilon_schedule(step_count: int) -> float:
+        if step_count >= env_frames // 2:
+            return 0.0
+        return 0.01 + 0.99 * math.exp(-step_count / 2_000_000)
+
+    config.args_collector.args_get_select_action_fn.epsilon_scheduler_fn = _btr_epsilon_schedule
     config.args_collector.args_get_select_action_fn.obs_preprocess_fn = lambda x: (
         x.astype(jnp.float32) / 255.0
     )

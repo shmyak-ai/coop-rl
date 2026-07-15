@@ -243,12 +243,12 @@ def get_select_action_fn(
 
     @jax.jit
     def select_action(key, params, observation):
-        key, quantile_key, policy_key = jax.random.split(key, num=3)
+        key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
         actor_policy, _, _ = apply_fn(
             params,
             jnp.expand_dims(_preprocess(observation), axis=0),
             num_quantile_samples,
-            rngs={"quantiles": quantile_key},
+            rngs={"quantiles": quantile_key, "noise": noise_key},
         )
         return key, actor_policy.sample(seed=policy_key)
 
