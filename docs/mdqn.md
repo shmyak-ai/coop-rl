@@ -12,8 +12,8 @@ match the paper exactly (τ = 0.03, α = 0.9, l₀ = −1), as do the loss (Hube
 clipping ([−1, 1]). The configs deviate from the paper in a few deliberate ways (n-step
 returns in the feedforward config, soft target updates, deep residual torsos) — catalogued
 in [Differences from the paper](#differences-from-the-paper). Issues found in past audits
-have been fixed — including one "fix" that later had to be reverted; the history and the
-remaining caveats are recorded in [Known caveats](#known-caveats).
+have been fixed — including one "fix" that later had to be reverted; the history is
+recorded in [Known caveats](#known-caveats).
 
 ## The idea in one paragraph
 
@@ -179,7 +179,9 @@ at the first done transition, index n (or the last transition if none):
   bootstrap value.
 - **Termination**: if the cut transition terminated the episode, `r_n` *is* included
   (it is the final reward) and the bootstrap is dropped. A truncated episode still
-  bootstraps from its last stored observation.
+  bootstraps from its last stored observation — except when the truncation falls on
+  the anchor step itself: such a window has no usable target (a truncated step's true
+  successor observation is never stored) and is masked out of the batch mean.
 
 Targets are handed to `munchausen_q_learning`, and `TrainState.apply_gradients` performs
 the Adam step plus a Polyak (τ = 0.005) target update. The same alignment fix is applied
@@ -243,14 +245,14 @@ Fix history from past audits:
   mean Q unboundedly negative and collapses a healthy policy (see `docs/miqn.md`,
   Known caveats). Reverted 2026-07-14 — both the feedforward window assembly here and
   `munchausen_q_learning_n_step` apply the term only at the anchor step.
-
-What remains:
-
-1. **Truncation at the window's first step** (feedforward path) degenerates: with no
-   rewards to accumulate the target is just `softV(o_0)` plus the Munchausen term — a
-   self-regression rather than a Bellman backup. This affects at most one window per
-   truncation (windows overlap with `period = 1`) and truncations are rare on Atari, so
-   it is left as is.
+- **Fixed**: truncation at the window's first step (feedforward path) degenerated:
+  with no rewards to accumulate the target was just `softV(o_0)` plus the Munchausen
+  term, bootstrapped from the anchor's *own* observation — a self-regression rather
+  than a Bellman backup. Such a window has no usable target at all (a truncated
+  step's true successor observation is never stored), so it is now masked out of the
+  batch mean — the truncated-anchor convention the recurrent losses already used.
+  Applied to `agents/mdqn.py`, `agents/miqn.py` (where masked windows also get the
+  floor PER priority), `agents/dqn.py`, and `agents/rainbow.py`.
 
 ### Composing with other DQN extensions
 

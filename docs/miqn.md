@@ -74,7 +74,8 @@ dims, so the same apply serves acting `(B, …)` and the window pass `(B, L, …
 
 `get_update_step` in `agents/miqn.py` follows the corrected n-step window assembly
 shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusion,
-`γⁿ` bootstrap discount, truncation still bootstraps). Munchausen-specific parts:
+`γⁿ` bootstrap discount, truncation still bootstraps, truncated anchors masked out of
+the loss). Munchausen-specific parts:
 
 - the shaping policy comes from the **target network's** `q̃` at the anchor
   observation `s₀` only (K = `num_quantile_samples` fractions, quantile mean taken in
@@ -89,7 +90,8 @@ shared with `mdqn.py`/`dqn.py`/`rainbow.py` (first-done cut, cut-reward exclusio
   the per-sequence quantile-Huber loss vector;
 - PER: importance weights `(1/p)^β / max` with β linearly annealed 0.5 → 1.0;
   new priorities are the per-sequence loss (+1e-5), written back through
-  `get_update_epoch`'s `buffer.set_priorities`.
+  `get_update_epoch`'s `buffer.set_priorities`; masked truncated-anchor windows get
+  the 1e-5 floor priority so PER stops resampling them.
 
 ## The BTR variant (`miqn_atari.py`, `miqn_btr_atari.py`)
 
@@ -327,10 +329,12 @@ a run misbehaves):
 
 **Other caveats:**
 
-- **Truncation at the window's first step degenerates** (feedforward path, shared
-  with mdqn — see `docs/mdqn.md`, Known caveats): the target reduces to a
-  self-regression on the soft value of `o_0`. At most one window per truncation,
-  rare on Atari, left as is.
+- **Truncation at the window's first step (fixed)** (feedforward path, shared with
+  mdqn — see `docs/mdqn.md`, Known caveats): the target degenerated into a
+  self-regression on the soft value of `o_0`. Such windows have no usable target (a
+  truncated step's true successor observation is never stored) and are now masked
+  out of the loss mean, with the floor PER priority — the truncated-anchor
+  convention the recurrent losses already used.
 - **Noise leaks into the shaping policy**: the target-net pass at s₀ runs with
   sampled NoisyNet noise, so `π = softmax(q̃/τ)` — and hence the Munchausen term —
   is stochastic. BTR combines NoisyNets and Munchausen the same way, so this is

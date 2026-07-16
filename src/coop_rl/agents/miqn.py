@@ -424,6 +424,7 @@ def get_update_step(
             transition_probs: chex.Array,
             quantile_key: chex.PRNGKey,
             importance_sampling_exponent: float,
+            anchor_valid: chex.Array,
         ) -> tuple[jnp.ndarray, dict]:
             online_key, target_key, online_noise_key, target_noise_key = jax.random.split(
                 quantile_key, num=4
@@ -463,9 +464,13 @@ def get_update_step(
             importance_weights **= importance_sampling_exponent
             importance_weights /= jnp.max(importance_weights)
 
-            # Reweight.
-            q_loss = jnp.mean(importance_weights * batch_q_error)
-            new_priorities = batch_q_error + 1e-5
+            # Reweight. Masked (truncated-anchor) windows carry no learning signal:
+            # they drop out of the mean and get the floor priority.
+            masked_q_error = batch_q_error * anchor_valid
+            q_loss = jnp.sum(importance_weights * masked_q_error) / jnp.maximum(
+                jnp.sum(anchor_valid), 1.0
+            )
+            new_priorities = masked_q_error + 1e-5
 
             q_online = jnp.mean(z_tm1, axis=1)
             loss_info = {
@@ -529,6 +534,10 @@ def get_update_step(
         )[:, 0]
         # The bootstrap is n steps away from step 0, so it is discounted gamma**n.
         n_step_discount = (1.0 - terminated_at_cut.astype(jnp.float32)) * gamma**indices_done
+        # A truncated anchor has no usable target (its true successor observation is
+        # never stored, so the window degenerates into a self-regression on the
+        # anchor's own soft value); mask it out of the mean, like the recurrent losses.
+        anchor_valid = 1.0 - jnp.equal(sample.truncated, 1).astype(jnp.float32)[:, 0]
         transitions = Transition(
             obs=jax.tree_util.tree_map(lambda x: x[:, 0], obs),
             action=sample.action[:, 0],
@@ -550,6 +559,7 @@ def get_update_step(
             buffer_sample.probabilities,
             loss_key,
             importance_sampling_exponent,
+            anchor_valid,
         )
         train_state = train_state.apply_gradients(grads=q_grads)
 

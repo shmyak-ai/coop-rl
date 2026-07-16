@@ -299,6 +299,10 @@ def get_update_step(
             )[:, 0]
             # The bootstrap is n steps away from step 0, so it is discounted gamma**n.
             d_t = (1.0 - terminated_at_cut.astype(jnp.float32)) * gamma**indices_done
+            # A truncated anchor has no usable target (its true successor observation
+            # is never stored, so the window degenerates into a self-regression on
+            # softV(o_0)); mask it out of the mean, like the recurrent losses do.
+            anchor_valid = 1.0 - jnp.equal(sample.truncated, 1).astype(jnp.float32)[:, 0]
 
             batch_loss = munchausen_q_learning(
                 q_tm1,
@@ -311,6 +315,7 @@ def get_update_step(
                 munchausen_coefficient,
                 clip_value_min,
                 huber_loss_parameter,
+                anchor_valid,
             )
 
             loss_info = {

@@ -40,8 +40,12 @@ def q_learning(
     d_t: chex.Array,
     q_t: chex.Array,
     huber_loss_parameter: chex.Array,
+    weights: chex.Array,
 ) -> jnp.ndarray:
-    """Computes the double Q-learning loss. Each input is a batch."""
+    """Computes the double Q-learning loss. Each input is a batch.
+
+    weights masks invalid samples (e.g. truncated anchors) out of the mean.
+    """
     batch_indices = jnp.arange(a_tm1.shape[0])
     # Compute Q-learning n-step TD-error.
     target_tm1 = r_t + d_t * jnp.max(q_t, axis=-1)
@@ -51,7 +55,7 @@ def q_learning(
     else:
         batch_loss = rlax.l2_loss(td_error)
 
-    return jnp.mean(batch_loss)
+    return jnp.sum(batch_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)
 
 
 def munchausen_q_learning(
@@ -65,7 +69,12 @@ def munchausen_q_learning(
     munchausen_coefficient: chex.Array,
     clip_value_min: chex.Array,
     huber_loss_parameter: chex.Array,
+    weights: chex.Array,
 ) -> chex.Array:
+    """Munchausen Q-learning loss. Each input is a batch.
+
+    weights masks invalid samples (e.g. truncated anchors) out of the mean.
+    """
     action_one_hot = jax.nn.one_hot(a_tm1, q_tm1.shape[-1])
     q_tm1_a = jnp.sum(q_tm1 * action_one_hot, axis=-1)
     # Compute double Q-learning loss.
@@ -86,7 +95,7 @@ def munchausen_q_learning(
         batch_loss = rlax.huber_loss(td_error, huber_loss_parameter)
     else:
         batch_loss = rlax.l2_loss(td_error)
-    batch_loss = jnp.mean(batch_loss)
+    batch_loss = jnp.sum(batch_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)
     return batch_loss
 
 

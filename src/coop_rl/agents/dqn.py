@@ -165,6 +165,7 @@ def get_update_step(
             q_params: FrozenDict,
             target_q_params: FrozenDict,
             transitions: Transition,
+            anchor_valid: chex.Array,
         ) -> tuple[jnp.ndarray, dict]:
             q_tm1 = apply_fn(q_params, transitions.obs).preferences.astype(jnp.float32)
             q_t = apply_fn(target_q_params, transitions.next_obs).preferences.astype(jnp.float32)
@@ -182,6 +183,7 @@ def get_update_step(
                 d_t,
                 q_t,
                 huber_loss_parameter,
+                anchor_valid,
             ).astype(jnp.float32)
 
             loss_info = {
@@ -224,6 +226,10 @@ def get_update_step(
         )[:, 0]
         # The bootstrap is n steps away from step 0, so it is discounted gamma**n.
         n_step_discount = (1.0 - terminated_at_cut.astype(jnp.float32)) * gamma**indices_done
+        # A truncated anchor has no usable target (its true successor observation is
+        # never stored, so the window degenerates into a self-regression on the
+        # anchor's own value); mask it out of the mean, like the recurrent losses do.
+        anchor_valid = 1.0 - jnp.equal(sample.truncated, 1).astype(jnp.float32)[:, 0]
         transitions = Transition(
             obs=_preprocess(step_0_obs),
             action=step_0_actions,
@@ -239,6 +245,7 @@ def get_update_step(
             train_state.params,
             train_state.target_params,
             transitions,
+            anchor_valid,
         )
         train_state = train_state.apply_gradients(grads=q_grads)
 
