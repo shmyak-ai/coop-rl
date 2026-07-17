@@ -384,9 +384,8 @@ class TrainerSequential:
         window_start = time.monotonic()
         info = None
         while frames < self.env_frames:
-            # Replace, not append: the collector must act with the latest params only.
-            self.collector.online_params.clear()
-            self.collector.online_params.append(self.flax_state.params)
+            # The collector must act with the latest params only.
+            self.collector.set_online_params(self.flax_state.params)
             trajectories = self.collector.run_rollout()
             self.buffer.add(trajectories)
             frames += rollout_frames

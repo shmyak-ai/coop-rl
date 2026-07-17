@@ -96,6 +96,11 @@ class CollectorDQNUniform:
         self.obs, _ = self.env.reset()
         self.select_action(self._rng, self.online_params[0], self.obs)
 
+    def set_online_params(self, params) -> None:
+        """Replace, not append: sequential training acts with the latest params only."""
+        self.online_params.clear()
+        self.online_params.append(params)
+
     def run_rollout(self) -> list[TimeStepDQN]:
         """Return one TimeStepDQN trajectory per environment."""
         obs_list: list[np.ndarray] = []
@@ -315,6 +320,9 @@ class CollectorDQNRecurrentUniform:
             self.prev_action,
             self.prev_reward,
         )
+
+    def set_online_params(self, params) -> None:
+        self.online_params = params
 
     def run_rollout(self) -> TimeStepDQNRecurrent:
         """Return one TimeStepDQNRecurrent trajectory per environment."""
