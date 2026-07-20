@@ -290,8 +290,11 @@ class TrainerSequential:
     Restores the classic DQN coupling between environment frames and gradient
     updates: after every rollout of n transitions, performs n * replay_ratio
     updates (replay_ratio=1.0 is the BY571/IQN-and-Extensions regime, 0.25 is
-    classic DQN's train-every-4-frames). Training stops once env_frames total
-    transitions have been collected. No Controller relay, sampler threads, or
+    classic DQN's train-every-4-frames). n counts transitions summed across all
+    vectorized envs (steps_per_rollout * num_envs), so num_envs changes the
+    rollout granularity but not the updates-per-frame coupling: e.g. 32 envs at
+    replay_ratio 1/64 accrue one update per two rollouts. Training stops once
+    env_frames total transitions have been collected. No Controller relay, sampler threads, or
     GPU-sample queue: the collector runs in the same thread and always acts
     with the latest parameters.
     """
@@ -328,6 +331,7 @@ class TrainerSequential:
         self.orbax_checkpointer = ocp.StandardCheckpointer()
 
         self.buffer = buffer(**args_buffer)
+        self.sample_batch_size = args_buffer.sample_batch_size
         gpu_devices = jax.devices("gpu")
         if not gpu_devices:
             raise RuntimeError("No GPU devices found. TrainerSequential requires at least one GPU.")
@@ -403,10 +407,12 @@ class TrainerSequential:
             updates = int(self.flax_state.step)
             if info is not None and updates - last_summary_updates >= self.summary_writing_period:
                 elapsed = time.monotonic() - window_start
-                updates_per_second = (updates - last_summary_updates) / elapsed
                 scalars = {
-                    "trainer/updates_per_second": updates_per_second,
                     "trainer/env_frames": frames,
+                    "trainer/frames_sampled": updates * self.sample_batch_size,
+                    "trainer/updates": updates,
+                    "trainer/updates_per_second": (updates - last_summary_updates) / elapsed,
+                    "collector/episodes_done": episodes_done,
                 }
                 # All scalar diagnostics from the update step (skips per-sample
                 # arrays such as the PER priorities).
@@ -414,20 +420,20 @@ class TrainerSequential:
                     if np.ndim(value) == 0:
                         scalars[f"trainer/{name}"] = float(value)
                 returns = self.collector.completed_returns
-                mean_return = sum(returns) / len(returns) if returns else float("nan")
                 if returns:
-                    scalars["collector/mean_return"] = mean_return
+                    scalars["collector/mean_return"] = sum(returns) / len(returns)
+                # Last epsilon computed by the collector's action-selection closure
+                # (set only when an epsilon_scheduler_fn is configured).
+                epsilon = getattr(self.collector.select_action, "epsilon", None)
+                if epsilon is not None:
+                    scalars["collector/epsilon"] = float(epsilon)
                 self._writer.write_scalars(updates, scalars)
                 self._writer.flush()
                 self.logger.info(
-                    "Frames: %d.  Updates: %d.  Updates/s: %.1f.  Episodes done: %d.  "
-                    "Mean return (last %d eps): %.1f.",
-                    frames,
-                    updates,
-                    updates_per_second,
-                    episodes_done,
-                    len(returns),
-                    mean_return,
+                    "  ".join(
+                        f"{k}: {v:,}" if isinstance(v, int) else f"{k}: {v:g}"
+                        for k, v in scalars.items()
+                    )
                 )
                 last_summary_updates = updates
                 window_start = time.monotonic()

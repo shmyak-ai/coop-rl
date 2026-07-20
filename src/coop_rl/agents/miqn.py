@@ -312,6 +312,8 @@ def get_select_action_batch_fn(
         nonlocal step_count
         step_count += observations.shape[0]
         epsilon = epsilon_scheduler_fn(step_count)
+        # Exposed for the trainer's summary logging.
+        setattr(select_action_batch, "epsilon", epsilon)  # noqa: B010
         return _select_action_batch_eps(key, params, observations, epsilon)
 
     return select_action_batch
@@ -389,6 +391,8 @@ def get_select_action_recurrent_batch_fn(
         nonlocal step_count
         step_count += observations.shape[0]
         epsilon = epsilon_scheduler_fn(step_count)
+        # Exposed for the trainer's summary logging.
+        setattr(select_action, "epsilon", epsilon)  # noqa: B010
         return _select_action_eps(
             key, params, hidden_state, observations, reset_mask, prev_action, prev_reward, epsilon
         )
