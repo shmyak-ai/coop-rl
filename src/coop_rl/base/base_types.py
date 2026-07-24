@@ -83,4 +83,12 @@ class Observation(NamedTuple):
 # (obs, prev_action, prev_reward, done)
 RNNObservation: TypeAlias = tuple[Observation, Action, chex.Array, Done]
 
+# (obs, action, reward, attention_mask): the full-window analogue of RNNObservation
+# for a causal-transformer network. obs is whatever pytree the domain's input_layer
+# expects after obs_preprocess_fn; action/reward are the window's own raw arrays
+# (prev_action/prev_reward are derived downstream by shifting, not passed
+# separately); attention_mask is a (batch, T, T) bool allow-mask, e.g. from
+# coop_rl.networks.transformer.build_causal_boundary_mask.
+TransformerObservation: TypeAlias = tuple[Any, Action, chex.Array, chex.Array]
+
 ActorApply = Callable[..., Any]

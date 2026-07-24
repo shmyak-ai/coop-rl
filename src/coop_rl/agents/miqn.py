@@ -38,6 +38,7 @@ from coop_rl.base.loss import (
 )
 from coop_rl.base.multistep import batch_discounted_returns
 from coop_rl.networks.base import ScannedRNN
+from coop_rl.networks.transformer import build_causal_boundary_mask
 
 
 class Transition(NamedTuple):
@@ -783,6 +784,289 @@ def get_update_step_recurrent(
         return train_state, loss_info
 
     return _update_step_recurrent
+
+
+def create_transformer_train_state(
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    obs_shape,
+    context_length,
+    tau,
+    target_update_period=0,
+    obs_preprocess_fn: Callable | None = None,
+):
+    """Like create_recurrent_train_state but for a causal-transformer network:
+    no hidden state to carry, so the dummy init input is a full context_length
+    window instead of a single step. obs_preprocess_fn is applied to the dummy
+    obs before init (unlike the plain/recurrent create_*_train_state, which
+    pass raw dummy arrays straight through) because a transformer's input_layer
+    typically expects a structured pytree (e.g. unpacked token/calendar ids),
+    not a flat array -- model.init must trace the same pytree structure real
+    training will use.
+    """
+    state_rng, init_rng, quantile_rng, noise_rng = jax.random.split(rng, num=4)
+    rngs = {"params": init_rng, "quantiles": quantile_rng, "noise": noise_rng}
+    model = network(**args_network)
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+    dummy_obs = _preprocess(jnp.ones((1, context_length, *obs_shape)))
+    dummy_action = jnp.zeros((1, context_length), dtype=jnp.int32)
+    dummy_reward = jnp.zeros((1, context_length))
+    dummy_terminated = jnp.zeros((1, context_length), dtype=bool)
+    dummy_truncated = jnp.zeros((1, context_length), dtype=bool)
+    dummy_mask = build_causal_boundary_mask(dummy_terminated, dummy_truncated)
+    # Parameter shapes do not depend on the number of quantile samples.
+    params = model.init(rngs, (dummy_obs, dummy_action, dummy_reward, dummy_mask), 1)
+    tx = optimizer(**args_optimizer)
+    return TrainState.create(
+        apply_fn=model.apply,
+        params=params,
+        target_params=params,
+        key=state_rng,
+        tx=tx,
+        tau=tau,
+        target_update_period=target_update_period,
+    )
+
+
+def restore_transformer_dqn_flax_state(
+    *,
+    rng,
+    network,
+    args_network,
+    optimizer,
+    args_optimizer,
+    observation_shape,
+    context_length,
+    tau,
+    target_update_period=0,
+    obs_preprocess_fn: Callable | None = None,
+    checkpointdir,
+):
+    state = create_transformer_train_state(
+        rng,
+        network,
+        args_network,
+        optimizer,
+        args_optimizer,
+        observation_shape,
+        context_length,
+        tau,
+        target_update_period,
+        obs_preprocess_fn,
+    )
+    if checkpointdir is None:
+        return state
+    orbax_checkpointer = ocp.StandardCheckpointer()
+    abstract_my_tree = jax.tree_util.tree_map(ocp.utils.to_shape_dtype_struct, state)
+    return orbax_checkpointer.restore(checkpointdir, abstract_my_tree)
+
+
+def get_select_action_transformer_batch_fn(
+    apply_fn: ActorApply,
+    num_quantile_samples: int,
+    max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
+    epsilon_scheduler_fn: Callable[[int], float] | None = None,
+) -> Callable:
+    """Like get_select_action_recurrent_batch_fn but for a causal-transformer
+    network: no hidden state threading. One forward pass over the whole
+    (num_envs, context_length, ...) window every call; the boundary mask is
+    built from the window's own terminated/truncated, and only the LAST
+    position's sampled action is returned (the window's other positions exist
+    purely to give that last position context).
+    """
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    def _prepare_inputs(obs_window, action_window, reward_window, terminated_window, truncated_window):
+        obs_t = _preprocess(obs_window)
+        reward_t = jnp.clip(
+            reward_window.astype(jnp.float32), -max_abs_reward, max_abs_reward
+        )
+        mask = build_causal_boundary_mask(terminated_window, truncated_window)
+        return obs_t, action_window, reward_t, mask
+
+    if epsilon_scheduler_fn is None:
+
+        @jax.jit
+        def select_action(
+            key, params, obs_window, action_window, reward_window, terminated_window, truncated_window
+        ):
+            key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
+            actor_policy, _, _ = apply_fn(
+                params,
+                _prepare_inputs(
+                    obs_window, action_window, reward_window, terminated_window, truncated_window
+                ),
+                num_quantile_samples,
+                rngs={"quantiles": quantile_key, "noise": noise_key},
+            )
+            action = actor_policy.sample(seed=policy_key)
+            return key, action[:, -1]
+
+        return select_action
+
+    @jax.jit
+    def _select_action_eps(
+        key,
+        params,
+        obs_window,
+        action_window,
+        reward_window,
+        terminated_window,
+        truncated_window,
+        epsilon,
+    ):
+        key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
+        actor_policy, _, _ = apply_fn(
+            params,
+            _prepare_inputs(
+                obs_window, action_window, reward_window, terminated_window, truncated_window
+            ),
+            num_quantile_samples,
+            epsilon,
+            rngs={"quantiles": quantile_key, "noise": noise_key},
+        )
+        action = actor_policy.sample(seed=policy_key)
+        return key, action[:, -1]
+
+    step_count = 0
+
+    def select_action(
+        key, params, obs_window, action_window, reward_window, terminated_window, truncated_window
+    ):
+        nonlocal step_count
+        step_count += obs_window.shape[0]
+        epsilon = epsilon_scheduler_fn(step_count)
+        # Exposed for the trainer's summary logging.
+        setattr(select_action, "epsilon", epsilon)  # noqa: B010
+        return _select_action_eps(
+            key,
+            params,
+            obs_window,
+            action_window,
+            reward_window,
+            terminated_window,
+            truncated_window,
+            epsilon,
+        )
+
+    return select_action
+
+
+def get_transformer_rollout(
+    *,
+    apply_fn: ActorApply,
+    warmup_length: int,
+    num_tau_samples: int,
+    num_tau_prime_samples: int,
+    max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
+) -> Callable:
+    """Rollout half of the transformer M-IQN step: one forward pass per network
+    (online with num_tau_samples, target with num_tau_prime_samples) over the
+    FULL sampled (batch, context_length, ...) window -- no burn-in sub-pass,
+    unlike get_recurrent_rollout, since causal self-attention gives exact (not
+    approximate) per-position representations regardless of position; there is
+    no carry that needs unrolling to become trustworthy.
+
+    warmup_length positions remain attendable context but are excluded from
+    the returned (anchor) sequences: any sampled window's start is an
+    arbitrary cut into real history that the network has no compensating
+    carry for, so training an anchor there would fit the Q-estimate to
+    artificially left-truncated context.
+    """
+    _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
+
+    def _transformer_rollout(
+        q_params: FrozenDict,
+        target_q_params: FrozenDict,
+        sample: TimeStepDQN,
+        quantile_key: chex.PRNGKey,
+    ) -> RecurrentQuantileRolloutSample:
+        online_key, online_noise_key, target_key, target_noise_key = jax.random.split(
+            quantile_key, num=4
+        )
+        mask = build_causal_boundary_mask(sample.terminated, sample.truncated)
+        reward_c = jnp.clip(sample.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
+        network_input = (_preprocess(sample.obs), sample.action, reward_c, mask)
+
+        _, z_online, quantiles_online = apply_fn(
+            q_params,
+            network_input,
+            num_tau_samples,
+            rngs={"quantiles": online_key, "noise": online_noise_key},
+        )
+        _, z_target, _ = apply_fn(
+            target_q_params,
+            network_input,
+            num_tau_prime_samples,
+            rngs={"quantiles": target_key, "noise": target_noise_key},
+        )
+
+        return RecurrentQuantileRolloutSample(
+            z_online=z_online[:, warmup_length:].astype(jnp.float32),
+            quantiles_online=quantiles_online[:, warmup_length:].astype(jnp.float32),
+            z_target=z_target[:, warmup_length:].astype(jnp.float32),
+            action=sample.action[:, warmup_length:],
+            reward=sample.reward[:, warmup_length:],
+            terminated=sample.terminated[:, warmup_length:],
+            truncated=sample.truncated[:, warmup_length:],
+        )
+
+    return _transformer_rollout
+
+
+def get_update_step_transformer(
+    *,
+    apply_fn: ActorApply,
+    warmup_length: int,
+    n_steps: int,
+    gamma: float,
+    entropy_temperature: float,
+    munchausen_coefficient: float,
+    clip_value_min: float,
+    quantile_huber_kappa: float,
+    num_tau_samples: int,
+    num_tau_prime_samples: int,
+    max_abs_reward: float,
+    obs_preprocess_fn: Callable | None = None,
+) -> Callable:
+    """Transformer counterpart of get_update_step_recurrent.
+
+    Trainer only patches the real apply_fn into args_get_update_step.apply_fn
+    at trainer-construction time (after config definition), so the transformer
+    rollout closure (which needs that real apply_fn) can't be pre-built as a
+    config field the way one might expect -- it has to be assembled here,
+    where apply_fn is already in hand, and then forwarded to
+    get_update_step_recurrent completely unchanged, reusing its n-step
+    Munchausen quantile loss / anchor-masking machinery as-is.
+    """
+    rollout_fn = get_transformer_rollout(
+        apply_fn=apply_fn,
+        warmup_length=warmup_length,
+        num_tau_samples=num_tau_samples,
+        num_tau_prime_samples=num_tau_prime_samples,
+        max_abs_reward=max_abs_reward,
+        obs_preprocess_fn=obs_preprocess_fn,
+    )
+    return get_update_step_recurrent(
+        apply_fn=apply_fn,
+        burn_in_length=warmup_length,
+        n_steps=n_steps,
+        gamma=gamma,
+        entropy_temperature=entropy_temperature,
+        munchausen_coefficient=munchausen_coefficient,
+        clip_value_min=clip_value_min,
+        quantile_huber_kappa=quantile_huber_kappa,
+        num_tau_samples=num_tau_samples,
+        num_tau_prime_samples=num_tau_prime_samples,
+        max_abs_reward=max_abs_reward,
+        obs_preprocess_fn=obs_preprocess_fn,
+        recurrent_rollout_fn=rollout_fn,
+    )
 
 
 def get_update_epoch(
