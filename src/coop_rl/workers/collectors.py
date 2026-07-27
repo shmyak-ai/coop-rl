@@ -536,7 +536,7 @@ class CollectorDQNWindowedUniform:
         # hidden-state staleness concern here (the window holds raw env data,
         # not param-derived activations), so this mirrors CollectorDQNUniform
         # rather than CollectorDQNRecurrentUniform's single-latest-params rule.
-        self.online_params = deque(maxlen=10)
+        self.online_params = deque(maxlen=1)
         self.online_params.append(flax_state.params)
 
         self.futures_parameters = self.command_executor.submit(self.controller, "get_parameters")
