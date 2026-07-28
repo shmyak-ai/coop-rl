@@ -421,14 +421,20 @@ class TrainerSequential:
                 for name, value in info.items():
                     if np.ndim(value) == 0:
                         scalars[f"trainer/{name}"] = float(value)
-                returns = self.collector.completed_returns
-                if returns:
-                    scalars["collector/mean_return"] = sum(returns) / len(returns)
-                # Last epsilon computed by the collector's action-selection closure
-                # (set only when an epsilon_scheduler_fn is configured).
-                epsilon = getattr(self.collector.select_action, "epsilon", None)
-                if epsilon is not None:
-                    scalars["collector/epsilon"] = float(epsilon)
+                if hasattr(self.collector, "episode_scalars"):
+                    # Return, reward-per-step, episode length, switch rate,
+                    # terminated fraction, epsilon and any per-episode env
+                    # metrics; cleared on read.
+                    scalars.update(self.collector.episode_scalars())
+                else:
+                    returns = self.collector.completed_returns
+                    if returns:
+                        scalars["collector/mean_return"] = sum(returns) / len(returns)
+                    # Last epsilon computed by the collector's action-selection closure
+                    # (set only when an epsilon_scheduler_fn is configured).
+                    epsilon = getattr(self.collector.select_action, "epsilon", None)
+                    if epsilon is not None:
+                        scalars["collector/epsilon"] = float(epsilon)
                 self._writer.write_scalars(updates, scalars)
                 self._writer.flush()
                 self.logger.info(

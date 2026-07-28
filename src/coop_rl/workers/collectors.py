@@ -551,6 +551,17 @@ class CollectorDQNWindowedUniform:
         self._win_truncated = None
         self.episode_reward_now = np.zeros(self.num_envs)
         self.completed_returns: deque[float] = deque(maxlen=100)
+        # An episode return is a sum, so it moves with episode length as well as
+        # with policy quality; these separate the two, and completed_metrics
+        # carries whatever env-specific per-episode scalars the env reports in
+        # infos["metrics"] (e.g. realized P&L, which the reward is not).
+        self.episode_steps_now = np.zeros(self.num_envs, dtype=np.int64)
+        self.episode_switches_now = np.zeros(self.num_envs, dtype=np.int64)
+        self._prev_action = np.zeros(self.num_envs, dtype=self.dtypes.action)
+        self.completed_lengths: deque[float] = deque(maxlen=100)
+        self.completed_switch_rates: deque[float] = deque(maxlen=100)
+        self.completed_terminated: deque[float] = deque(maxlen=100)
+        self.completed_metrics: dict[str, deque[float]] = {}
         self._params_received = 0
         self._env_steps = 0
         self._writer: _TBWriter | None = (
@@ -599,6 +610,69 @@ class CollectorDQNWindowedUniform:
         self._win_terminated[:, -1] = 0
         self._win_truncated[:, -1] = 0
 
+    def _track_step(self, actions, rewards, infos):
+        """Advance the per-episode counters for one env step; returns the env's
+        per-episode metrics dict from infos (or None) for _finish_episode_stats."""
+        self.episode_reward_now += rewards
+        self.episode_steps_now += 1
+        # episode_steps_now == 1 is an episode's first action, which has no
+        # predecessor in this episode to have switched away from.
+        self.episode_switches_now += (actions != self._prev_action) & (self.episode_steps_now > 1)
+        self._prev_action = actions
+        return infos.get("metrics") if isinstance(infos, dict) else None
+
+    def _finish_episode_stats(self, i, terminated_i, metrics) -> None:
+        """Close out env i's episode statistics and reset its counters."""
+        steps = max(int(self.episode_steps_now[i]), 1)
+        self.completed_returns.append(float(self.episode_reward_now[i]))
+        self.completed_lengths.append(float(steps))
+        self.completed_switch_rates.append(1000.0 * float(self.episode_switches_now[i]) / steps)
+        self.completed_terminated.append(float(terminated_i))
+        if metrics is not None:
+            for name, values in metrics.items():
+                self.completed_metrics.setdefault(name, deque(maxlen=100)).append(
+                    float(np.asarray(values)[i])
+                )
+        self.episode_reward_now[i] = 0.0
+        self.episode_steps_now[i] = 0
+        self.episode_switches_now[i] = 0
+
+    def episode_scalars(self) -> dict[str, float]:
+        """Per-episode metrics since the last call, cleared on read ({} if none).
+
+        An episode return is a *sum*, so it moves with episode length as well as
+        with policy quality; reward_per_step, episode_length and
+        terminated_fraction separate those. mean_/median_<name> carry whatever
+        per-episode scalars the env reports in infos["metrics"] -- e.g. realized
+        P&L, which a shaped or clipped reward is not and can differ from in sign.
+        """
+        if not self.completed_returns:
+            return {}
+        lengths = np.asarray(self.completed_lengths)
+        scalars = {
+            "collector/mean_return": float(np.mean(self.completed_returns)),
+            "collector/median_return": float(np.median(self.completed_returns)),
+            "collector/reward_per_step": float(np.sum(self.completed_returns) / np.sum(lengths)),
+            "collector/episode_length": float(np.mean(lengths)),
+            "collector/action_switch_rate_per_1k": float(np.mean(self.completed_switch_rates)),
+            "collector/terminated_fraction": float(np.mean(self.completed_terminated)),
+        }
+        # Set only when an epsilon_scheduler_fn is configured.
+        epsilon = getattr(self.select_action, "epsilon", None)
+        if epsilon is not None:
+            scalars["collector/epsilon"] = float(epsilon)
+        for name, values in self.completed_metrics.items():
+            if values:
+                scalars[f"collector/mean_{name}"] = float(np.mean(values))
+                scalars[f"collector/median_{name}"] = float(np.median(values))
+        self.completed_returns.clear()
+        self.completed_lengths.clear()
+        self.completed_switch_rates.clear()
+        self.completed_terminated.clear()
+        for values in self.completed_metrics.values():
+            values.clear()
+        return scalars
+
     def warmup(self) -> None:
         """Trigger JIT compilation of select_action in the calling thread."""
         self._reset_obs()
@@ -638,7 +712,7 @@ class CollectorDQNWindowedUniform:
                 self._win_truncated,
             )
             actions = np.asarray(action_jnp, dtype=self.dtypes.action)  # (num_envs,)
-            next_obs, rewards, terminated, truncated, _infos = self.env.step(actions)
+            next_obs, rewards, terminated, truncated, infos = self.env.step(actions)
 
             # Fill in the transition just taken at the window's newest slot
             # (it held only a placeholder obs until now, since the action from
@@ -654,11 +728,10 @@ class CollectorDQNWindowedUniform:
             terminated_list.append(terminated)
             truncated_list.append(truncated)
 
-            self.episode_reward_now += rewards
+            metrics = self._track_step(actions, rewards, infos)
             done = np.logical_or(terminated, truncated)
             for i in np.where(done)[0]:
-                self.completed_returns.append(float(self.episode_reward_now[i]))
-                self.episode_reward_now[i] = 0.0
+                self._finish_episode_stats(i, terminated[i], metrics)
 
             # AutoresetMode.DISABLED: env.step() returns the terminal obs but
             # never resets sub-environments internally. Reset done envs here so
@@ -733,13 +806,10 @@ class CollectorDQNWindowedUniform:
                     [f"{r:.1f}" for r in self.completed_returns],
                     self._params_received,
                 )
-                if self._writer is not None and self.completed_returns:
-                    self._writer.write_scalars(
-                        self._env_steps,
-                        {"collector/mean_return": float(np.mean(self.completed_returns))},
-                    )
+                scalars = self.episode_scalars()
+                if self._writer is not None and scalars:
+                    self._writer.write_scalars(self._env_steps, scalars)
                     self._writer.flush()
-                self.completed_returns.clear()
                 self._params_received = 0
 
     def close(self) -> None:
