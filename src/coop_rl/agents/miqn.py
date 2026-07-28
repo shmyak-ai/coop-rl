@@ -710,6 +710,7 @@ def get_update_step_recurrent(
     max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
     recurrent_rollout_fn: Callable | None = None,
+    double_q: bool = False,
 ) -> Callable:
     """M-IQN-step half of the recurrent step: consumes a rollout's quantile sequences.
 
@@ -718,6 +719,11 @@ def get_update_step_recurrent(
     sequences from a recurrent_rollout_fn. Each sequence yields
     learn_length - n_steps anchors; truncated anchors are masked out. Uniform
     replay: no importance weights, no priorities.
+
+    `double_q` splits selection from evaluation in the soft bootstrap: the online
+    network's quantile mean picks the action weights, the target network still
+    supplies the quantile values. Off by default so existing configs keep their
+    single-network (maximization-biased) bootstrap.
     """
     assert n_steps >= 1, "n_steps must be at least 1"
     _rollout_fn = recurrent_rollout_fn or get_recurrent_rollout(
@@ -742,7 +748,13 @@ def get_update_step_recurrent(
 
             r_t = jnp.clip(rollout.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
 
-            batch_loss = munchausen_quantile_q_learning_n_step(
+            # Double-Q selector: the online quantile mean, detached so it only
+            # steers the bootstrap's action weights and carries no gradient.
+            q_selector = (
+                jax.lax.stop_gradient(jnp.mean(rollout.z_online, axis=2)) if double_q else None
+            )
+
+            batch_loss, aux = munchausen_quantile_q_learning_n_step(
                 rollout.z_online,
                 rollout.quantiles_online,
                 rollout.z_target,
@@ -756,10 +768,12 @@ def get_update_step_recurrent(
                 munchausen_coefficient,
                 clip_value_min,
                 quantile_huber_kappa,
+                q_selector,
             )
 
             loss_info = {
                 "loss": batch_loss,
+                **aux,
             }
 
             return batch_loss, loss_info
@@ -1033,6 +1047,7 @@ def get_update_step_transformer(
     num_tau_prime_samples: int,
     max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
+    double_q: bool = False,
 ) -> Callable:
     """Transformer counterpart of get_update_step_recurrent.
 
@@ -1066,6 +1081,7 @@ def get_update_step_transformer(
         max_abs_reward=max_abs_reward,
         obs_preprocess_fn=obs_preprocess_fn,
         recurrent_rollout_fn=rollout_fn,
+        double_q=double_q,
     )
 
 

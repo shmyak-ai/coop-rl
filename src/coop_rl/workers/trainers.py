@@ -245,17 +245,19 @@ class Trainer(BufferKeeper):
                     f"CPU: {cpu_pct:.1f}%  RSS: {rss_main:.2f} GiB  "
                     f"GPU peak: {gpu_peak_gib:.2f} GiB."
                 )
-                self._writer.write_scalars(
-                    int(self.flax_state.step),
-                    {
-                        "trainer/loss": float(info["loss"]),
-                        "trainer/steps_per_second": self.summary_writing_period / elapsed,
-                        "perf/gpu_queue_fill": queue_fill,
-                        "system/cpu_percent": cpu_pct,
-                        "system/cpu_rss_gib": rss_main,
-                        "system/gpu_peak_bytes_in_use_gib": gpu_peak_gib,
-                    },
-                )
+                scalars = {
+                    "trainer/steps_per_second": self.summary_writing_period / elapsed,
+                    "perf/gpu_queue_fill": queue_fill,
+                    "system/cpu_percent": cpu_pct,
+                    "system/cpu_rss_gib": rss_main,
+                    "system/gpu_peak_bytes_in_use_gib": gpu_peak_gib,
+                }
+                # All scalar diagnostics from the update step (skips per-sample
+                # arrays such as the PER priorities), like TrainerSequential.
+                for name, value in info.items():
+                    if np.ndim(value) == 0:
+                        scalars[f"trainer/{name}"] = float(value)
+                self._writer.write_scalars(int(self.flax_state.step), scalars)
                 self._writer.flush()
                 step_start = time.monotonic()
 

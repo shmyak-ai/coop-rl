@@ -240,7 +240,8 @@ def munchausen_quantile_q_learning_n_step(
     munchausen_coefficient: chex.Array,
     clip_value_min: chex.Array,
     quantile_huber_kappa: chex.Array,
-) -> chex.Array:
+    q_selector: chex.Array | None = None,
+) -> tuple[chex.Array, dict]:
     """N-step Munchausen-IQN loss over (batch, time, ...) learn-window sequences.
 
     The quantile analogue of munchausen_q_learning_n_step: every timestep t in
@@ -254,20 +255,40 @@ def munchausen_quantile_q_learning_n_step(
     truncated step. The pairwise quantile Huber loss (sum over the N online
     quantiles, mean over the N' target quantiles) is averaged over the anchors,
     with truncated anchors masked out.
+
+    `q_selector`, if given, is a (batch, time, actions) q-value array (already
+    stop_gradient-ed) used *instead of* the target quantile mean to build the
+    bootstrap policy pi -- Double-DQN's selection/evaluation split, adapted to
+    the soft bootstrap: the selector picks the action weights, the target
+    network still supplies the quantile values they weight. The Munchausen
+    anchor term keeps using the target network's own log-policy, since that is
+    the "previous policy" the M-DQN log-policy bonus is defined against.
+
+    Returns (loss, aux) where aux carries monitoring-only scalars: without them
+    an overestimating Q is invisible, because the quantile Huber loss alone
+    cannot show the *sign* of the TD error.
     """
     action_one_hot = jax.nn.one_hot(a_t, z_target.shape[-1])
     # Munchausen reward shaping: r + alpha * clip(tau * ln pi(a|s), l0, 0), with pi
     # computed from the target network's quantile-mean q-values.
     q_target = jnp.mean(z_target, axis=2)
     log_pi = jax.nn.log_softmax(q_target / entropy_temperature, axis=-1)
-    pi = jax.nn.softmax(q_target / entropy_temperature, axis=-1)
     munchausen_term_a = jnp.sum(action_one_hot * entropy_temperature * log_pi, axis=-1)
+    munchausen_clipped = munchausen_term_a <= clip_value_min
     munchausen_term_a = jnp.clip(munchausen_term_a, clip_value_min, 0.0)
     shaped_r = r_t + munchausen_coefficient * munchausen_term_a
 
+    # Bootstrap policy: the target's own log-policy unless a selector is supplied.
+    if q_selector is None:
+        boot_log_pi = log_pi
+    else:
+        boot_log_pi = jax.nn.log_softmax(q_selector / entropy_temperature, axis=-1)
+    boot_pi = jnp.exp(boot_log_pi)
+
     # Per-quantile soft bootstrap: sum_a pi(a|s) * (z_j(s, a) - tau * ln pi(a|s)).
     soft_z = jnp.sum(
-        pi[:, :, jnp.newaxis, :] * (z_target - entropy_temperature * log_pi[:, :, jnp.newaxis, :]),
+        boot_pi[:, :, jnp.newaxis, :]
+        * (z_target - entropy_temperature * boot_log_pi[:, :, jnp.newaxis, :]),
         axis=-1,
     )
 
@@ -302,4 +323,27 @@ def munchausen_quantile_q_learning_n_step(
     rho = jnp.abs(quantiles[:, :anchors, :, jnp.newaxis] - indicator) * huber / quantile_huber_kappa
     anchor_loss = jnp.sum(jnp.mean(rho, axis=3), axis=2)
     weights = 1.0 - truncated[:, :anchors]
-    return jnp.sum(anchor_loss * weights) / jnp.maximum(jnp.sum(weights), 1.0)
+    denom = jnp.maximum(jnp.sum(weights), 1.0)
+    loss = jnp.sum(anchor_loss * weights) / denom
+
+    # Monitoring only. td_signed is the headline number: a persistently negative
+    # mean (target below prediction) is overestimation, which the Huber loss hides.
+    q_online_a = jnp.mean(z_t_a, axis=-1)
+    q_target_mean = jnp.mean(target, axis=-1)
+    entropy = -jnp.sum(boot_pi * boot_log_pi, axis=-1)
+    aux = {
+        "td_signed": jnp.sum((q_target_mean - q_online_a) * weights) / denom,
+        "td_abs": jnp.sum(jnp.abs(q_target_mean - q_online_a) * weights) / denom,
+        "q_online_taken": jnp.sum(q_online_a * weights) / denom,
+        "q_target_n_step": jnp.sum(q_target_mean * weights) / denom,
+        "munchausen_clip_fraction": jnp.mean(munchausen_clipped.astype(jnp.float32)),
+        "bootstrap_policy_entropy": jnp.mean(entropy),
+        "entropy_bonus": entropy_temperature * jnp.mean(entropy),
+    }
+    # Per-action Q as separate scalars: an action the policy never takes gets no
+    # gradient, and its value silently drifting away from the others is the
+    # signature of that. The action count is static at trace time.
+    q_per_action = jnp.mean(jnp.mean(z_online, axis=2), axis=(0, 1))
+    for i in range(z_online.shape[-1]):
+        aux[f"q_online_action_{i}"] = q_per_action[i]
+    return loss, aux
