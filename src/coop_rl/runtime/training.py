@@ -115,11 +115,17 @@ def decorate_remote_components(conf: Any) -> Any:
         num_gpus=0.5 / conf.num_collectors,
         runtime_env=RUNTIME_ENV_COLLECTOR,
     )(conf.collector)
+    if getattr(conf, "validator", None) is not None:
+        conf.validator = ray.remote(
+            num_cpus=1,
+            num_gpus=0.5 / conf.num_collectors,
+            runtime_env=RUNTIME_ENV_COLLECTOR,
+        )(conf.validator)
     return conf
 
 
-def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
-    """Launch controller, trainer, and collector actors."""
+def launch_remote_workers(conf: Any) -> tuple[Any, list[Any], Any | None]:
+    """Launch controller, trainer, collector, and (if configured) validator actors."""
     controller = conf.controller.remote(**conf.args_controller)
 
     conf.args_trainer.controller = controller
@@ -143,7 +149,12 @@ def launch_remote_workers(conf: Any) -> tuple[Any, list[Any]]:
         collector = conf.collector.remote(**conf.args_collector)
         collectors.append(collector)
 
-    return trainer, collectors
+    validator = None
+    if getattr(conf, "validator", None) is not None:
+        conf.args_validator.controller = controller
+        validator = conf.validator.remote(**conf.args_validator)
+
+    return trainer, collectors, validator
 
 
 def initialize_ray(debug_ray: bool) -> None:
@@ -179,7 +190,7 @@ def run_training(args: Namespace) -> None:
 
     try:
         conf = decorate_remote_components(conf)
-        trainer, collectors = launch_remote_workers(conf)
+        trainer, collectors, validator = launch_remote_workers(conf)
 
         trainer_futures = (
             [trainer.training.remote()]
@@ -187,6 +198,8 @@ def run_training(args: Namespace) -> None:
             + [trainer.add_traj_seq.remote(1)]
         )
         collect_info_futures = [collector.collecting.remote() for collector in collectors]
+        if validator is not None:
+            collect_info_futures.append(validator.validating.remote())
 
         ray.get(trainer_futures)
         ray.get(collect_info_futures)
@@ -209,8 +222,9 @@ def _run_sequential_training(conf: Any) -> None:
         trainer.close()
 
 
-def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
-    """Launch controller, trainer, and collectors as local objects."""
+def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any], Any | None]:
+    """Launch controller, trainer, collectors, and (if configured) validator as
+    local objects."""
     conf.args_trainer.controller = controller = conf.controller(**conf.args_controller)
     trainer = conf.trainer(**conf.args_trainer)
 
@@ -230,15 +244,22 @@ def _launch_thread_workers(conf: Any) -> tuple[Any, Any, list[Any]]:
         collector = conf.collector(**conf.args_collector)
         collectors.append(collector)
 
-    # Warm up each collector's JIT-compiled select_action sequentially in the main
-    # thread. Each collector holds a distinct jit-wrapped function object, so JAX
-    # compiles them independently. Running warmup() here serialises those
-    # compilations and prevents the cuda_timer race that occurs when all collector
-    # threads trigger JIT on a cold GPU simultaneously.
+    validator = None
+    if getattr(conf, "validator", None) is not None:
+        conf.args_validator.controller = controller
+        validator = conf.validator(**conf.args_validator)
+
+    # Warm up each collector's (and the validator's) JIT-compiled select_action
+    # sequentially in the main thread. Each holds a distinct jit-wrapped function
+    # object, so JAX compiles them independently. Running warmup() here serialises
+    # those compilations and prevents the cuda_timer race that occurs when all
+    # collector threads trigger JIT on a cold GPU simultaneously.
     for collector in collectors:
         collector.warmup()
+    if validator is not None:
+        validator.warmup()
 
-    return controller, trainer, collectors
+    return controller, trainer, collectors, validator
 
 
 def _stop_thread_workers(controller: Any, trainer: Any) -> None:
@@ -247,17 +268,19 @@ def _stop_thread_workers(controller: Any, trainer: Any) -> None:
     controller.set_done()
 
 
-def _close_thread_workers(trainer: Any, collectors: list[Any]) -> None:
+def _close_thread_workers(trainer: Any, collectors: list[Any], validator: Any | None) -> None:
     """Release helper executors and environments owned by local workers."""
     trainer.close()
     for collector in collectors:
         collector.close()
+    if validator is not None:
+        validator.close()
 
 
 def _run_thread_training(conf: Any) -> None:
     """Execute training loop with regular Python multithreading."""
-    controller, trainer, collectors = _launch_thread_workers(conf)
-    max_workers = 1 + conf.num_samplers + conf.num_collectors
+    controller, trainer, collectors, validator = _launch_thread_workers(conf)
+    max_workers = 1 + conf.num_samplers + conf.num_collectors + (1 if validator is not None else 0)
 
     executor = ThreadPoolExecutor(max_workers=max_workers)
     _interrupted = False
@@ -267,6 +290,8 @@ def _run_thread_training(conf: Any) -> None:
             *[executor.submit(trainer.buffer_sampling) for _ in range(conf.num_samplers)],
             *[executor.submit(collector.collecting) for collector in collectors],
         ]
+        if validator is not None:
+            futures.append(executor.submit(validator.validating))
 
         try:
             for future in as_completed(futures):
@@ -288,7 +313,7 @@ def _run_thread_training(conf: Any) -> None:
         # daemon threads on process exit.
         executor.shutdown(wait=not _interrupted, cancel_futures=_interrupted)
         if not _interrupted:
-            _close_thread_workers(trainer, collectors)
+            _close_thread_workers(trainer, collectors, validator)
 
     if not _interrupted:
         time.sleep(3)

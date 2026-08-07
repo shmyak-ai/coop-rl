@@ -30,6 +30,8 @@ class Controller:
         self.logger.setLevel(log_level)
         self.done = False
         self.params_store = collections.deque(maxlen=10)  # FIFO
+        self.checkpoint_step = None
+        self.checkpoint_path = None
         self.logger.info("Controller initialized.")
 
     def set_done(self):
@@ -52,8 +54,24 @@ class Controller:
     def get_parameters_done(self):
         return self.get_parameters(), self.done
 
+    def get_latest_parameters(self):
+        """Non-destructive peek at the newest published params.
+
+        Unlike get_parameters()'s popleft(), this doesn't consume from the
+        bounded FIFO Collectors drain from, so it can be polled independently
+        (e.g. by a Validator) without reducing how many updates Collectors see.
+        """
+        return self.params_store[-1] if self.params_store else None
+
     def store_size(self):
         return len(self.params_store)
+
+    def set_checkpoint(self, step, path):
+        self.checkpoint_step = step
+        self.checkpoint_path = path
+
+    def get_checkpoint(self):
+        return self.checkpoint_step, self.checkpoint_path
 
 
 class CommandExecutor:
@@ -127,10 +145,9 @@ class _TBWriter:
         self._writer = EventFileWriter(logdir)
 
     def write_scalars(self, step: int, scalars: dict[str, float]) -> None:
-        summary = Summary(value=[
-            Summary.Value(tag=tag, simple_value=value)
-            for tag, value in scalars.items()
-        ])
+        summary = Summary(
+            value=[Summary.Value(tag=tag, simple_value=value) for tag, value in scalars.items()]
+        )
         self._writer.add_event(Event(wall_time=time.time(), step=step, summary=summary))
 
     def flush(self) -> None:

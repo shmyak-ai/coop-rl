@@ -275,6 +275,12 @@ class Trainer(BufferKeeper):
                 )
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+                self.command_executor.call(
+                    self.controller,
+                    "set_checkpoint",
+                    int(self.flax_state.step),
+                    orbax_checkpoint_path,
+                )
 
     def close(self) -> None:
         """Release local helper resources after training threads have stopped."""
