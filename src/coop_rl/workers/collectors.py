@@ -205,7 +205,11 @@ class CollectorDQNUniform:
                 if self._writer is not None and self.completed_returns:
                     self._writer.write_scalars(
                         self._env_steps,
-                        {"collector/mean_return": float(np.mean(self.completed_returns))},
+                        {
+                            f"collector/{self.collector_seed}/mean_return": float(
+                                np.mean(self.completed_returns)
+                            )
+                        },
                     )
                     self._writer.flush()
                 self.completed_returns.clear()
@@ -461,7 +465,11 @@ class CollectorDQNRecurrentUniform:
                 if self._writer is not None and self.completed_returns:
                     self._writer.write_scalars(
                         self._env_steps,
-                        {"collector/mean_return": float(np.mean(self.completed_returns))},
+                        {
+                            f"collector/{self.collector_seed}/mean_return": float(
+                                np.mean(self.completed_returns)
+                            )
+                        },
                     )
                     self._writer.flush()
                 self.completed_returns.clear()
@@ -649,22 +657,23 @@ class CollectorDQNWindowedUniform:
         if not self.completed_returns:
             return {}
         lengths = np.asarray(self.completed_lengths)
+        prefix = f"collector/{self.collector_seed}"
         scalars = {
-            "collector/mean_return": float(np.mean(self.completed_returns)),
-            "collector/median_return": float(np.median(self.completed_returns)),
-            "collector/reward_per_step": float(np.sum(self.completed_returns) / np.sum(lengths)),
-            "collector/episode_length": float(np.mean(lengths)),
-            "collector/action_switch_rate_per_1k": float(np.mean(self.completed_switch_rates)),
-            "collector/terminated_fraction": float(np.mean(self.completed_terminated)),
+            f"{prefix}/mean_return": float(np.mean(self.completed_returns)),
+            f"{prefix}/median_return": float(np.median(self.completed_returns)),
+            f"{prefix}/reward_per_step": float(np.sum(self.completed_returns) / np.sum(lengths)),
+            f"{prefix}/episode_length": float(np.mean(lengths)),
+            f"{prefix}/action_switch_rate_per_1k": float(np.mean(self.completed_switch_rates)),
+            f"{prefix}/terminated_fraction": float(np.mean(self.completed_terminated)),
         }
         # Set only when an epsilon_scheduler_fn is configured.
         epsilon = getattr(self.select_action, "epsilon", None)
         if epsilon is not None:
-            scalars["collector/epsilon"] = float(epsilon)
+            scalars[f"{prefix}/epsilon"] = float(epsilon)
         for name, values in self.completed_metrics.items():
             if values:
-                scalars[f"collector/mean_{name}"] = float(np.mean(values))
-                scalars[f"collector/median_{name}"] = float(np.median(values))
+                scalars[f"{prefix}/mean_{name}"] = float(np.mean(values))
+                scalars[f"{prefix}/median_{name}"] = float(np.median(values))
         self.completed_returns.clear()
         self.completed_lengths.clear()
         self.completed_switch_rates.clear()
@@ -995,7 +1004,11 @@ class CollectorDreamerUniform:
                 if self._writer is not None and self.completed_returns:
                     self._writer.write_scalars(
                         self._env_steps,
-                        {"collector/mean_return": float(np.mean(self.completed_returns))},
+                        {
+                            f"collector/{self.collector_seed}/mean_return": float(
+                                np.mean(self.completed_returns)
+                            )
+                        },
                     )
                     self._writer.flush()
                 self.completed_returns.clear()
