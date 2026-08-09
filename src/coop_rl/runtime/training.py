@@ -110,15 +110,25 @@ def decorate_remote_components(conf: Any) -> Any:
         runtime_env=RUNTIME_ENV_CPU,
     )(conf.controller)
     conf.trainer = ray.remote(num_cpus=1, num_gpus=0.5, runtime_env=RUNTIME_ENV_GPU)(conf.trainer)
+
+    # Half the GPU for the trainer, the other half shared by every inference
+    # actor -- so the run fits on one GPU, which is what Ray schedules against.
+    # The validator is an inference actor and comes out of that same half; giving
+    # it a collector-sized slice *on top* would make the run's total ask exceed
+    # 1.0 and leave it pending forever on a single-GPU box.
+    num_inference_actors = conf.num_collectors + (
+        1 if getattr(conf, "validator", None) is not None else 0
+    )
+    inference_gpus = 0.5 / num_inference_actors
     conf.collector = ray.remote(
         num_cpus=1,
-        num_gpus=0.5 / conf.num_collectors,
+        num_gpus=inference_gpus,
         runtime_env=RUNTIME_ENV_COLLECTOR,
     )(conf.collector)
     if getattr(conf, "validator", None) is not None:
         conf.validator = ray.remote(
             num_cpus=1,
-            num_gpus=0.5 / conf.num_collectors,
+            num_gpus=inference_gpus,
             runtime_env=RUNTIME_ENV_COLLECTOR,
         )(conf.validator)
     return conf

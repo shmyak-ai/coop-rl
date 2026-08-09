@@ -331,6 +331,7 @@ def munchausen_quantile_q_learning_n_step(
     q_online_a = jnp.mean(z_t_a, axis=-1)
     q_target_mean = jnp.mean(target, axis=-1)
     entropy = -jnp.sum(boot_pi * boot_log_pi, axis=-1)
+    q_online_all = jnp.mean(z_online, axis=2)
     aux = {
         "td_signed": jnp.sum((q_target_mean - q_online_a) * weights) / denom,
         "td_abs": jnp.sum(jnp.abs(q_target_mean - q_online_a) * weights) / denom,
@@ -339,11 +340,16 @@ def munchausen_quantile_q_learning_n_step(
         "munchausen_clip_fraction": jnp.mean(munchausen_clipped.astype(jnp.float32)),
         "bootstrap_policy_entropy": jnp.mean(entropy),
         "entropy_bonus": entropy_temperature * jnp.mean(entropy),
+        # Per-*state* spread across actions. The q_online_action_i scalars below
+        # average over states first, so a net whose action ranking stops depending
+        # on the state -- one that has collapsed to picking by a constant bias --
+        # leaves them unchanged while this collapses towards zero.
+        "q_action_dispersion": jnp.mean(jnp.std(q_online_all, axis=-1)),
     }
     # Per-action Q as separate scalars: an action the policy never takes gets no
     # gradient, and its value silently drifting away from the others is the
     # signature of that. The action count is static at trace time.
-    q_per_action = jnp.mean(jnp.mean(z_online, axis=2), axis=(0, 1))
+    q_per_action = jnp.mean(q_online_all, axis=(0, 1))
     for i in range(z_online.shape[-1]):
         aux[f"q_online_action_{i}"] = q_per_action[i]
     return loss, aux
