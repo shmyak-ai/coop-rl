@@ -59,7 +59,8 @@ class _RWLock:
 
 
 class BufferKeeper:
-    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache):
+    def __init__(self, buffer, args_buffer, num_samples_on_gpu_cache, replay_ratio=None):
+        self.replay_ratio = replay_ratio
         self.buffer = buffer(**args_buffer)
         self._rw_lock = _RWLock()
         self._samples_on_gpu = Queue(maxsize=num_samples_on_gpu_cache)
@@ -103,6 +104,23 @@ class BufferKeeper:
             if self.is_done:
                 self.logger.info("Done signal received; finishing buffer sampling.")
                 return
+
+            # Replay-ratio throttle: hold the sampler back until the collectors have
+            # supplied enough new transitions to pay for the next update, so gradient
+            # touches per unique transition is a set number rather than whatever the
+            # trainer/collector race happens to produce. Throttling the producer (not
+            # Trainer._training) keeps the sampler at most num_samples_on_gpu_cache
+            # batches ahead and starves the trainer through get_samples, leaving that
+            # loop untouched. The wait holds no lock, so add_traj_seq -- which needs
+            # the write lock, and is what advances _steps_added -- is never blocked.
+            while self.replay_ratio is not None:
+                updates_drawn = self._steps_sampled / self._sample_steps
+                if updates_drawn <= self._steps_added * self.replay_ratio:
+                    break
+                if self.is_done:
+                    self.logger.info("Done signal received; finishing buffer sampling.")
+                    return
+                time.sleep(0.01)
 
             with self._rw_lock.read():
                 sample = self.buffer.sample()
@@ -151,8 +169,9 @@ class Trainer(BufferKeeper):
         buffer,
         args_buffer,
         num_samples_on_gpu_cache,
+        replay_ratio=None,
     ):
-        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache)
+        super().__init__(buffer, args_buffer, num_samples_on_gpu_cache, replay_ratio)
 
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(log_level)

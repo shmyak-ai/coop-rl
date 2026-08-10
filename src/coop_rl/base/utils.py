@@ -55,11 +55,15 @@ def make_learning_rate(
         return init_lr
 
 
-def make_optimizer(*, max_grad_norm: float, adam_eps: float = 1e-5, **kwargs):
+def make_optimizer(
+    *, max_grad_norm: float, adam_eps: float = 1e-5, weight_decay: float = 0.0, **kwargs
+):
+    """`weight_decay` is decoupled (AdamW). At the 0.0 default adamw's update is
+    identical to adam's, so leaving it unset changes nothing."""
     lr = make_learning_rate(**kwargs)
     return optax.chain(
         optax.clip_by_global_norm(max_grad_norm),
-        optax.adam(lr, eps=adam_eps),
+        optax.adamw(lr, eps=adam_eps, weight_decay=weight_decay),
     )
 
 

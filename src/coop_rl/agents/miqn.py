@@ -884,6 +884,7 @@ def get_select_action_transformer_batch_fn(
     max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
     epsilon_scheduler_fn: Callable[[int], float] | None = None,
+    epsilon_mask_fn: Callable | None = None,
 ) -> Callable:
     """Like get_select_action_recurrent_batch_fn but for a causal-transformer
     network: no hidden state threading. One forward pass over the whole
@@ -891,6 +892,13 @@ def get_select_action_transformer_batch_fn(
     built from the window's own terminated/truncated, and only the LAST
     position's sampled action is returned (the window's other positions exist
     purely to give that last position context).
+
+    `epsilon_mask_fn`, if given, maps the raw obs window to a per-env multiplier
+    on epsilon, broadcastable against EpsilonGreedy's (batch, time) sample shape
+    -- e.g. (batch, 1). It exists for environments where an exploratory action is
+    not a small perturbation but carries a real cost, so exploration is worth
+    restricting to the states where it is cheap. Domain knowledge stays in the
+    callable, like obs_preprocess_fn.
     """
     _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
 
@@ -934,13 +942,14 @@ def get_select_action_transformer_batch_fn(
         epsilon,
     ):
         key, quantile_key, noise_key, policy_key = jax.random.split(key, num=4)
+        eps = epsilon if epsilon_mask_fn is None else epsilon * epsilon_mask_fn(obs_window)
         actor_policy, _, _ = apply_fn(
             params,
             _prepare_inputs(
                 obs_window, action_window, reward_window, terminated_window, truncated_window
             ),
             num_quantile_samples,
-            epsilon,
+            eps,
             rngs={"quantiles": quantile_key, "noise": noise_key},
         )
         action = actor_policy.sample(seed=policy_key)
