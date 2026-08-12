@@ -243,6 +243,9 @@ class Trainer(BufferKeeper):
             if step == self.steps:
                 self.is_done = True
                 self.command_executor.call(self.controller, "set_done")
+                # The periodic save block below is never reached on this step, so
+                # the final state has to be checkpointed here or it is lost.
+                self._save_checkpoint()
                 self.logger.info(f"Final training step {step} reached; finishing.")
                 break
 
@@ -289,23 +292,30 @@ class Trainer(BufferKeeper):
                 )
 
             if step % self.save_period == 0:
-                orbax_checkpoint_path = os.path.join(
-                    self.workdir, f"chkpt_train_step_{self.flax_state.step:07}"
-                )
-                self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
-                self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
-                self.command_executor.call(
-                    self.controller,
-                    "set_checkpoint",
-                    int(self.flax_state.step),
-                    orbax_checkpoint_path,
-                )
+                self._save_checkpoint()
+
+    def _save_checkpoint(self) -> None:
+        orbax_checkpoint_path = os.path.join(
+            self.workdir, f"chkpt_train_step_{self.flax_state.step:07}"
+        )
+        self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
+        self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
+        self.command_executor.call(
+            self.controller,
+            "set_checkpoint",
+            int(self.flax_state.step),
+            orbax_checkpoint_path,
+        )
 
     def close(self) -> None:
         """Release local helper resources after training threads have stopped."""
         if self._closed:
             return
         self._closed = True
+        # Checkpoint saves commit in a background thread; wait for them here,
+        # otherwise interpreter shutdown kills the commit and leaves the final
+        # checkpoint as an uncommitted *.orbax-checkpoint-tmp directory.
+        self.orbax_checkpointer.close()
         self.command_executor.shutdown()
         self._writer.close()
         self.logger.info("Trainer closed.")
@@ -412,6 +422,7 @@ class TrainerSequential:
         rollout_frames = self.collector.steps_per_rollout * self.collector.num_envs
         last_summary_updates = 0
         last_save_updates = 0
+        last_saved_step = None
         window_start = time.monotonic()
         info = None
         while frames < self.env_frames:
@@ -478,7 +489,17 @@ class TrainerSequential:
                 self.orbax_checkpointer.save(orbax_checkpoint_path, self.flax_state)
                 self.logger.info(f"Orbax checkpoint is in: {orbax_checkpoint_path}")
                 last_save_updates = updates
+                last_saved_step = int(self.flax_state.step)
 
+        # The last rollout can both trigger a periodic save and exhaust the frame
+        # budget; orbax raises on an existing directory, so don't re-save it.
+        if int(self.flax_state.step) == last_saved_step:
+            self.logger.info(
+                "Frame budget reached (%d frames, %d updates); final checkpoint already saved.",
+                frames,
+                last_saved_step,
+            )
+            return
         orbax_checkpoint_path = os.path.join(
             self.workdir, f"chkpt_train_step_{self.flax_state.step:07}"
         )
