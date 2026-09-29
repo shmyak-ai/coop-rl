@@ -7,6 +7,9 @@ import rlax
 # This is because the original rlax losses are not batched and are meant to be used with vmap,
 # which is much slower.
 
+# Action counts above this log per-action Q as min/max rather than one scalar each.
+MAX_PER_ACTION_SCALARS = 8
+
 
 def categorical_double_q_learning(
     q_logits_tm1: chex.Array,
@@ -348,8 +351,14 @@ def munchausen_quantile_q_learning_n_step(
     }
     # Per-action Q as separate scalars: an action the policy never takes gets no
     # gradient, and its value silently drifting away from the others is the
-    # signature of that. The action count is static at trace time.
+    # signature of that. The action count is static at trace time. Past
+    # MAX_PER_ACTION_SCALARS actions they are too many to read, so only their extremes
+    # are logged: a drifting action still pulls one of the two away from the rest.
     q_per_action = jnp.mean(q_online_all, axis=(0, 1))
-    for i in range(z_online.shape[-1]):
-        aux[f"q_online_action_{i}"] = q_per_action[i]
+    if z_online.shape[-1] <= MAX_PER_ACTION_SCALARS:
+        for i in range(z_online.shape[-1]):
+            aux[f"q_online_action_{i}"] = q_per_action[i]
+    else:
+        aux["q_online_action_min"] = jnp.min(q_per_action)
+        aux["q_online_action_max"] = jnp.max(q_per_action)
     return loss, aux
