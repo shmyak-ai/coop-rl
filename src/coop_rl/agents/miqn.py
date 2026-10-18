@@ -38,6 +38,7 @@ from coop_rl.base.loss import (
 )
 from coop_rl.base.multistep import batch_discounted_returns
 from coop_rl.networks.base import ScannedRNN
+from coop_rl.networks.quantile import risk_preferences
 from coop_rl.networks.transformer import build_causal_boundary_mask
 
 
@@ -55,6 +56,7 @@ class RecurrentQuantileRolloutSample(NamedTuple):
     z_online: chex.Array  # (batch, learn_length, num_tau_samples, num_actions)
     quantiles_online: chex.Array  # (batch, learn_length, num_tau_samples)
     z_target: chex.Array  # (batch, learn_length, num_tau_prime_samples, num_actions)
+    quantiles_target: chex.Array  # (batch, learn_length, num_tau_prime_samples)
     action: chex.Array  # (batch, learn_length)
     reward: chex.Array  # (batch, learn_length)
     terminated: chex.Array  # (batch, learn_length)
@@ -674,7 +676,7 @@ def get_recurrent_rollout(
             num_tau_samples,
             rngs={"quantiles": online_key, "noise": online_noise_key},
         )
-        _, (_, z_target, _) = apply_fn(
+        _, (_, z_target, quantiles_target) = apply_fn(
             target_q_params,
             target_hidden_state,
             learn_input,
@@ -686,6 +688,7 @@ def get_recurrent_rollout(
             z_online=jnp.swapaxes(z_online, 0, 1).astype(jnp.float32),
             quantiles_online=jnp.swapaxes(quantiles_online, 0, 1).astype(jnp.float32),
             z_target=jnp.swapaxes(z_target, 0, 1).astype(jnp.float32),
+            quantiles_target=jnp.swapaxes(quantiles_target, 0, 1).astype(jnp.float32),
             action=sample.action[:, burn_in_length:],
             reward=sample.reward[:, burn_in_length:],
             terminated=sample.terminated[:, burn_in_length:],
@@ -711,6 +714,7 @@ def get_update_step_recurrent(
     obs_preprocess_fn: Callable | None = None,
     recurrent_rollout_fn: Callable | None = None,
     double_q: bool = False,
+    cvar_eta: float = 1.0,
 ) -> Callable:
     """M-IQN-step half of the recurrent step: consumes a rollout's quantile sequences.
 
@@ -724,6 +728,10 @@ def get_update_step_recurrent(
     network's quantile mean picks the action weights, the target network still
     supplies the quantile values. Off by default so existing configs keep their
     single-network (maximization-biased) bootstrap.
+
+    `cvar_eta` < 1 trains the risk-averse policy: the loss's policies and the double-Q
+    selector rank actions by CVaR_eta (`risk_preferences`) instead of the quantile mean.
+    Set the head's `cvar_eta` to the same value so the agent acts as it learns.
     """
     assert n_steps >= 1, "n_steps must be at least 1"
     _rollout_fn = recurrent_rollout_fn or get_recurrent_rollout(
@@ -751,7 +759,11 @@ def get_update_step_recurrent(
             # Double-Q selector: the online quantile mean, detached so it only
             # steers the bootstrap's action weights and carries no gradient.
             q_selector = (
-                jax.lax.stop_gradient(jnp.mean(rollout.z_online, axis=2)) if double_q else None
+                jax.lax.stop_gradient(
+                    risk_preferences(rollout.z_online, rollout.quantiles_online, cvar_eta)
+                )
+                if double_q
+                else None
             )
 
             batch_loss, aux = munchausen_quantile_q_learning_n_step(
@@ -769,6 +781,8 @@ def get_update_step_recurrent(
                 clip_value_min,
                 quantile_huber_kappa,
                 q_selector,
+                rollout.quantiles_target,
+                cvar_eta,
             )
 
             loss_info = {
@@ -1022,7 +1036,7 @@ def get_transformer_rollout(
             num_tau_samples,
             rngs={"quantiles": online_key, "noise": online_noise_key},
         )
-        _, z_target, _ = apply_fn(
+        _, z_target, quantiles_target = apply_fn(
             target_q_params,
             network_input,
             num_tau_prime_samples,
@@ -1033,6 +1047,7 @@ def get_transformer_rollout(
             z_online=z_online[:, warmup_length:].astype(jnp.float32),
             quantiles_online=quantiles_online[:, warmup_length:].astype(jnp.float32),
             z_target=z_target[:, warmup_length:].astype(jnp.float32),
+            quantiles_target=quantiles_target[:, warmup_length:].astype(jnp.float32),
             action=sample.action[:, warmup_length:],
             reward=sample.reward[:, warmup_length:],
             terminated=sample.terminated[:, warmup_length:],
@@ -1057,6 +1072,7 @@ def get_update_step_transformer(
     max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
     double_q: bool = False,
+    cvar_eta: float = 1.0,
 ) -> Callable:
     """Transformer counterpart of get_update_step_recurrent.
 
@@ -1091,6 +1107,7 @@ def get_update_step_transformer(
         obs_preprocess_fn=obs_preprocess_fn,
         recurrent_rollout_fn=rollout_fn,
         double_q=double_q,
+        cvar_eta=cvar_eta,
     )
 
 

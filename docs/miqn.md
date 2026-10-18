@@ -277,6 +277,25 @@ like the classic `FireResetEnv`). Remaining (minor) deviations: flax zero-init
 biases vs PyTorch's `U(±1/√fan_in)` biases, and "evaluation" being the
 training-policy rolling mean return rather than a separate near-greedy eval.
 
+## Risk-averse action selection (`cvar_eta`)
+
+Off by default (`cvar_eta = 1.0`, the quantile mean). Below 1, actions are ranked by
+CVaR_η, the mean of the quantile samples with σ < η: how good an action is in its worst η
+share of outcomes (Dabney et al. 2018's risk-sensitive policies). Two settings, kept equal:
+
+- the head's `cvar_eta` (all three heads in `networks/quantile.py`) sets the acting
+  policy — collectors, validators, eval;
+- `cvar_eta` on `get_update_step_recurrent` / `get_update_step_transformer` builds the
+  loss's Munchausen and bootstrap policies, and the double-Q selector, from the same
+  CVaR, so the values learned are those of the policy that acts. The quantile-Huber loss
+  still fits the whole distribution.
+
+Both pick the tail out of the uniform samples (`risk_preferences`), so only about K·η of
+them count: raise the acting `num_quantile_samples` to about K/η. The tail means sit
+closer together than the means, so the soft policy at a given τ is flatter; recheck
+`bootstrap_policy_entropy`. The head setting is not a parameter, so checkpoints load
+either way. The single-step `get_update_step` does not take it.
+
 ## Known caveats
 
 **Intermediate-shaping collapse (fixed).** An earlier version of `get_update_step`

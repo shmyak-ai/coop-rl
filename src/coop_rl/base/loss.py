@@ -3,6 +3,8 @@ import jax
 import jax.numpy as jnp
 import rlax
 
+from coop_rl.networks.quantile import risk_preferences
+
 # These losses are generally taken from rlax but edited to explicitly take in a batch of data.
 # This is because the original rlax losses are not batched and are meant to be used with vmap,
 # which is much slower.
@@ -244,6 +246,8 @@ def munchausen_quantile_q_learning_n_step(
     clip_value_min: chex.Array,
     quantile_huber_kappa: chex.Array,
     q_selector: chex.Array | None = None,
+    quantiles_target: chex.Array | None = None,
+    cvar_eta: float = 1.0,
 ) -> tuple[chex.Array, dict]:
     """N-step Munchausen-IQN loss over (batch, time, ...) learn-window sequences.
 
@@ -267,14 +271,20 @@ def munchausen_quantile_q_learning_n_step(
     anchor term keeps using the target network's own log-policy, since that is
     the "previous policy" the M-DQN log-policy bonus is defined against.
 
+    `cvar_eta` < 1 builds both policies (Munchausen and bootstrap) from CVaR_eta of the
+    target quantiles (`risk_preferences`, which needs `quantiles_target`) instead of their
+    mean, so the values learned are those of the risk-averse policy the heads act with.
+    The quantile loss itself still fits the whole distribution.
+
     Returns (loss, aux) where aux carries monitoring-only scalars: without them
     an overestimating Q is invisible, because the quantile Huber loss alone
     cannot show the *sign* of the TD error.
     """
     action_one_hot = jax.nn.one_hot(a_t, z_target.shape[-1])
     # Munchausen reward shaping: r + alpha * clip(tau * ln pi(a|s), l0, 0), with pi
-    # computed from the target network's quantile-mean q-values.
-    q_target = jnp.mean(z_target, axis=2)
+    # computed from the target network's quantile mean (CVaR_eta if cvar_eta < 1).
+    assert cvar_eta >= 1.0 or quantiles_target is not None, "cvar_eta < 1 needs quantiles_target"
+    q_target = risk_preferences(z_target, quantiles_target, cvar_eta)
     log_pi = jax.nn.log_softmax(q_target / entropy_temperature, axis=-1)
     munchausen_term_a = jnp.sum(action_one_hot * entropy_temperature * log_pi, axis=-1)
     munchausen_clipped = munchausen_term_a <= clip_value_min

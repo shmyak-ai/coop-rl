@@ -17,6 +17,19 @@ from coop_rl.networks.layers import NoisyLinear
 from coop_rl.networks.torso import MLPTorso, NoisyMLPTorso
 
 
+def risk_preferences(z_values: chex.Array, quantiles: chex.Array, cvar_eta: float) -> chex.Array:
+    """Action preferences from quantile samples z (..., N, A) at fractions (..., N).
+
+    cvar_eta = 1 is the quantile mean (the q-value). Below 1 it is CVaR_eta, the mean of the
+    samples whose fraction is under eta: the risk-averse policy of Dabney et al. 2018, which
+    ranks an action by its bad outcomes. Only ~N * eta samples count, so raise N to match.
+    """
+    if cvar_eta >= 1.0:
+        return z_values.mean(axis=-2)
+    w = (quantiles < cvar_eta)[..., jnp.newaxis].astype(jnp.float32)
+    return (z_values.astype(jnp.float32) * w).sum(axis=-2) / jnp.maximum(w.sum(axis=-2), 1.0)
+
+
 class QuantileQNetworkHead(nn.Module):
     """Plain (non-dueling) IQN head: quantile fusion -> MLP -> per-action quantile values."""
 
@@ -28,12 +41,14 @@ class QuantileQNetworkHead(nn.Module):
     use_layer_norm: bool = False
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     dtype: Any = None
+    # Rank actions by CVaR_eta instead of the mean; see risk_preferences. 1 = the mean.
+    cvar_eta: float = 1.0
 
     @nn.compact
     def __call__(
         self, embedding: chex.Array, num_quantiles: int, epsilon: float | None = None
     ) -> tuple[EpsilonGreedy, chex.Array, chex.Array]:
-        """Returns (epsilon-greedy policy over mean-z, z (..., N, A), quantiles (..., N)).
+        """Returns (eps-greedy policy over risk_preferences, z (..., N, A), quantiles (..., N)).
 
         `epsilon` overrides the module's static `self.epsilon` when given (e.g. for a
         schedule computed by the caller); defaults to `self.epsilon` otherwise.
@@ -62,7 +77,7 @@ class QuantileQNetworkHead(nn.Module):
         )(x)
         z_values = nn.Dense(self.action_dim, kernel_init=self.kernel_init, dtype=self.dtype)(x)
 
-        q_values = z_values.mean(axis=-2)
+        q_values = risk_preferences(z_values, quantiles, self.cvar_eta)
         eps = self.epsilon if epsilon is None else epsilon
         return EpsilonGreedy(preferences=q_values, epsilon=eps), z_values, quantiles
 
@@ -76,12 +91,14 @@ class DuelingQuantileQNetworkHead(nn.Module):
     use_layer_norm: bool = False
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     dtype: Any = None
+    # Rank actions by CVaR_eta instead of the mean; see risk_preferences. 1 = the mean.
+    cvar_eta: float = 1.0
 
     @nn.compact
     def __call__(
         self, embedding: chex.Array, num_quantiles: int, epsilon: float | None = None
     ) -> tuple[EpsilonGreedy, chex.Array, chex.Array]:
-        """Returns (epsilon-greedy policy over mean-z, z (..., N, A), quantiles (..., N)).
+        """Returns (eps-greedy policy over risk_preferences, z (..., N, A), quantiles (..., N)).
 
         `epsilon` overrides the module's static `self.epsilon` when given (e.g. for a
         schedule computed by the caller); defaults to `self.epsilon` otherwise.
@@ -121,7 +138,7 @@ class DuelingQuantileQNetworkHead(nn.Module):
         )
         z_values = value + advantages - advantages.mean(axis=-1, keepdims=True)
 
-        q_values = z_values.mean(axis=-2)
+        q_values = risk_preferences(z_values, quantiles, self.cvar_eta)
         eps = self.epsilon if epsilon is None else epsilon
         return EpsilonGreedy(preferences=q_values, epsilon=eps), z_values, quantiles
 
@@ -143,12 +160,14 @@ class NoisyDuelingQuantileQNetworkHead(nn.Module):
     use_layer_norm: bool = False
     kernel_init: Initializer = orthogonal(np.sqrt(2.0))
     dtype: Any = None
+    # Rank actions by CVaR_eta instead of the mean; see risk_preferences. 1 = the mean.
+    cvar_eta: float = 1.0
 
     @nn.compact
     def __call__(
         self, embedding: chex.Array, num_quantiles: int, epsilon: float | None = None
     ) -> tuple[EpsilonGreedy, chex.Array, chex.Array]:
-        """Returns (epsilon-greedy policy over mean-z, z (..., N, A), quantiles (..., N)).
+        """Returns (eps-greedy policy over risk_preferences, z (..., N, A), quantiles (..., N)).
 
         `epsilon` overrides the module's static `self.epsilon` when given (e.g. for a
         schedule computed by the caller); defaults to `self.epsilon` otherwise.
@@ -188,6 +207,6 @@ class NoisyDuelingQuantileQNetworkHead(nn.Module):
         )
         z_values = value + advantages - advantages.mean(axis=-1, keepdims=True)
 
-        q_values = z_values.mean(axis=-2)
+        q_values = risk_preferences(z_values, quantiles, self.cvar_eta)
         eps = self.epsilon if epsilon is None else epsilon
         return EpsilonGreedy(preferences=q_values, epsilon=eps), z_values, quantiles
