@@ -715,6 +715,8 @@ def get_update_step_recurrent(
     recurrent_rollout_fn: Callable | None = None,
     double_q: bool = False,
     cvar_eta: float = 1.0,
+    ensemble: bool = False,
+    ensemble_mask_prob: float = 1.0,
 ) -> Callable:
     """M-IQN-step half of the recurrent step: consumes a rollout's quantile sequences.
 
@@ -732,6 +734,11 @@ def get_update_step_recurrent(
     `cvar_eta` < 1 trains the risk-averse policy: the loss's policies and the double-Q
     selector rank actions by CVaR_eta (`risk_preferences`) instead of the quantile mean.
     Set the head's `cvar_eta` to the same value so the agent acts as it learns.
+
+    `ensemble` is for an EnsembleQuantileNetwork, whose samples carry a leading member
+    axis: the loss is computed per member and averaged. `ensemble_mask_prob` < 1 trains
+    each member on its own random share of the batch's sequences (bootstrapped DQN's masks,
+    Osband et al. 2016), so members differ by the data they fit, not only by initialization.
     """
     assert n_steps >= 1, "n_steps must be at least 1"
     _rollout_fn = recurrent_rollout_fn or get_recurrent_rollout(
@@ -756,34 +763,59 @@ def get_update_step_recurrent(
 
             r_t = jnp.clip(rollout.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
 
-            # Double-Q selector: the online quantile mean, detached so it only
-            # steers the bootstrap's action weights and carries no gradient.
-            q_selector = (
-                jax.lax.stop_gradient(
-                    risk_preferences(rollout.z_online, rollout.quantiles_online, cvar_eta)
+            def _loss(z_online, quantiles_online, z_target, quantiles_target, sequence_mask=None):
+                # Double-Q selector: the online quantile mean, detached so it only
+                # steers the bootstrap's action weights and carries no gradient.
+                q_selector = (
+                    jax.lax.stop_gradient(risk_preferences(z_online, quantiles_online, cvar_eta))
+                    if double_q
+                    else None
                 )
-                if double_q
-                else None
-            )
+                return munchausen_quantile_q_learning_n_step(
+                    z_online,
+                    quantiles_online,
+                    z_target,
+                    rollout.action,
+                    r_t,
+                    rollout.terminated,
+                    rollout.truncated,
+                    gamma,
+                    n_steps,
+                    entropy_temperature,
+                    munchausen_coefficient,
+                    clip_value_min,
+                    quantile_huber_kappa,
+                    q_selector,
+                    quantiles_target,
+                    cvar_eta,
+                    sequence_mask,
+                )
 
-            batch_loss, aux = munchausen_quantile_q_learning_n_step(
+            quantile_samples = (
                 rollout.z_online,
                 rollout.quantiles_online,
                 rollout.z_target,
-                rollout.action,
-                r_t,
-                rollout.terminated,
-                rollout.truncated,
-                gamma,
-                n_steps,
-                entropy_temperature,
-                munchausen_coefficient,
-                clip_value_min,
-                quantile_huber_kappa,
-                q_selector,
                 rollout.quantiles_target,
-                cvar_eta,
             )
+            if ensemble:
+                # Every member is its own learner on the shared batch (own online and
+                # target, own soft bootstrap); the mean keeps the loss on one member's scale.
+                if ensemble_mask_prob < 1.0:
+                    num_members, batch_size = rollout.z_online.shape[:2]
+                    masks = jax.random.bernoulli(
+                        jax.random.fold_in(quantile_key, 1),
+                        ensemble_mask_prob,
+                        (num_members, batch_size),
+                    ).astype(jnp.float32)
+                    member_loss, member_aux = jax.vmap(_loss)(*quantile_samples, masks)
+                else:
+                    member_loss, member_aux = jax.vmap(_loss)(*quantile_samples)
+                batch_loss = member_loss.mean()
+                aux = jax.tree_util.tree_map(jnp.mean, member_aux)
+                greedy = rollout.z_online.mean(axis=-2).argmax(axis=-1)  # (K, B, T)
+                aux["ensemble_greedy_agreement"] = jnp.mean(jnp.all(greedy == greedy[0], axis=0))
+            else:
+                batch_loss, aux = _loss(*quantile_samples)
 
             loss_info = {
                 "loss": batch_loss,
@@ -1001,6 +1033,7 @@ def get_transformer_rollout(
     num_tau_prime_samples: int,
     max_abs_reward: float,
     obs_preprocess_fn: Callable | None = None,
+    split_quantiles: bool = False,
 ) -> Callable:
     """Rollout half of the transformer M-IQN step: one forward pass per network
     (online with num_tau_samples, target with num_tau_prime_samples) over the
@@ -1014,6 +1047,8 @@ def get_transformer_rollout(
     arbitrary cut into real history that the network has no compensating
     carry for, so training an anchor there would fit the Q-estimate to
     artificially left-truncated context.
+
+    `split_quantiles` asks an EnsembleQuantileNetwork for each member's own fractions.
     """
     _preprocess = obs_preprocess_fn if obs_preprocess_fn is not None else lambda x: x
 
@@ -1029,25 +1064,29 @@ def get_transformer_rollout(
         mask = build_causal_boundary_mask(sample.terminated, sample.truncated)
         reward_c = jnp.clip(sample.reward.astype(jnp.float32), -max_abs_reward, max_abs_reward)
         network_input = (_preprocess(sample.obs), sample.action, reward_c, mask)
+        split = {"split_quantiles": True} if split_quantiles else {}
 
         _, z_online, quantiles_online = apply_fn(
             q_params,
             network_input,
             num_tau_samples,
             rngs={"quantiles": online_key, "noise": online_noise_key},
+            **split,
         )
         _, z_target, quantiles_target = apply_fn(
             target_q_params,
             network_input,
             num_tau_prime_samples,
             rngs={"quantiles": target_key, "noise": target_noise_key},
+            **split,
         )
 
         return RecurrentQuantileRolloutSample(
-            z_online=z_online[:, warmup_length:].astype(jnp.float32),
-            quantiles_online=quantiles_online[:, warmup_length:].astype(jnp.float32),
-            z_target=z_target[:, warmup_length:].astype(jnp.float32),
-            quantiles_target=quantiles_target[:, warmup_length:].astype(jnp.float32),
+            # Time is counted from the end so an ensemble's leading member axis passes through.
+            z_online=z_online[..., warmup_length:, :, :].astype(jnp.float32),
+            quantiles_online=quantiles_online[..., warmup_length:, :].astype(jnp.float32),
+            z_target=z_target[..., warmup_length:, :, :].astype(jnp.float32),
+            quantiles_target=quantiles_target[..., warmup_length:, :].astype(jnp.float32),
             action=sample.action[:, warmup_length:],
             reward=sample.reward[:, warmup_length:],
             terminated=sample.terminated[:, warmup_length:],
@@ -1073,6 +1112,9 @@ def get_update_step_transformer(
     obs_preprocess_fn: Callable | None = None,
     double_q: bool = False,
     cvar_eta: float = 1.0,
+    ensemble: bool = False,
+    ensemble_mask_prob: float = 1.0,
+    ensemble_split_quantiles: bool = False,
 ) -> Callable:
     """Transformer counterpart of get_update_step_recurrent.
 
@@ -1091,6 +1133,7 @@ def get_update_step_transformer(
         num_tau_prime_samples=num_tau_prime_samples,
         max_abs_reward=max_abs_reward,
         obs_preprocess_fn=obs_preprocess_fn,
+        split_quantiles=ensemble_split_quantiles,
     )
     return get_update_step_recurrent(
         apply_fn=apply_fn,
@@ -1108,6 +1151,8 @@ def get_update_step_transformer(
         recurrent_rollout_fn=rollout_fn,
         double_q=double_q,
         cvar_eta=cvar_eta,
+        ensemble=ensemble,
+        ensemble_mask_prob=ensemble_mask_prob,
     )
 
 

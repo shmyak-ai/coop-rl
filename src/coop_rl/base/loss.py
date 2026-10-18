@@ -248,6 +248,7 @@ def munchausen_quantile_q_learning_n_step(
     q_selector: chex.Array | None = None,
     quantiles_target: chex.Array | None = None,
     cvar_eta: float = 1.0,
+    sequence_mask: chex.Array | None = None,
 ) -> tuple[chex.Array, dict]:
     """N-step Munchausen-IQN loss over (batch, time, ...) learn-window sequences.
 
@@ -275,6 +276,9 @@ def munchausen_quantile_q_learning_n_step(
     target quantiles (`risk_preferences`, which needs `quantiles_target`) instead of their
     mean, so the values learned are those of the risk-averse policy the heads act with.
     The quantile loss itself still fits the whole distribution.
+
+    `sequence_mask`, if given, is a (batch,) 0/1 array keeping only some sequences: a
+    bootstrapped ensemble member's share of the batch.
 
     Returns (loss, aux) where aux carries monitoring-only scalars: without them
     an overestimating Q is invisible, because the quantile Huber loss alone
@@ -336,6 +340,8 @@ def munchausen_quantile_q_learning_n_step(
     rho = jnp.abs(quantiles[:, :anchors, :, jnp.newaxis] - indicator) * huber / quantile_huber_kappa
     anchor_loss = jnp.sum(jnp.mean(rho, axis=3), axis=2)
     weights = 1.0 - truncated[:, :anchors]
+    if sequence_mask is not None:
+        weights = weights * sequence_mask[:, jnp.newaxis]
     denom = jnp.maximum(jnp.sum(weights), 1.0)
     loss = jnp.sum(anchor_loss * weights) / denom
 
